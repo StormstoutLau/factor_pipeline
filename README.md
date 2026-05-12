@@ -2,7 +2,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统，将三个独立开发的 v2.0 模块（插补、处理、中性化）整合为标准化、可配置、带学术级顺序校验的完整流水线。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统，将三个独立开发的模块（插补https://github.com/StormstoutLau/Factor_Imputer、自适应去极值https://github.com/StormstoutLau/Factor_AdaptiveWinsor、中性化https://github.com/StormstoutLau/Factor_Neutralizer）整合为标准化、可配置、带学术级顺序校验的完整流水线。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
