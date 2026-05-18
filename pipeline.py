@@ -13,8 +13,9 @@ import time
 import logging
 from collections import OrderedDict
 
-from config import StepType, PipelineConfig, StepConfig, VALID_STEP_ORDERS
-from adapters import PipelineStep, ImputerAdapter, ProcessingAdapter, NeutralizerAdapter
+from .config import StepType, PipelineConfig, StepConfig, VALID_STEP_ORDERS
+from .adapters import PipelineStep, ImputerAdapter, ProcessingAdapter, NeutralizerAdapter
+from .exceptions import OrderValidationError, StepExecutionError, FactorTypeError
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,10 @@ class FactorProcessingPipeline:
         step_types = []
         for step in steps:
             self.steps[step.name] = step
-            step_types.append(StepType(step.step_type))
+            try:
+                step_types.append(StepType(step.step_type))
+            except ValueError:
+                raise ValueError(f"无效的步骤类型: '{step.step_type}'，有效值为: {[e.value for e in StepType]}")
         
         # 顺序校验
         if self.strict_order:
@@ -283,12 +287,18 @@ class FactorProcessingPipeline:
                 suggested = PipelineOrderValidator.suggest_correction(step_types)
                 error_msg = "\n".join(errors)
                 suggest_msg = " → ".join(s.value for s in suggested)
-                raise ValueError(
-                    f"流水线顺序校验失败:\n{error_msg}\n\n"
-                    f"建议顺序: {suggest_msg}\n\n"
-                    f"学术依据: 插补必须在去极值之前，因为去极值的统计量(MAD/分位数)"
-                    f"需要基于完整数据计算；中性化必须在最后，因为中性化基于回归残差，"
-                    f"后续变换会破坏中性化效果。"
+                raise OrderValidationError(
+                    message=f"流水线顺序校验失败:\n{error_msg}\n\n"
+                            f"建议顺序: {suggest_msg}",
+                    context={
+                        'errors': errors,
+                        'suggested_order': [s.value for s in suggested],
+                        'academic_basis': (
+                            "插补必须在去极值之前，因为去极值的统计量(MAD/分位数)"
+                            "需要基于完整数据计算；中性化必须在最后，因为中性化基于回归残差，"
+                            "后续变换会破坏中性化效果。"
+                        )
+                    }
                 )
     
     def _build_from_config(self, config: PipelineConfig):
@@ -335,7 +345,7 @@ class FactorProcessingPipeline:
             logger.info(f"拟合步骤: {name} ({step.step_type})")
             step.fit(current_data, **kwargs)
             # 更新数据供下一步拟合使用
-            if step.step_type != 'neutralization':  # 中性化通常在最后，不需要传递
+            if step.step_type != StepType.NEUTRALIZATION.value:
                 current_data = step.transform(current_data, **kwargs)
         
         self.is_fitted = True
@@ -391,11 +401,24 @@ class FactorProcessingPipeline:
                     f"耗时 {step_time:.3f}s"
                 )
                 
-            except Exception as e:
+            except (ValueError, TypeError, RuntimeError, KeyError, IndexError) as e:
                 error_msg = f"步骤 {name} 执行失败: {str(e)}"
                 logger.error(error_msg)
                 result.errors.append(error_msg)
                 result.success = False
+
+                # 使用结构化异常
+                step_error = StepExecutionError(
+                    message=str(e),
+                    step_name=name,
+                    context={
+                        'input_shape': input_shape,
+                        'missing_rate_before': missing_before / (input_shape[0] * input_shape[1]) if input_shape[0] * input_shape[1] > 0 else 0,
+                        'execution_time': time.time() - step_start,
+                        'original_error_type': type(e).__name__,
+                    },
+                    original_error=e
+                )
                 
                 step_result = StepResult(
                     step_name=name,
@@ -405,7 +428,7 @@ class FactorProcessingPipeline:
                     execution_time=time.time() - step_start,
                     missing_count_before=missing_before,
                     missing_count_after=missing_before,
-                    error=str(e)
+                    error=str(step_error)
                 )
                 result.step_results.append(step_result)
                 

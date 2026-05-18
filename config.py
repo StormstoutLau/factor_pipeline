@@ -48,8 +48,15 @@ class StepConfig:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'StepConfig':
+        step_type_str = data.get('step_type', '')
+        try:
+            step_type = StepType(step_type_str)
+        except ValueError:
+            valid_types = [e.value for e in StepType]
+            raise ValueError(f"无效的 step_type: '{step_type_str}'，有效值为: {valid_types}")
+
         return cls(
-            step_type=StepType(data['step_type']),
+            step_type=step_type,
             module_path=data.get('module_path', ''),
             class_name=data.get('class_name', ''),
             params=data.get('params', {}),

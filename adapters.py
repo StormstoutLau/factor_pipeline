@@ -6,13 +6,87 @@
 
 import sys
 import os
-from typing import Dict, Any, Union, Optional
+from typing import Dict, Any, Optional, List, Type
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
+
+# 可选依赖：statsmodels
+try:
+    import statsmodels.api as sm
+    HAS_STATSMODELS = True
+except ImportError:
+    HAS_STATSMODELS = False
+    sm = None
+
+# =============================================================================
+# 常量定义
+# =============================================================================
+
+# 默认缩尾分位限
+DEFAULT_WINSORIZE_LIMITS = (0.05, 0.05)
+
+# 中性化截面最小样本量
+MIN_CROSS_SECTIONAL_OBS = 10
+MIN_INDUSTRY_COMMON_OBS = 5
+
+# GARCH 默认参数与阈值
+GARCH_DEFAULT_P = 1
+GARCH_DEFAULT_Q = 1
+GARCH_MIN_OBS = 50
+
+# 滚动标准差近似参数
+ROLLING_WINDOW = 20
+ROLLING_MIN_PERIODS = 10
+
+
+# =============================================================================
+# 动态导入工具函数
+# =============================================================================
+
+def _import_external_class(
+    module_path: str,
+    import_path: str,
+    class_name: str
+) -> Optional[Type]:
+    """从外部模块动态导入类
+    
+    Parameters
+    ----------
+    module_path : str
+        模块所在目录的相对路径（如 '..', 'Factor_Imputer_v2.0'）
+    import_path : str
+        Python 导入路径（如 'core.imputers'）
+    class_name : str
+        要导入的类名
+    
+    Returns
+    -------
+    type | None
+        导入的类，失败则返回 None
+    
+    Examples
+    --------
+    >>> cls = _import_external_class(
+    ...     '..', 'Factor_Imputer_v2.0', 'core.imputers', 'HierarchicalImputer'
+    ... )
+    """
+    try:
+        full_path = os.path.join(os.path.dirname(__file__), module_path)
+        # TODO: 使用上下文管理器临时修改 sys.path，避免污染全局状态
+        # 当前实现是已知的设计权衡：只在导入外部类时添加路径
+        if full_path not in sys.path:
+            sys.path.insert(0, full_path)
+        module = __import__(import_path, fromlist=[class_name])
+        return getattr(module, class_name)
+    except (ImportError, AttributeError) as e:
+        logger.warning(
+            f"无法从 {module_path}/{import_path} 导入 {class_name}: {e}"
+        )
+        return None
 
 
 class PipelineStep(ABC):
@@ -69,27 +143,24 @@ class ImputerAdapter(PipelineStep):
     
     def _get_imputer_class(self):
         """动态导入插补器类"""
-        try:
-            # 尝试直接导入
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Factor_Imputer_v2.0'))
-            from core.imputers import HierarchicalImputer
-            return HierarchicalImputer
-        except ImportError as e:
-            logger.warning(f"无法从 Factor_Imputer_v2.0 导入: {e}")
-            return None
+        return _import_external_class(
+            os.path.join('..', 'Factor_Imputer_v2.0'),
+            'core.imputers',
+            'HierarchicalImputer'
+        )
     
     def fit(self, X: pd.DataFrame, **kwargs) -> 'ImputerAdapter':
         """拟合插补器"""
-        ImputerClass = self._get_imputer_class()
+        imputer_class = self._get_imputer_class()
         
-        if ImputerClass is None:
+        if imputer_class is None:
             # 回退：使用简单的中位数插补
             logger.info("使用内置简单插补器")
             self._imputer = None
             self.is_fitted = True
             return self
         
-        self._imputer = ImputerClass(strategy=self.strategy)
+        self._imputer = imputer_class(strategy=self.strategy)
         
         # 检测缺失信息
         if hasattr(self._imputer, 'detect_missing_type'):
@@ -109,7 +180,14 @@ class ImputerAdapter(PipelineStep):
         
         if self._imputer is None:
             # 回退：简单中位数插补
-            return X.fillna(X.median())
+            if X.empty or X.isnull().all().all():
+                logger.warning("输入数据为空或全为NaN，返回原始数据")
+                return X
+            median_vals = X.median()
+            if median_vals.isnull().all():
+                logger.warning("所有列的中位数均为NaN，返回原始数据")
+                return X
+            return X.fillna(median_vals)
         
         result = self._imputer.transform(X)
         
@@ -154,23 +232,20 @@ class ProcessingAdapter(PipelineStep):
     def _get_processor_class(self):
         """动态导入处理器类"""
         module_name, class_name = self.STEP_CLASS_MAP.get(
-            self.process_type, 
+            self.process_type,
             ('core.transformers', 'SmartOutlierDetector')
         )
-        
-        try:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Factor_AdaptiveWinsor'))
-            module = __import__(module_name, fromlist=[class_name])
-            return getattr(module, class_name)
-        except (ImportError, AttributeError) as e:
-            logger.warning(f"无法从 Factor_AdaptiveWinsor 导入 {class_name}: {e}")
-            return None
+        return _import_external_class(
+            os.path.join('..', 'Factor_AdaptiveWinsor'),
+            module_name,
+            class_name
+        )
     
     def fit(self, X: pd.DataFrame, **kwargs) -> 'ProcessingAdapter':
         """拟合处理器"""
-        ProcessorClass = self._get_processor_class()
+        processor_class = self._get_processor_class()
         
-        if ProcessorClass is None:
+        if processor_class is None:
             logger.info(f"使用内置简单{self.process_type}处理器")
             self._processor = None
             self.is_fitted = True
@@ -179,7 +254,7 @@ class ProcessingAdapter(PipelineStep):
         # 实例化处理器
         processor_params = {'method': self.method}
         processor_params.update(self.params)
-        self._processor = ProcessorClass(**processor_params)
+        self._processor = processor_class(**processor_params)
         
         # 拟合 - 需要展平数据
         if isinstance(X, pd.DataFrame):
@@ -218,12 +293,12 @@ class ProcessingAdapter(PipelineStep):
                 try:
                     transformed = self._processor.transform(col_data)
                     result.loc[col_data.index, col] = transformed
-                except Exception as e:
+                except (ValueError, TypeError, RuntimeError) as e:
                     logger.warning(f"列 {col} 变换失败: {e}，保持原值")
         
         return result
     
-    def _simple_winsorize(self, X: pd.DataFrame, limits: tuple = (0.05, 0.05)) -> pd.DataFrame:
+    def _simple_winsorize(self, X: pd.DataFrame, limits: tuple = DEFAULT_WINSORIZE_LIMITS) -> pd.DataFrame:
         """简单缩尾处理（回退方案）"""
         result = X.copy()
         lower = X.quantile(limits[0])
@@ -276,22 +351,20 @@ class NeutralizerAdapter(PipelineStep):
     
     def _get_neutralizer_class(self):
         """动态导入中性化器类"""
-        try:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Factor_Neutralizer_v2.0'))
-            from factor_neutralizer.core.FactorNeutralizer import FactorNeutralizer
-            return FactorNeutralizer
-        except ImportError as e:
-            logger.warning(f"无法从 Factor_Neutralizer_v2.0 导入: {e}")
-            return None
-    
+        return _import_external_class(
+            module_path=os.path.join('..', 'Factor_Neutralizer_v2.0'),
+            import_path='factor_neutralizer.core.FactorNeutralizer',
+            class_name='FactorNeutralizer'
+        )
+
     def fit(self, X: pd.DataFrame, **kwargs) -> 'NeutralizerAdapter':
         """
         拟合中性化器
         注意: FactorNeutralizer 需要外部数据，这里做轻量级适配
         """
-        NeutralizerClass = self._get_neutralizer_class()
-        
-        if NeutralizerClass is None:
+        neutralizer_class = self._get_neutralizer_class()
+
+        if neutralizer_class is None:
             logger.info("使用内置简单中性化器")
             self._neutralizer = None
             self.is_fitted = True
@@ -326,18 +399,20 @@ class NeutralizerAdapter(PipelineStep):
                                      factor_data: pd.DataFrame,
                                      industry_data: pd.Series) -> pd.DataFrame:
         """简单行业中性化（截面回归残差）"""
-        import statsmodels.api as sm
+        if not HAS_STATSMODELS or sm is None:
+            logger.warning("statsmodels 不可用，跳过行业中性化")
+            return factor_data
 
         result = pd.DataFrame(index=factor_data.index, columns=factor_data.columns, dtype=float)
 
         for date in factor_data.index:
             date_factor = factor_data.loc[date].dropna()
-            if len(date_factor) < 10:
+            if len(date_factor) < MIN_CROSS_SECTIONAL_OBS:
                 continue
 
             # 对齐行业数据
             common = date_factor.index.intersection(industry_data.index)
-            if len(common) < 5:
+            if len(common) < MIN_INDUSTRY_COMMON_OBS:
                 continue
 
             y = date_factor[common].values.astype(float)
@@ -345,13 +420,22 @@ class NeutralizerAdapter(PipelineStep):
 
             # 创建行业哑变量
             dummies = pd.get_dummies(industries, drop_first=True).astype(float)
+            if dummies.empty or dummies.shape[1] == 0:
+                logger.warning(f"日期 {date} 行业哑变量为空，跳过中性化")
+                result.loc[date, common] = y
+                continue
+
             X = sm.add_constant(dummies, has_constant='add').astype(float)
+            if X.shape[0] != len(y):
+                logger.warning(f"日期 {date} 回归矩阵维度不匹配，跳过")
+                result.loc[date, common] = y
+                continue
 
             try:
                 model = sm.OLS(y, X).fit()
                 residuals = model.resid.values if hasattr(model.resid, 'values') else model.resid
                 result.loc[date, common] = residuals
-            except Exception as e:
+            except (ValueError, TypeError, RuntimeError) as e:
                 logger.warning(f"日期 {date} 中性化失败: {e}")
                 result.loc[date, common] = y
 
@@ -362,4 +446,169 @@ class NeutralizerAdapter(PipelineStep):
         stats['neutralization_type'] = self.neutralization_type
         stats['industry_method'] = self.industry_method
         stats['has_industry_data'] = self.industry_data is not None
+        return stats
+
+
+class GarchWhiteningAdapter(PipelineStep):
+    """
+    GARCH白化适配器
+
+    使用 GARCH 模型提取条件异方差，对残差进行预白化。
+    适用于高自相关、高波动率聚集的静态因子。
+
+    处理流程：
+        1. 对每列时间序列拟合 GARCH(p,q) 模型
+        2. 提取标准化残差：resid / conditional_volatility
+        3. 返回白化后的序列（消除波动率聚集）
+
+    注意：
+        - 需要至少 50 个观测值才能拟合 GARCH
+        - 数据不足时跳过白化，返回原始值
+        - 需要安装 arch 包：pip install arch
+    """
+
+    def __init__(self,
+                 method: str = 'garch',
+                 p: int = GARCH_DEFAULT_P,
+                 q: int = GARCH_DEFAULT_Q,
+                 vol: str = 'Garch',
+                 min_obs: int = GARCH_MIN_OBS,
+                 **params):
+        super().__init__(
+            name="GarchWhitening",
+            step_type="garch_whitening",
+            method=method,
+            p=p,
+            q=q,
+            vol=vol,
+            **params
+        )
+        self.method = method
+        self.p = p
+        self.q = q
+        self.vol = vol
+        self.min_obs = min_obs
+        self._models: Dict[str, Any] = {}
+        self._skipped_cols: List[str] = []
+
+    def _get_arch_model_class(self):
+        """动态导入 arch 模型类"""
+        try:
+            from arch import arch_model
+            return arch_model
+        except ImportError as e:
+            logger.warning(f"无法导入 arch 包: {e}，GARCH白化将跳过")
+            return None
+
+    def fit(self, X: pd.DataFrame, **kwargs) -> 'GarchWhiteningAdapter':
+        """
+        拟合 GARCH 模型
+
+        对每列时间序列单独拟合 GARCH(p,q) 模型。
+        """
+        arch_model_func = self._get_arch_model_class()
+
+        if arch_model_func is None:
+            self.is_fitted = True
+            return self
+
+        for col in X.columns:
+            series = X[col].dropna()
+
+            if len(series) < self.min_obs:
+                logger.warning(
+                    f"列 {col} 观测值不足 ({len(series)} < {self.min_obs})，跳过 GARCH 白化"
+                )
+                self._skipped_cols.append(col)
+                continue
+
+            try:
+                model = arch_model_func(
+                    series,
+                    vol=self.vol,
+                    p=self.p,
+                    q=self.q,
+                    rescale=False
+                )
+                fitted = model.fit(disp='off', show_warning=False)
+                self._models[col] = fitted
+                logger.info(f"列 {col} GARCH({self.p},{self.q}) 拟合完成，AIC={fitted.aic:.2f}")
+
+            except (ValueError, TypeError, RuntimeError, ImportError) as e:
+                logger.warning(f"列 {col} GARCH 拟合失败: {e}，跳过白化")
+                self._skipped_cols.append(col)
+
+        self.is_fitted = True
+        logger.info(f"GARCH白化拟合完成：{len(self._models)} 列成功，{len(self._skipped_cols)} 列跳过")
+        return self
+
+    def transform(self, X: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """
+        应用 GARCH 白化
+
+        返回标准化残差：resid / conditional_volatility
+        """
+        if not self.is_fitted:
+            raise ValueError("GARCH白化器未拟合，请先调用 fit()")
+
+        if not self._models:
+            logger.info("无 GARCH 模型，跳过白化")
+            return X
+
+        result = X.copy()
+
+        for col, fitted_model in self._models.items():
+            if col not in X.columns:
+                continue
+
+            try:
+                # 获取标准化残差：残差 / 条件标准差
+                resid = fitted_model.resid
+                cond_vol = fitted_model.conditional_volatility
+
+                # 安全除法
+                cond_vol_safe = cond_vol.replace(0, np.nan)
+                standardized = resid / cond_vol_safe
+
+                # 检查结果有效性
+                if standardized.isnull().all():
+                    logger.warning(f"列 {col} 条件波动率全为零，跳过白化，保持原值")
+                    continue
+
+                # 对齐索引
+                common_idx = X.index.intersection(standardized.index)
+                valid_idx = common_idx[~standardized.loc[common_idx].isnull()]
+                result.loc[valid_idx, col] = standardized.loc[valid_idx]
+
+                logger.info(f"列 {col} GARCH 白化完成，残差均值={standardized.mean():.4f}，std={standardized.std():.4f}")
+
+            except Exception as e:
+                logger.warning(f"列 {col} GARCH 白化变换失败: {e}，保持原值")
+
+        return result
+
+    def _simple_whiten(self, X: pd.DataFrame) -> pd.DataFrame:
+        """
+        简单白化（回退方案）
+
+        当 arch 包不可用时，使用滚动标准差近似。
+        """
+        result = X.copy()
+        for col in X.columns:
+            series = X[col]
+            rolling_std = series.rolling(window=ROLLING_WINDOW, min_periods=ROLLING_MIN_PERIODS).std()
+            rolling_std_safe = rolling_std.replace(0, np.nan)
+            result[col] = series / rolling_std_safe
+        return result
+
+    def get_stats(self) -> Dict[str, Any]:
+        stats = super().get_stats()
+        stats['method'] = self.method
+        stats['p'] = self.p
+        stats['q'] = self.q
+        stats['fitted_models'] = len(self._models)
+        stats['skipped_columns'] = self._skipped_cols
+        if self._models:
+            avg_aic = np.mean([m.aic for m in self._models.values()])
+            stats['average_aic'] = avg_aic
         return stats
