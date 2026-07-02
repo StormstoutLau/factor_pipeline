@@ -1,0 +1,57 @@
+{
+  "name": "default_factor_pipeline",
+  "description": "标准因子处理流水线: 插补→去极值→变换→标准化→中性化",
+  "steps": [
+    {
+      "step_type": "imputation",
+      "module_path": "Factor_Imputer_v2.0",
+      "class_name": "HierarchicalImputer",
+      "params": {
+        "strategy": "auto"
+      },
+      "enabled": true
+    },
+    {
+      "step_type": "outlier",
+      "module_path": "Factor_AdaptiveWinsor",
+      "class_name": "SmartOutlierDetector",
+      "params": {
+        "method": "auto",
+        "auto_select": true
+      },
+      "enabled": true
+    },
+    {
+      "step_type": "transformation",
+      "module_path": "Factor_AdaptiveWinsor",
+      "class_name": "AdaptiveTransformer",
+      "params": {
+        "method": "auto",
+        "auto_optimize": true
+      },
+      "enabled": true
+    },
+    {
+      "step_type": "standardization",
+      "module_path": "Factor_AdaptiveWinsor",
+      "class_name": "AdaptiveStandardizer",
+      "params": {
+        "method": "auto"
+      },
+      "enabled": true
+    },
+    {
+      "step_type": "neutralization",
+      "module_path": "Factor_Neutralizer_v2.0",
+      "class_name": "FactorNeutralizer",
+      "params": {
+        "neutralization_type": "industry",
+        "industry_method": "regression"
+      },
+      "enabled": true
+    }
+  ],
+  "strict_order": true,
+  "allow_skip": true,
+  "track_intermediate": true
+}

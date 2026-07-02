@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# Type checkers
+.mypy_cache/
+.pyre/
+
+# Logs
+*.log
+logs/
+
+# Temporary / batch files
+batch*.txt
+batch*.xml
+test_results.txt
+test_*.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific caches (auto-generated)
+*.duckdb
+*.duckdb.wal
+factor_db.duckdb
