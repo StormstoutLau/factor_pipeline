@@ -1,3 +1,7 @@
+[English](README.en.md) | [中文](README.md)
+
+![Factor Pipeline](docs/badges/factor_pipeline_steampunk.svg)
+
 # Factor Processing Pipeline
 
 ## 统一因子处理流水线
