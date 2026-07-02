@@ -1,8 +1,8 @@
-# Factor Processing Pipeline v2.0
+# Factor Processing Pipeline
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。v2.0 在 v1.0 的基础上引入了**因子指纹前置诊断层**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**以及**持续迁移监测**，实现从"固定流程"到"智能自适应"的跨越。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v2.4.0 的"智能自适应 + 回测闭环 + 外部模块内化"，并正在规划 v2.5.0 的**多因子正交化三层架构** (Layer 1 per-factor / Layer 2 cross-factor 变换 / Layer 3 target-aware 检验)。核心能力涵盖**因子指纹前置诊断层**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**与**双轨漂移融合判定**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -24,6 +24,81 @@
 ---
 
 ## 版本更新摘要
+
+### v2.5.0 多因子正交化三层架构 (规划中, 执行方案 v1.1)
+
+> **状态**: 执行方案 v1.1 已完成 (40 个深化子章节), 待实施
+> **文档**: [docs/EXECUTION_V2.5.0.md](docs/EXECUTION_V2.5.0.md) | [docs/ANALYSIS_V2.5.0.md](docs/ANALYSIS_V2.5.0.md)
+
+**三层架构分离** (ADR-020):
+
+| Layer | 职责 | 模块位置 | 监督性 |
+|-------|------|---------|--------|
+| **Layer 1** | per-factor 处理 (已有) | `pipelines_v2.py` | 无监督 |
+| **Layer 2** | cross-factor 横截面正交化 (新增) | `modules/factor_orthogonalizer/` | 无监督 |
+| **Layer 3** | target-aware 显著性检验 (新增) | `backtest/factor_significance.py` | 有监督 (需 Y) |
+
+**Layer 2 核心算法** (5 种):
+- **Symmetric (Löwdin)**: 默认主方法, VRR=1, 无顺序依赖
+- **Ridge**: 病态矩阵兜底, λ 自适应 (Ledoit-Wolf 2004)
+- **PCA**: 降维场景, center 参数兼容 Layer 1 标准化
+- **Gram-Schmidt**: 顺序依赖场景, κ>100 启用 Kahan (1966) 二次投影
+- **Cholesky**: 半正定保证场景
+
+**Layer 3 显著性检验**:
+- **双重 Lasso**: treatment 轮询模式, 每个因子独立当 treatment, 轮次顺序不影响结果
+- **Elastic Net**: α/λ 网格搜索, 处理多因子共线性
+
+**执行方案 v1.1 深化内容** (40 个子章节):
+- O1.12 算法核心 (7): threshold_mode 三模式 / eigh-svd 选择 / fit_from_gram / dtype 强制
+- O2.8 适配器层 (6): align_mode / NaN 处理 / post_transform_hooks 零开销 / W 缓存
+- O3a.6 几何诊断 (5): VRR ddof / VIF 多方法 / 条件数分级 (Belsley-Kuh-Welsch 1980)
+- O4.9 双重 Lasso (7): treatment 轮询 / 稳健标准误 / 多重检验校正
+- O4.11 RollingOrthogonalizer (5): 增量 Gram 重置 / is_orthogonalized 标记 / warm-start LOBPCG
+- O5.6 协同设计 (5): 数据流协议 / Neutralizer 顺序 / Grouped 缺失因子 / 冲突解决
+- O6.7-O6.11 文档验证 (5): TDD 分阶段回归 (6 Stage) / 手工校验矩阵 (21 项) / 性能基准
+
+**性能预期**: K=20 时 Symmetric fit < 0.5ms; 增量 Gram + warm-start 实现 42x 加速 (vs 全量重算)
+
+**约束**: 正交化默认关闭 (`enabled=False`), 不影响 632 基线测试
+
+### v2.4.0 外部模块内化 (2026.07)
+
+> **状态**: 已实施, 632 测试零回归
+
+**5 个处理模块内化** (ADR-019):
+
+| 模块 | 原外部路径 | 内化路径 | 依赖裁剪 |
+|------|-----------|---------|---------|
+| **factor_fingerprint** | Factor_Fingerprint/ | `modules/factor_fingerprint/` | — |
+| **factor_decoupler** | Factor_Decoupler/ | `modules/factor_decoupler/` | — |
+| **factor_adaptive_winsor** | Factor_AdaptiveWinsor/ | `modules/factor_adaptive_winsor/` | 仅迁移 core/ (最小子包化) |
+| **factor_imputer** | Factor_Imputer_v2.0/ | `modules/factor_imputer/` | — |
+| **factor_neutralizer** | Factor_Neutralizer_v2.0/ | `modules/factor_neutralizer/` | 去除 matplotlib/joblib/psutil/numba |
+
+**关键决策**:
+- **命名统一**: 小写蛇形, 移除 v2.0/v3.0 版本后缀 (版本信息留在模块内 `__version__`)
+- **内化优于子包化** (ADR-019): 单仓库场景下独立性是虚假收益, 内化消除 importlib hack 与 sys.path 污染
+- **保留外部数据边界**: Factor_DB 和 Factor_Trading 仍作为外部模块 (数据源)
+- **CI 简化**: monorepo 模拟从 7 个外部模块缩减为 2 个
+
+**5 阶段全量回归**: I1 (Fingerprint+Decoupler) → I2 (AdaptiveWinsor) → I3 (Imputer) → I4 (Neutralizer) → I5 (CI/文档清理), 全程 632 passed 零回归
+
+### v2.3.0 CI 矩阵与双轨 CI (2026.07)
+
+> **状态**: 已实施
+
+**GitHub Actions 矩阵** (ADR-017):
+- Python 3.10 / 3.11 / 3.12 × ubuntu-latest
+- `fail-fast: false`: 一个版本失败不阻塞其他版本
+- Windows 因 spawn 方法进程启动开销暂不纳入 (ADR-016)
+
+**tox 双轨 CI**:
+- 远程 (GitHub Actions): 保障推送质量
+- 本地 (tox): 快速验证跨版本兼容性, 每 env 独立安装外部模块保证隔离性
+- CI 配置文件脚本校验: 37/37 通过
+
+**CI monorepo 模拟**: 外部模块通过 `git clone` 到父目录模拟本地结构, 目录名重命名匹配 pyproject.toml package-dir 映射
 
 ### v2.2.2 漂移检测与优化器改进（2026.07）
 
@@ -127,7 +202,7 @@ price_data = loader.get_price_matrix(field="close", start_date, end_date)
 | **持续迁移监测** | 因子风格漂移自动告警 | 生命周期管理 |
 | **GarchWhiteningAdapter** | 新增适配器，复用现有 PipelineStep 模式 | 最小侵入式扩展 |
 
-### v1.0 → v2.0 → v2.1 → v2.2 → v2.2.2 架构演进
+### v1.0 → v2.0 → v2.1 → v2.2 → v2.4.0 → v2.5.0 架构演进
 
 ```
 v1.0: 单一固定流程
@@ -157,6 +232,20 @@ v2.2.2: 漂移检测与优化器改进
 滚动KS + p值过滤 → 三模式融合 (and/or/max)
 优化器: Pipeline-in-the-loop + CV train-fit/test-transform (无 look-ahead)
 数据适配: per-factor min_dates + reindex 对齐 (Barra 41天 vs 日频 1212天)
+
+v2.3.0: CI 矩阵 + 双轨 CI
+GitHub Actions (Python 3.10/3.11/3.12 × ubuntu) + tox 本地跨版本验证
+
+v2.4.0: 外部模块内化 (ADR-019)
+5 个处理模块内化到 modules/: Fingerprint / Decoupler / AdaptiveWinsor / Imputer / Neutralizer
+保留外部数据边界: Factor_DB / Factor_Trading
+632 测试零回归, CI monorepo 模拟从 7 个外部模块缩减为 2 个
+
+v2.5.0: 多因子正交化三层架构 (规划中)
+Layer 1 (per-factor) → Layer 2 (cross-factor 正交化) → Layer 3 (target-aware 检验)
+  对称正交化 (Löwdin) / Ridge / PCA / GS / Cholesky
+  双重 Lasso (treatment 轮询) + Elastic Net
+  默认 enabled=False, 不影响 632 基线
 ```
 
 ---
@@ -649,41 +738,63 @@ class PipelineV2Config:
 ```
 factor_pipeline/
 ├── __init__.py                 # 包入口
-├── config.py                   # 配置管理 (StepType, PipelineConfig)
+├── config.py                   # v1.0 配置管理 (StepType, PipelineConfig)
+├── config_v2.py                # v2.0 Pydantic 配置管理 (PipelineV2ConfigUnified)
 ├── adapters.py                 # 统一适配器层
 │   ├── PipelineStep            # 抽象基类
-│   ├── ImputerAdapter          # 插补适配器
-│   ├── ProcessingAdapter       # 处理适配器（去极值/变换/标准化）
-│   ├── NeutralizerAdapter      # 中性化适配器
-│   └── GarchWhiteningAdapter   # GARCH白化适配器 (v2.0新增)
+│   ├── ImputerAdapter          # 插补适配器 (REQUIRED)
+│   ├── ProcessingAdapter       # 处理适配器 (去极值/变换/标准化, REQUIRED)
+│   ├── NeutralizerAdapter      # 中性化适配器 (REQUIRED, ADR-018 fit/transform 语义一致)
+│   └── GarchWhiteningAdapter   # GARCH 白化适配器 (OPTIONAL, arch 依赖)
 ├── pipeline.py                 # v1.0 核心流水线 + 顺序校验器
-├── pipelines_v2.py             # v2.0 智能流水线（指纹+分类+三条管道）
-├── demo.py                     # v1.0 演示脚本
-├── demo_v2.py                  # v2.0 演示脚本（含语义融合演示）
-├── cli_arcade_intro.html       # CLI 风格介绍页面
-├── docs/                       # 文档目录 (v2.0新增)
-│   ├── doc_pipeline_analysis.md
-│   ├── factor_preprocessing_meaning.md
-│   └── pipeline_analysis.md
-├── tests/                      # 测试目录
-│   ├── test_pipelines_v2.py    # v2.0 测试
-│   ├── test_pipeline_v2_full.py
-│   ├── test_dynamic_pipeline.py
-│   ├── test_pipeline_comprehensive.py
-│   └── test_backtest/          # 回测模块测试 (v2.2.0 新增)
-│       ├── test_factor_metrics.py
-│       ├── test_data_bridge.py
-│       ├── test_engine.py
-│       ├── test_health_bridge.py
-│       ├── test_unified_drift.py
-│       └── test_pipeline_integration.py
-├── backtest/                   # 回测引擎模块 (v2.2.0 新增)
-│   ├── factor_metrics.py       # 因子级指标单一真相源
+├── pipelines_v2.py             # v2.0 智能流水线 (指纹+分类+三条管道+软路由)
+├── optimizer.py                # v2.2.1 优化器 (Pipeline-in-the-loop + CV)
+├── dag.py                      # 有向无环图依赖管理
+├── cache.py                    # 中间结果缓存
+├── reporting.py                # 执行报告生成
+├── performance.py              # 性能优化工具
+├── exceptions.py               # 自定义异常体系
+├── types.py                    # 核心类型系统
+├── pyproject.toml              # 项目配置 (flat-layout, where=[".."])
+├── tox.ini                     # 双轨 CI 本地配置 (ADR-017)
+├── .github/workflows/ci.yml    # GitHub Actions CI 矩阵
+├── docs/                       # 文档目录
+│   ├── EXECUTION_V2.5.0.md     # v2.5.0 执行方案 v1.1 (40 深化子章节)
+│   ├── ANALYSIS_V2.5.0.md      # v2.5.0 方案分析报告
+│   ├── EXECUTION_V2.4.0.md     # v2.4.0 执行记录
+│   ├── KABC_paper_draft.md     # KABC 论文草稿
+│   └── ...                     # 其他分析文档
+├── backtest/                   # 回测引擎模块 (v2.2.0, ADR-007)
+│   ├── factor_metrics.py       # 因子级指标单一真相源 (IC/ICIR/Decay/Turnover)
 │   ├── data_bridge.py          # Pipeline → DataLoaderV3 适配器
 │   ├── engine.py               # 因子回测引擎
-│   ├── health_bridge.py        # 回测 → HealthMonitor 适配器
-│   ├── unified_drift.py        # 双轨融合漂移判定
-│   └── pipeline_integration.py # 端到端 Pipeline 集成
+│   ├── health_bridge.py        # 回测 → FactorHealthMonitor 适配器
+│   ├── unified_drift.py        # 双轨融合漂移判定 (滚动 KS + EWMA)
+│   ├── pipeline_integration.py # 端到端 Pipeline 集成
+│   ├── cache_manager.py        # L2 磁盘缓存基础设施 (ADR-008)
+│   ├── cached_data_loader.py   # 缓存统一入口
+│   ├── factor_cache.py         # 因子矩阵缓存 (部分命中)
+│   ├── price_cache.py          # 价格矩阵缓存
+│   ├── fwd_returns_cache.py    # 前向收益缓存
+│   ├── factor_pivot.py         # DuckDB PIVOT 因子宽表转换
+│   ├── parallel_runner.py      # 多因子进程并行 (按日期分组)
+│   └── __init__.py             # 26 个公开 API 导出
+├── modules/                    # 内化处理模块 (v2.4.0, ADR-019)
+│   ├── factor_fingerprint/     # 因子指纹 (13维统计指标)
+│   ├── factor_decoupler/       # 时序解耦 (AR 建模 + 残差中性化)
+│   ├── factor_adaptive_winsor/ # 自适应缩尾 (仅 core/ 最小子包化)
+│   ├── factor_imputer/         # 因子插补 (无前瞻偏差)
+│   └── factor_neutralizer/     # 因子中性化 (38 方法, 仅内化类不实例化)
+├── scripts/                    # 辅助脚本
+│   ├── check_trading_v3.py
+│   ├── verify_p3_manual.py
+│   └── verify_td1_manual.py
+├── tests/                      # 测试目录 (632+ 测试)
+│   ├── unit/                   # 单元测试
+│   ├── test_backtest/          # 回测模块测试
+│   ├── test_fix1-7_*.py        # v2.2.2 代码质量修复测试
+│   ├── test_p0-p3_*.py         # v2.1/v2.2 改进测试
+│   └── verify_*_manual.py      # 手工数值校验脚本
 └── README.md                   # 本文档
 ```
 
@@ -705,10 +816,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v2.2.2-drift-optimizer
-- **子模块版本**: Factor_Imputer_v2.0 / Factor_AdaptiveWinsor / Factor_Neutralizer_v2.0 / Factor_Fingerprint / Factor_Decoupler / Factor_Trading_v3.0 (DataLoaderV3)
-- **构建日期**: 2026.07.01
-- **状态**: STABLE
+- **Pipeline 版本**: v2.4.0-internalized (当前已实施) / v2.5.0-orthogonalizer (规划中, 执行方案 v1.1)
+- **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer (v2.4.0, ADR-019)
+- **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
+- **测试基线**: 632 passed, 5 skipped, 0 failed
+- **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
+- **构建日期**: 2026.07.03
+- **状态**: STABLE (v2.4.0) / PLANNING (v2.5.0)
 
 ### 版本历史
 
@@ -718,6 +832,11 @@ factor_pipeline/
 | v2.0.0 | 2026.05.17 | 智能版本：指纹诊断 + 自适应分类 + 语义融合 + 三重中性化 + GARCH白化 |
 | v2.1.0 | 2026.07.01 | 架构修复：软路由 + 阈值校准 + 统一 fit() + 适配器 Warning + KS 显著性 + importlib 重构 |
 | v2.2.0 | 2026.07.01 | Backtest 集成：回测引擎 (95/95) + 双轨漂移融合 + HealthMonitor 适配器 + BacktestConfig |
+| v2.2.1 | 2026.07.01 | 漂移检测改进 + L2 缓存层 (ADR-008, 4.36x 加速) + 优化器 Pipeline-in-the-loop + CV 消除 look-ahead |
+| v2.2.2 | 2026.07.02 | 代码质量修复 7 项 (self.factors bug / 配置统一 / 版本号统一 / backtest 导出 / core 命名空间隔离 / 硬编码路径配置化) |
+| v2.3.0 | 2026.07.02 | CI 矩阵 (Python 3.10/3.11/3.12 × ubuntu, ADR-017) + tox 双轨 CI + CI 配置脚本校验 (37/37) |
+| v2.4.0 | 2026.07.03 | 外部模块内化 (5 模块 → modules/, ADR-019) + 命名统一小写蛇形 + 依赖裁剪 + 632 测试零回归 |
+| v2.5.0 | 规划中 | 多因子正交化三层架构 (ADR-020): Layer 2 横截面正交化 + Layer 3 双重 Lasso 检验, 执行方案 v1.1 (40 深化子章节) |
 
 ---
 
@@ -733,3 +852,8 @@ factor_pipeline/
 - Box & Cox (1964) 变换理论
 - 《Quantitative Equity Portfolio Management》(Qian et al.)
 - 《Active Portfolio Management》(Grinold & Kahn)
+- Löwdin (1950) 对称正交化 (v2.5.0 Layer 2 主方法)
+- Ledoit & Wolf (2004) 协方差矩阵收缩估计 (v2.5.0 Ridge λ 自适应)
+- Kahan (1966) Gram-Schmidt 二次投影数值稳定性 (v2.5.0 GS re-orth)
+- Belsley, Kuh & Welsch (1980) 条件数诊断与共线性分析 (v2.5.0 几何诊断)
+- Belloni & Chernozhukov (2013) 双重 Lasso 选择推断 (v2.5.0 Layer 3 显著性检验)
