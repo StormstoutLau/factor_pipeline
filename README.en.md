@@ -1,6 +1,6 @@
 [English](README.en.md) | [中文](README.md)
 
-![Factor Pipeline](docs/badges/factor_pipeline_steampunk.svg)
+![Factor Pipeline](docs/badges/factor_pipeline_cli.svg)
 
 # Factor Processing Pipeline
 

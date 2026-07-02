@@ -1,0 +1,74 @@
+<svg width="270" height="48" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 270 48">
+  <!-- 终端窗口背景 -->
+  <rect width="270" height="48" fill="#0C0C0C" stroke="#00FF00" stroke-width="1" rx="4"/>
+
+  <!-- 顶部标题栏 (模拟终端窗口) -->
+  <rect x="1" y="1" width="268" height="8" fill="#1A1A1A" rx="3"/>
+  <!-- macOS 风格红黄绿圆点 -->
+  <circle cx="6" cy="5" r="2" fill="#FF5F56"/>
+  <circle cx="12" cy="5" r="2" fill="#FFBD2E"/>
+  <circle cx="18" cy="5" r="2" fill="#27C93F"/>
+
+  <!-- 左侧: 超级玛丽绿色管道 (8-bit 像素风) -->
+  <g transform="translate(10, 8)">
+    <!-- 管口 (宽 28, 高 12) -->
+    <rect x="0" y="0" width="28" height="12" fill="#006800"/>
+    <rect x="2" y="2" width="24" height="8" fill="#00A800"/>
+    <rect x="2" y="2" width="4" height="8" fill="#00D800"/>
+    <rect x="2" y="2" width="2" height="8" fill="#00F800"/>
+    <rect x="24" y="2" width="2" height="8" fill="#004800"/>
+    <!-- 管身 (宽 22, 高 28) -->
+    <rect x="3" y="12" width="22" height="28" fill="#006800"/>
+    <rect x="5" y="12" width="18" height="28" fill="#00A800"/>
+    <rect x="5" y="12" width="3" height="28" fill="#00D800"/>
+    <rect x="5" y="12" width="1" height="28" fill="#00F800"/>
+    <rect x="21" y="12" width="2" height="28" fill="#004800"/>
+  </g>
+
+  <!-- 中间: CLI 文字 (终端绿) -->
+  <text x="46" y="24" font-family="'Courier New', monospace"
+        font-size="13" font-weight="bold" fill="#00FF00">
+    $ factor_pipeline
+  </text>
+  <text x="46" y="38" font-family="'Courier New', monospace"
+        font-size="10" fill="#00AA00">
+    &gt; v2.4.0 █
+  </text>
+
+  <!-- 右侧: 超级玛丽红蘑菇 (8-bit 像素风, 4px/像素) -->
+  <g transform="translate(190, 10)">
+    <!-- 帽子红色 -->
+    <rect x="8" y="0" width="16" height="4" fill="#E40000"/>
+    <rect x="4" y="4" width="24" height="4" fill="#E40000"/>
+    <rect x="0" y="8" width="32" height="6" fill="#E40000"/>
+    <!-- 帽子白斑 -->
+    <rect x="8" y="4" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="20" y="4" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="4" y="8" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="24" y="8" width="4" height="4" fill="#FFFFFF"/>
+    <!-- 帽子底部深红边框 -->
+    <rect x="0" y="14" width="32" height="2" fill="#A40000"/>
+    <!-- 脸 (米色) -->
+    <rect x="2" y="16" width="28" height="8" fill="#FCBC54"/>
+    <rect x="4" y="24" width="24" height="4" fill="#FCBC54"/>
+    <!-- 眼睛 -->
+    <rect x="8" y="18" width="4" height="4" fill="#000000"/>
+    <rect x="20" y="18" width="4" height="4" fill="#000000"/>
+    <!-- 眼睛高光 -->
+    <rect x="9" y="18" width="1" height="1" fill="#FFFFFF"/>
+    <rect x="21" y="18" width="1" height="1" fill="#FFFFFF"/>
+    <!-- 腮红 -->
+    <rect x="4" y="22" width="4" height="2" fill="#E40000"/>
+    <rect x="24" y="22" width="4" height="2" fill="#E40000"/>
+  </g>
+
+  <!-- 金币 (超级玛丽经典金币) -->
+  <g transform="translate(234, 12)">
+    <ellipse cx="8" cy="14" rx="8" ry="14" fill="#FFD700" stroke="#B8860B" stroke-width="1"/>
+    <ellipse cx="8" cy="14" rx="5" ry="11" fill="#FFC700"/>
+    <rect x="6" y="5" width="1" height="18" fill="#FFE700"/>
+    <text x="8" y="17" font-family="'Courier New', monospace"
+          font-size="8" font-weight="bold" fill="#B8860B"
+          text-anchor="middle">$</text>
+  </g>
+</svg>
