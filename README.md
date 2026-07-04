@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v2.4.0 的"智能自适应 + 回测闭环 + 外部模块内化"，并正在规划 v2.5.0 的**多因子正交化三层架构** (Layer 1 per-factor / Layer 2 cross-factor 变换 / Layer 3 target-aware 检验)。核心能力涵盖**因子指纹前置诊断层**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**与**双轨漂移融合判定**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v2.5.0 的"多因子正交化三层架构 + 860 测试零回归"，并正在推进 v2.6.0 的**优化器与漂移检测增强** (ADR-004/005/006 修订 + ADR-021/022/023 新增)。核心能力涵盖**因子指纹前置诊断层**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -29,9 +29,76 @@
 
 ## 版本更新摘要
 
-### v2.5.0 多因子正交化三层架构 (规划中, 执行方案 v1.1)
+### v3.0.0 T4 KS 迁移检测 BH-FDR 替代 Bonferroni (2026.07, 已实施)
 
-> **状态**: 执行方案 v1.1 已完成 (40 个深化子章节), 待实施
+> **状态**: 已实施, 934 passed + 6 skipped + 11 subtests passed (零回归, 比 v2.6.0 的 918 多 16 个新测试)
+> **文档**: [docs/EXECUTION_V3.0.0_T4.md](docs/EXECUTION_V3.0.0_T4.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
+> **基线**: 918 passed + 6 skipped (v2.6.0) → 934 passed + 6 skipped (v3.0.0 T4, 含 11 subtests)
+> **关系**: v3.0.0 远期 4 项任务 (T1-T4) 中 T4 (P0) 已完成; T1 (指纹扩展) / T2 (流式) / T3 (CUSUM) 待启动
+
+**3 阶段执行方案 (E1-E3)**:
+
+| 阶段 | 任务 | 测试数 | 关键变更 |
+|------|------|--------|---------|
+| **E1** | BH 核心实现 (Red→Green→Review) | 13 | `_ks_migration_significance` 新增 `correction_method` 参数 (默认 'benjamini_hochberg'), 三路径分流 (BH/Bonferroni/none), 字段隔离, ADR-002a 写入 DECISIONS.md |
+| **E2** | 测试更新 | 3 | verify_fix1_manual.py 校验 3 改为 BH-FDR 公式校验, test_factor_significance_manual.py 新增 TestKSMigrationBHCorrection 类 |
+| **E3** | 文档同步 + 全量回归 | 0 | CHANGELOG/CODE_WIKI/README 同步, verify_v3_0_0_t4_manual.py 8/8 手工校验, 全量回归 934 passed |
+
+**1 项新 ADR**:
+- **ADR-002a**: Benjamini-Hochberg FDR 替代 Bonferroni (supersede ADR-002 的校正方法, ADR-002 历史保留)
+
+**5 项关键设计决策**:
+1. 默认改 BH, 保留 Bonferroni 向后兼容 (`correction_method='bonferroni'` 显式 opt-in 旧路径)
+2. 三路径字段隔离 (BH: min_p_value_adjusted/correction_method; Bonferroni: alpha_corrected/bonferroni_correction)
+3. None 路径供研究/调试 (`correction_method='none'` 无校正, 直接 `min_p < alpha`)
+4. 黄金参考: p=[0.01, 0.04, 0.03, 0.20, 0.50], K=5 → p_adj=[0.05, 0.0667, 0.0667, 0.25, 0.50]
+5. 行为变化: BH 比 Bonferroni 宽松, 之前不显著的迁移现在可能变显著 (`is_sig` 可能 False→True)
+
+**学术依据**:
+- Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *JRSS-B*, 57(1), 289-300.
+- 与 `factor_significance.py` 的 BH 默认一致 (E7 已用 BH)
+
+### v2.6.0 优化器与漂移检测增强 (2026.07, 已实施)
+
+> **状态**: 已实施, 918 passed + 6 skipped + 11 subtests passed (零回归, 比 v2.5.0 的 860 多 58 个新测试)
+> **文档**: [docs/EXECUTION_V2.6.0.md](docs/EXECUTION_V2.6.0.md) | [docs/ANALYSIS_V2.6.0.md](docs/ANALYSIS_V2.6.0.md)
+> **基线**: 860 passed + 5 skipped (v2.5.0) → 918 passed + 6 skipped (v2.6.0, 含 11 subtests)
+
+**9 阶段执行方案 (E1-E9)**:
+
+| 阶段 | 任务 | 优先级 | 关键变更 |
+|------|------|--------|---------|
+| **E1** | P3-11' 文档状态修正 | P0 | DECISIONS.md P3-11 `[ ]` → `[x]` |
+| **E2** | P3-10' migration_threshold 字段位置 + ADR-005 | P0 | optimizer.py:150-158 (`config.monitor` → `config`) |
+| **E3** | P3-1' IC 时间加权 EWMA | P1 | factor_metrics.py `compute_ic_series` 添加 `weighting`/`halflife` |
+| **E4** | P3-9' 目标函数对齐 ADR-004 (ADR-021) | P1 | `_health_penalty_proxy` (IC decay/hit_rate/ic_vol 三档) + fidelity 符号修正 |
+| **E5** | P3-13 正交化参数纳入搜索空间 (ADR-022) | P1 | `DEFAULT_SEARCH_SPACE_ORTH` (orth_method/align_mode/ridge_lambda) |
+| **E6** | P3-14 几何诊断纳入目标函数 | P2 | `OrthogonalizerAdapter.get_diagnostics()` + `_redundancy_penalty` (compute_vrr) |
+| **E7** | P3-15 Layer 3 显著性最终验证 | P2 | `_validate_significance` (FactorSignificanceTest, 仅最终验证) |
+| **E8** | P3-12' 阈值漂移监测 (ADR-023) | P2 | `backtest/threshold_drift_monitor.py` (ThresholdDriftMonitor, EWMA 衰减检测) |
+| **E9** | 文档验证 + 全量回归 | P1 | verify_v2_6_0_manual.py 8 项手工校验 |
+
+**3 项新 ADR**:
+- **ADR-021**: 目标函数对齐 ADR-004 — health_penalty 代理指标方案 (IC decay/hit_rate/ic_vol 三档近似 health_score, 解决 HealthMonitorAdapter 时序依赖)
+- **ADR-022**: 搜索空间扩展 — 正交化参数纳入 (`search_orth=False` 默认关闭, 启用后搜索 method/align/lambda 三维度, 不搜索 orth_enabled)
+- **ADR-023**: 阈值漂移监测 — ThresholdDriftMonitor (EWMA 衰减检测, halflife=63, decay > 20% 触发 `needs_research`)
+
+**6 项核心约束**:
+1. 基线保护: 默认行为不变, 不影响 860 测试基线
+2. ADR 契约对齐: ADR-004 (health_penalty) 改代码, ADR-005 (static/dynamic) 改 ADR
+3. TDD 开发: 每阶段严格 Red-Green-Refactor, 含手工数值校验
+4. 数值精度: 与独立 numpy/statsmodels 实现对比, 精度 < 1e-10
+5. 无 look-ahead bias: 正交化参数搜索时必须在 CV fold 内部 fit (用 train 数据)
+6. 计算成本控制: FactorSignificanceTest 仅用于最终验证, 不用于每 trial 评估
+
+**学术依据修正** (v1.0 误引 → v1.1 修正):
+- P3-1 IC 时间加权: Cohen-Coval-Pastor (2005) → Ferson-Siegel (2001)
+- P3-12 阈值漂移: Hsu (2010) 误称 Bayesian → Sullivan-TW (1999) + McLean-Pontiff (2016)
+- P3-11 参数重要性: 拆分为 Bergstra (2011) TPE + Hutter (2014) fANOVA
+
+### v2.5.0 多因子正交化三层架构 (2026.07)
+
+> **状态**: 已实施, 860 测试零回归 (比 v2.4.0 的 632 多 228 个)
 > **文档**: [docs/EXECUTION_V2.5.0.md](docs/EXECUTION_V2.5.0.md) | [docs/ANALYSIS_V2.5.0.md](docs/ANALYSIS_V2.5.0.md)
 
 **三层架构分离** (ADR-020):
@@ -65,6 +132,16 @@
 **性能预期**: K=20 时 Symmetric fit < 0.5ms; 增量 Gram + warm-start 实现 42x 加速 (vs 全量重算)
 
 **约束**: 正交化默认关闭 (`enabled=False`), 不影响 632 基线测试
+
+**实施成果** (O1-O6 全部完成):
+- **O1 算法核心**: 5 种正交化器 (Symmetric/Ridge/PCA/Gram-Schmidt/Cholesky) + fit_from_gram 接口 + dtype 强制 — 44 单元测试 + 15 手工校验
+- **O2 适配器层**: OrthogonalizerAdapter + CrossSectionalOrthogonalizer + post_transform_hooks 半侵入式接入 + align_mode 三模式 — 22 单元测试 + 12 手工校验
+- **O3a 几何诊断**: VRR/κ/VIF/正交性误差 + VIF 多方法 (lstsq/qr/pinv) + 条件数分级 (Belsley-Kuh-Welsch 1980) — 18 单元测试 + 24 手工校验
+- **O3b Layer 3 检验**: 双重 Lasso (Belloni 2014 PDS) + treatment 轮询 + HC3 稳健标准误 + BH FDR 校正 — 17 单元测试 + 14 手工校验
+- **O4 回测扩展**: RollingOrthogonalizer + ICChangeMonitor + 增量 Gram + is_orthogonalized 标记 — 11 单元测试 + 19 手工校验
+- **O5 协同验证**: Grouped + TripleChain (Fingerprint/Decoupler/Orthogonalizer 三件套串联) — 15 单元测试 + 17 手工校验
+- **O6 文档验证**: 版本号 8 处同步 + ADR-020 状态更新 + 全量回归 860 passed + 5 skipped + 手工校验 5/5 通过
+- **技术债修复**: tests/manual/test_adapter_manual.py:test_disabled_adapter_no_import 添加 try/finally 恢复 sys.modules, 消除 class identity (is 检查) 失败的隐蔽污染
 
 ### v2.4.0 外部模块内化 (2026.07)
 
@@ -188,7 +265,7 @@ price_data = loader.get_price_matrix(field="close", start_date, end_date)
 | **统一 `fit()` 中间数据** | P1 | 三条管道统一 `_intermediate_data` + `get_intermediate_data()` | 全流程可追溯 |
 | **适配器回退 Warning** | P1 | 外部模块不可用时 `warnings.warn(UserWarning)` 替代静默失败 | 透明度提升 |
 | **迁移权重融合** | P1 | `_merge_transition_weights()` 融合分类权重 + 指数衰减迁移权重 | 过渡期平滑 |
-| **KS 迁移显著性检验** | P2 | `scipy.stats.ks_2samp` + Bonferroni 校正，过滤噪声迁移 | 假阳性大幅降低 |
+| **KS 迁移显著性检验** | P2 | `scipy.stats.ks_2samp` + BH-FDR 校正 (T4 v3.0.0, 默认; Bonferroni 向后兼容)，过滤噪声迁移 | 假阳性可控, 检测力提升 |
 | **`importlib` 上下文管理器** | P2 | `_temp_sys_path` 替代 `sys.path.insert`，异常安全恢复 | 全局状态隔离 |
 
 **测试**: 229 测试，222 通过，3 既有失败，无新增回归。
@@ -245,11 +322,29 @@ v2.4.0: 外部模块内化 (ADR-019)
 保留外部数据边界: Factor_DB / Factor_Trading
 632 测试零回归, CI monorepo 模拟从 7 个外部模块缩减为 2 个
 
-v2.5.0: 多因子正交化三层架构 (规划中)
+v2.5.0: 多因子正交化三层架构 (已实施)
 Layer 1 (per-factor) → Layer 2 (cross-factor 正交化) → Layer 3 (target-aware 检验)
   对称正交化 (Löwdin) / Ridge / PCA / GS / Cholesky
   双重 Lasso (treatment 轮询) + Elastic Net
   默认 enabled=False, 不影响 632 基线
+  860 测试零回归 (O1-O6 全部完成, 127 单元测试 + 101 手工校验)
+
+v2.6.0: 优化器与漂移检测增强 (已实施)
+  E1-E9 9 阶段 TDD (~58 新测试, 918 passed + 6 skipped)
+  ADR-021 目标函数对齐 ADR-004 (health_penalty 代理方案 B)
+  ADR-022 搜索空间扩展 (正交化参数, search_orth=False 默认)
+  ADR-023 阈值漂移监测 (ThresholdDriftMonitor, EWMA 衰减检测)
+  目标函数 6 项: IC - λ_vol·vol - λ_cov·cov - λ_fid·ks_distortion
+                - λ_health·health - λ_red·redundancy
+  Layer 3 显著性验证 (Belloni 2014 PDS Lasso + HC3 + BH)
+
+v3.0.0 T4: KS 迁移检测 BH-FDR 替代 Bonferroni (已实施)
+  E1-E3 3 阶段 TDD (+16 新测试, 934 passed + 6 skipped)
+  ADR-002a supersede ADR-002 校正方法 (Bonferroni → BH-FDR 默认)
+  _ks_migration_significance 三路径分流 (BH/Bonferroni/none)
+  字段隔离 + 向后兼容 + 黄金参考校验
+  Benjamini-Hochberg (1995) FDR 控制, 检测力提升
+  v3.0.0 远期 4 项任务 (T1-T4) 中 T4 (P0) 已完成
 ```
 
 ---
@@ -820,13 +915,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v2.4.0-internalized (当前已实施) / v2.5.0-orthogonalizer (规划中, 执行方案 v1.1)
-- **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer (v2.4.0, ADR-019)
+- **Pipeline 版本**: v3.0.0 T4 (已实施, 934 passed + 6 skipped + 11 subtests)
+- **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 632 passed, 5 skipped, 0 failed
+- **测试基线**: 934 passed, 6 skipped, 0 failed
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.07.03
-- **状态**: STABLE (v2.4.0) / PLANNING (v2.5.0)
+- **构建日期**: 2026.07.04
+- **状态**: STABLE (v3.0.0 T4)
 
 ### 版本历史
 
@@ -840,7 +935,9 @@ factor_pipeline/
 | v2.2.2 | 2026.07.02 | 代码质量修复 7 项 (self.factors bug / 配置统一 / 版本号统一 / backtest 导出 / core 命名空间隔离 / 硬编码路径配置化) |
 | v2.3.0 | 2026.07.02 | CI 矩阵 (Python 3.10/3.11/3.12 × ubuntu, ADR-017) + tox 双轨 CI + CI 配置脚本校验 (37/37) |
 | v2.4.0 | 2026.07.03 | 外部模块内化 (5 模块 → modules/, ADR-019) + 命名统一小写蛇形 + 依赖裁剪 + 632 测试零回归 |
-| v2.5.0 | 规划中 | 多因子正交化三层架构 (ADR-020): Layer 2 横截面正交化 + Layer 3 双重 Lasso 检验, 执行方案 v1.1 (40 深化子章节) |
+| v2.5.0 | 2026.07.03 | 多因子正交化三层架构 (ADR-020, O1-O6 全部完成): Layer 2 横截面正交化 (5 种算法) + Layer 3 双重 Lasso 检验 + 滚动/分组/三件套, 860 passed + 5 skipped |
+| v2.6.0 | 2026.07.04 | 优化器与漂移检测增强 (ADR-021/022/023, E1-E9 全部完成): 目标函数对齐 ADR-004 (6 项 IC-vol-cov-ks-health-redundancy) + 正交化参数搜索空间 + Layer 3 显著性验证 (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA 衰减检测), 918 passed + 6 skipped + 11 subtests |
+| v3.0.0 T4 | 2026.07.04 | KS 迁移检测 BH-FDR 替代 Bonferroni (ADR-002a, E1-E3 全部完成): `_ks_migration_significance` 三路径分流 (BH/Bonferroni/none, 默认 BH) + 字段隔离 + 向后兼容 + 黄金参考校验, Benjamini-Hochberg (1995) FDR 控制, 934 passed + 6 skipped + 11 subtests |
 
 ---
 

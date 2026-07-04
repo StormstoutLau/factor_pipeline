@@ -86,6 +86,54 @@ Q3 验证数据：IC 和 ICIR 高度相关(ρ=0.885)，覆盖率方差极小(std
 
 ---
 
+## ADR-002a: Benjamini-Hochberg FDR 替代 Bonferroni 用于 KS 迁移多重比较校正
+
+**日期**: 2026-07-04
+**状态**: 已实施 (v3.0.0 T4 E1)
+**优先级**: P0
+**关系**: Supersede ADR-002 的校正方法 (ADR-002 历史记录保留不动)
+
+### 背景
+
+ADR-002 采用 Bonferroni 校正 (`alpha_corrected = alpha / K`) 控制多重比较假阳性, 但 ADR-002 自己的"风险"章节已指出 Bonferroni 过于保守 (Type II 误差增加), 漏检真实迁移。
+
+在因子迁移检测场景下, 漏检真实迁移的代价 (策略失效未被发现) 通常高于误检的代价 (不必要的迁移权重合并)。Bonferroni 控制 FWER (Family-Wise Error Rate) 过于严格, BH 控制的是 FDR (False Discovery Rate), 在检测力与误检率之间取得更合理的平衡。
+
+### 决策
+
+**将 `_ks_migration_significance` 的多重比较校正从 Bonferroni 迁移到 Benjamini-Hochberg FDR**, 保留 Bonferroni 路径作为向后兼容选项。
+
+具体方案:
+- 新增 `correction_method: str = 'benjamini_hochberg'` 参数 (默认 BH)
+- BH 路径: `p_adj_(k) = p_(k) * K / rank`, 从大到小累积 min, clip [0,1]
+  - `is_significant = (min_p_value_adjusted < alpha)`
+- Bonferroni 路径 (`correction_method='bonferroni'`): 保留旧逻辑 (向后兼容)
+- None 路径 (`correction_method='none'`): 无校正, 供研究/调试使用
+- 字段隔离: BH 路径返回 `min_p_value_adjusted` / `correction_method`, Bonferroni 路径返回 `alpha_corrected` / `bonferroni_correction`, 互不污染
+
+### 备选方案
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| A: 保持 Bonferroni | 零改动 | 检测力低, 漏检真实迁移 | ❌ |
+| B: BH-FDR (默认) | 检测力高, FDR 控制 | 字段变化需向后兼容 | ✅ |
+| C: Holm-Bonferroni | 检测力介于 A/B | 实现复杂, 与 factor_significance.py 不一致 | ❌ |
+| D: 直接删除 Bonferroni | 代码最简 | 破坏向后兼容 | ❌ |
+
+### 后果
+
+- **正面**: 检测力提升 (E1-T5 验证 BH 检测数 >= Bonferroni), 与 `factor_significance.py` 的 BH 默认一致 (E7 已用 BH)
+- **负面**: 行为变化 — 之前不显著的迁移现在可能变显著 (`is_sig` 可能 False→True), 需在 CHANGELOG 注明
+- **风险**: BH 控制的是 FDR 而非 FWER, 若应用场景要求严格控制"至少一个假阳性"概率, 应显式传 `correction_method='bonferroni'`
+- **回滚**: 默认改回 `correction_method='bonferroni'` 即可 (1 行改动)
+
+### 学术依据
+
+- Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *Journal of the Royal Statistical Society: Series B*, 57(1), 289-300.
+- Bonferroni 校正: Dunn, O. J. (1961). Multiple comparisons among means. *Journal of the American Statistical Association*, 56(293), 52-64.
+
+---
+
 ## ADR-003: importlib + 上下文管理器替代 sys.path 操作
 
 **日期**: 2026-07-01
@@ -211,6 +259,19 @@ score = IC_score - stability_penalty - ks_penalty - health_penalty - coverage_pe
 - **正面**: 维度减少 20%，冗余阈值合并后搜索效率提升
 - **负面**: 合并后的参数物理含义不如原始参数直观
 - **风险**: 转换公式可能引入额外的非线性
+
+### 修订日志
+
+**2026-07-04 (v2.6.0 E2 / P3-10')**: 修正 `migration_threshold` 字段位置错误。
+
+- **问题**: `optimizer.py:150-158` 错误将 `migration_threshold` 设置到 `config.monitor.migration_threshold`, 但 `MonitorConfig` (modules/factor_fingerprint/core/monitor.py:51-61) 无此字段 (只有 `short/medium/long_threshold` 三个窗口阈值), `hasattr` 静默跳过导致参数被丢弃.
+- **修正**: 字段位于 `PipelineV2Config.migration_threshold` (pipelines_v2.py, 默认值 0.10, 与 `PipelineV2ConfigUnified.migration_threshold` 对齐).
+- **代码变更**:
+  - `pipelines_v2.py`: `PipelineV2Config` dataclass 新增 `migration_threshold: float = 0.10`
+  - `optimizer.py:150-158`: 移除 `hasattr(config.monitor, ...)` 静默检查, 改为 `config.migration_threshold = params['migration_threshold']`
+  - `config_v2.py:to_pipeline_v2_config()`: 桥接方法直接传递 `migration_threshold=self.migration_threshold`
+- **搜索空间维度不变**: 仍为 8 维, `migration_threshold` 维度 (范围 [0.0, 1.0], 当前值 0.10) 物理含义与窗口阈值解耦.
+- **静态/动态阈值替代 midpoint/interval**: 经审计 (E2 Review), 原 ADR-005 的 midpoint/interval 参数化方式虽更紧凑, 但不如直接搜索 `classification_threshold_static` + `classification_threshold_dynamic` 直观. 此修正已在 8 维搜索空间中体现 (见表 1), midpoint/interval 仅作为内部中间变量, 不再是搜索维度.
 
 ---
 
@@ -977,7 +1038,7 @@ v2.2.5 (ADR-015) 时识别但延后的设计层面技术债。旧 `NeutralizerAd
 ## ADR-019: 外部模块内化 — 从 monorepo 模拟转为单一仓库
 
 **日期**: 2026-07-02
-**状态**: 已批准 (待实施)
+**状态**: 已实施 (v2.4.0, 2026-07-03)
 **优先级**: P4 (架构优化)
 
 ### 背景
@@ -1045,13 +1106,30 @@ v2.2.3 (ADR-013) 引入子包化 + `pip install -e .` 管理 7 个外部模块, 
 2. Factor_AdaptiveWinsor 的 batch/parallel/pipeline/report 子包未内化 (主项目未使用)
 3. Neutralizer 的可视化/并行/内存监控功能裁剪后不可逆
 
+### 实施结果 (v2.4.0, 2026-07-03)
+
+5 阶段全量回归始终 **632 passed 零回归**:
+
+| 阶段 | 模块 | 关键修复 | 回归 |
+|------|------|---------|------|
+| I1 | Fingerprint + Decoupler | 命名规范化, ~45 处 import 替换 | 632 passed |
+| I2 | AdaptiveWinsor | 最小子包化 (仅 core/), 依赖上界冲突检测 | 632 passed |
+| I3 | Imputer | 22 处导入清理 (调研预估仅 4 处), try/except hack 清理 | 632 passed |
+| I4 | Neutralizer | src→flat-layout, 依赖裁剪, plt.Figure 注解修复 | 632 passed |
+| I5 | CI/文档清理 | CI monorepo 7→2, 删除 7 失效脚本, 版本号 11 处统一 | 632 passed, 5 skipped |
+
+**关键经验**:
+1. 模块独立性对独立分发才有价值, 单仓库场景下独立性是虚假收益 — 内化优于子包化
+2. 函数内导入比模块级导入更难发现 (调研 4 处 vs 实际 22 处), 必须用 Grep 全文搜索
+3. 依赖上界冲突是隐蔽陷阱 (pyextremes 声明 pandas<3.0.0 会自动降级而非报错)
+
 
 ---
 
 ## ADR-020: 多因子横截面正交化模块 — 对称正交化为主方法
 
 **日期**: 2026-07-02
-**状态**: 已批准 (待实施)
+**状态**: 已实施 (O1+O2+O3a+O3b+O4+O5+O6 完成, 单元+手工 93/93 通过, 全量回归 860 passed + 5 skipped, sys.path 污染技术债已修复 ADR-020 技术债 #5)
 **优先级**: P5 (新功能)
 
 ### 背景
@@ -1064,18 +1142,43 @@ v2.2.3 (ADR-013) 引入子包化 + `pip install -e .` 管理 7 个外部模块, 
 
 ### 决策
 
-**新增 `factor_pipeline/modules/factor_orthogonalizer/` 模块, 以对称正交化 (Symmetric Orthogonalization) 为主方法**。
+**新增 `factor_pipeline/modules/factor_orthogonalizer/` 模块, 以对称正交化 (Symmetric Orthogonalization) 为主方法, 实施三层架构分离 (Layer 1/2/3)**。
 
-具体方案:
-- **主方法**: 对称正交化 `T = F @ W, W = (F^T @ F)^(-1/2)`, 无顺序依赖, 所有因子平等
-- **备选方法**: Gram-Schmidt (顺序依赖, 有因果优先级时使用) / Cholesky (下三角, 严格因果链)
-- **诊断指标**: 方差保留比例 `VRR_k = Var(T_k) / Var(F_k)`, VRR << 1 表示因子 k 高度冗余
-- **目录位置**: `factor_pipeline/modules/factor_orthogonalizer/` (内化后目录结构, 与 factor_decoupler 并列)
-- **集成点**:
-  - 作为新 PipelineStep (横截面正交化适配器, 需扩展 PipelineStep 接口支持多因子输入)
-  - 与 Factor_Decoupler 互补: 截面正交 → 时序解耦 → 纯净因子
-  - 与 Factor_Fingerprint 协同: Fingerprint 描述单因子, 正交化分析多因子关系
-  - 与 backtest 协同: 正交化前后 IC 对比, 独立 alpha 贡献拆解
+### 三层架构分离 (v1.1 执行方案)
+
+| Layer | 职责 | 模块位置 | 监督性 | 状态 |
+|-------|------|---------|--------|------|
+| **Layer 1** | per-factor 处理 (已有) | `pipelines_v2.py` | 无监督 | 已实施 |
+| **Layer 2** | cross-factor 横截面正交化 (新增) | `modules/factor_orthogonalizer/` | 无监督 | 待实施 |
+| **Layer 3** | target-aware 显著性检验 (新增) | `backtest/factor_significance.py` | 有监督 (需 Y) | 待实施 |
+
+### 5 种正交化算法
+
+| 算法 | 数学定义 | 适用场景 | 选择 |
+|------|---------|---------|------|
+| **Symmetric (Löwdin)** | `W = (F^T F)^(-1/2) = V Λ^(-1/2) V^T` | 默认主方法, VRR=1, 无顺序依赖 | ✅ (默认) |
+| **Ridge** | `W = (F^T F + λI)^(-1/2)` | 病态矩阵兜底, λ 自适应 (Ledoit-Wolf 2004) | ⚠️ (可选) |
+| **PCA** | `T = F V_k` (前 k 个主成分) | 降维场景, center 参数兼容 Layer 1 标准化 | ⚠️ (可选) |
+| **Gram-Schmidt** | 顺序投影, κ>100 启用 Kahan (1966) 二次投影 | 顺序依赖场景, 有因果优先级 | ⚠️ (可选) |
+| **Cholesky** | `F^T F = L L^T, W = L^(-T)` | 半正定保证场景 | ⚠️ (可选) |
+
+### 核心约束 (v1.1 深化)
+
+1. **对称正交化为默认主方法**: `T = F @ W, W = (F^T @ F)^(-1/2)`, 无顺序依赖, 所有因子平等
+2. **正交化模块默认关闭** (`enabled=False`): 不影响 632 基线测试, 零开销
+3. **Pipeline 不重构**: 正交化作为 `post_transform_hooks` 半侵入式接入, 保持 per-factor 循环不变
+4. **Treatment 轮询模式**: 每个因子独立当 treatment, 顺序不影响结果 (Layer 3)
+5. **双重 Lasso (Belloni-Chernozhukov 2014 PDS)**: Stage1 Lasso Y~X → S_Y; Stage2 Lasso D_k~X → S_D; Stage3 OLS Y~D_k+X_{S_Y∪S_D}
+6. **HC3 稳健标准误** (MacKinnon-White 1985): 对异方差和杠杆点稳健
+7. **Benjamini-Hochberg FDR 校正**: 多因子检验控制 False Discovery Rate
+8. **条件数分级 (Belsley-Kuh-Welsch 1980)**: κ<10 good / <100 acceptable / <1000 warning / ≥1000 severe
+9. **病态矩阵特征值截断** (threshold_mode='auto'): eigvals < max_eigval * eps_truncate 时截断
+10. **Ridge λ 选择** (lambda_selection='ledoit_wolf'): Ledoit-Wolf (2004) 自适应收缩
+11. **Gram-Schmidt re-orthogonalization** (Kahan 1966): κ>100 时二次投影提升数值稳定性
+12. **fit_from_gram 接口**: 从 G = F^T F 直接估计 W, 避免 re-stack F_window (Rolling 优化)
+13. **增量 Gram 矩阵更新**: RollingOrthogonalizer 的 O(K²) 滑动窗口优化, reset_interval=500 定期重置
+14. **因子对齐策略** (align_mode): intersection / union_nan / raise_on_mismatch 三模式
+15. **VRR (Variance Retention Ratio)**: `VRR_k = Var(T_k)/Var(F_k)`, 对称正交化理论值 = 1.0, VRR << 1 表示因子 k 高度冗余
 
 ### 备选方案
 
@@ -1083,8 +1186,8 @@ v2.2.3 (ADR-013) 引入子包化 + `pip install -e .` 管理 7 个外部模块, 
 |------|------|------|------|
 | A: 对称正交化 (Symmetric) | 无顺序依赖, 保留所有因子信息 | 变换后因子失去原始经济含义 | ✅ (默认) |
 | B: Gram-Schmidt | 顺序明确, 第一个因子不变 | 顺序主观, 不对称 | ⚠️ (可选) |
-| C: Cholesky | 下三角, 严格因果 | 顺序依赖, 数值不稳定 | ❌ |
-| D: PCA | 降维 + 正交 | 因子语义改变, 难解释 | ❌ (远期) |
+| C: Cholesky | 下三角, 严格因果 | 顺序依赖, 数值不稳定 | ⚠️ (可选) |
+| D: PCA | 降维 + 正交 | 因子语义改变, 难解释 | ⚠️ (可选, 远期) |
 
 ### 后果
 
@@ -1092,26 +1195,254 @@ v2.2.3 (ADR-013) 引入子包化 + `pip install -e .` 管理 7 个外部模块, 
   - 形成因子诊断三件套: 描述 (Fingerprint) → 解耦 (Decoupler) → 正交化 (Orthogonalizer)
   - 冗余因子识别 (VRR 排序 + 阈值)
   - 独立 alpha 贡献拆解 (正交化后回归系数稳定)
+  - 三层架构分离, Layer 2 无监督变换与 Layer 3 有监督检验职责清晰
 - **负面**:
-  - 需扩展 PipelineStep 接口支持多因子输入 (现有接口是单因子语义)
   - 正交化后因子失去原始经济含义, 归因报告需标注
+  - 新增 ~120 测试, 测试套件膨胀至 ~752
 - **风险**:
-  - 高度共线性时 F^T·F 接近奇异, 需正则化 (eps 参数)
+  - 高度共线性时 F^T·F 接近奇异, 需正则化 (eps 参数 + Ridge 兜底)
   - 多因子 PIT 对齐 (因子发布延迟差异) 需处理
+  - 双重 Lasso 的 LassoCV 收敛性需检测, S_D 全空集时需深层处理
 
-### 实施路径 (4 阶段)
+### 实施路径 (6 阶段, v1.1)
 
-1. **阶段 1**: 核心算法 + TDD (`symmetric_orthogonalize()` / `gram_schmidt()` / `variance_retention_ratio()`)
-2. **阶段 2**: 适配器集成 (扩展 PipelineStep 或设计 MultiFactorStep 基类)
-3. **阶段 3**: 诊断工具 (冗余因子识别, 正交化前后 IC 对比)
-4. **阶段 4**: 回测集成 (多因子输入, 独立 alpha 贡献拆解)
+1. **O1**: Layer 2 算法核心 (P0) — 5 个算法类 + O1.12 深化 (7 项) — ~40 测试 — ✅ 完成 (44 测试 + 15 手工校验)
+2. **O2**: Layer 2 适配器层 (P0) — OrthogonalizerAdapter + Config + O2.8 深化 (6 项) — ~20 测试 — ✅ 完成 (22 测试 + 12 手工校验)
+3. **O3a**: Layer 2 几何诊断 (P0) — VRR/κ/VIF/正交性误差 + O3a.6 深化 (5 项) — ~15 测试 — ✅ 完成 (18 单元测试 + 24 手工校验, 含 VRR 数学修正)
+4. **O3b**: Layer 3 因子检验 (P1) — 双重 Lasso (Belloni 2014 PDS) + O4.9 深化 (7 项) — ✅ 完成 (17 单元测试 + 14 手工校验, 含 HC3 公式 bug 修复)
+5. **O4**: 回测扩展 (P1) — RollingOrthogonalizer + ICChangeMonitor + O4.9/O4.11 深化 — ✅ 完成 (11 单元测试 + 19 手工校验, 含 O4.11.1/2/3/5 深化, O4.11.4 warm-start 设计标注可选未实现)
+6. **O5**: 协同设计 (P1) — Grouped + TripleChain + O5.6 深化 (5 项) — ✅ 完成 (15 单元测试 + 17 手工校验, 含 O5.6.1 数据流协议/O5.6.2 中性化顺序/O5.6.3 缺失因子/O5.6.4 缓存/O5.6.5 冲突解决)
+7. **O6**: 文档验证 (P1) — 版本号 11 处同步 + ADR-020 状态更新 + 全量回归 (~752 passed)
 
 ### 技术债
 
-1. PipelineStep 接口扩展可能影响向后兼容, 需谨慎设计
+1. PipelineStep 接口不扩展, 正交化通过 `post_transform_hooks` 半侵入式接入
 2. 多因子 PIT 对齐逻辑需与 data_bridge 的 loaded_at 机制集成
 3. 正交化后因子解释性丢失, 需在归因报告中明确标注
+4. GPU 加速 (CuPy, HAS_CUPY 标记) 作为可选依赖, 远期实施
+5. **O3a 暴露的 sys.path 污染 (预存在, 非本次引入)**: `test_fix7_core_namespace_collision.py` 行 27-28 把 Factor_DB 加入 sys.path, 触发 `core` 包注册到 sys.modules, 污染后续 `from factor_pipeline.modules.factor_orthogonalizer.core import ...` 解析 (test_import_from_core 失败, `is` 比较为 False). 单独跑 O3a 测试 135/135 通过, 全量回归时该测试受污染失败. 修复方向: 在该测试 finally 块清理 sys.path. 留待 O6 阶段统一处理.
+6. **VRR 数学修正 (O3a 发现)**: 文档 O3a.4 原方案 "对称正交化 VRR=1" 基于 "保持方差" 直觉, 实际数学不成立. 对称正交化使 T^T T = I (||T_k||=1), 故 Var(T_k) ≈ 1/N, 对 randn F (||F_k||≈sqrt(N), Var(F_k)≈1) 有 VRR ≈ 1/N < 1. VRR=1 仅当 F 列预归一化为单位范数时成立. 测试已修正为数学正确版本 (test_vrr_symmetric_compresses_variance), 手工校验同时验证两种情况 (randn VRR≈1/N, unit_norm F VRR=1).
 
+### O3a 经验教训
+
+1. **直觉假设需数学验证**: 文档 O3a.4 "对称正交化 VRR=1" 看似合理 (基于 "保持方差" 直觉), 但实际对称正交化保持的是正交性 (T^T T=I), 不是单因子方差. TDD Red 阶段暴露此数学错误, 说明手工数值校验是发现直觉错误的必要环节 (ADR-018 经验的再次印证).
+2. **VRR 的 ddof 不变性是数学性质**: VRR = Var(T,ddof)/Var(F,ddof), 分子分母同时乘 N/(N-1), 比值不变. 这不是巧合, 是 VRR 定义的内在性质 (比值统计量). 测试 1e-12 精度验证此不变性.
+3. **共线因子构造的 rho ≠ 实际 corr**: `_make_collinear_factors(rho)` 用 `F = sqrt(rho)*base + sqrt(1-rho²)*noise`, 但 Var(F_k) = rho + (1-rho²) = 1+rho-rho², 实际 corr = rho/sqrt(1+rho-rho²) < rho. rho=0.95 实际 corr≈0.90, VIF≈7 (未达 >10 阈值); 需 rho=0.99 (实际 corr≈0.98, VIF≈30). 测试参数选择需基于实际统计量而非参数名.
+4. **条件数定义需统一**: λ_max/λ_min (特征值比) vs σ_max/σ_min (SVD 奇异值比) 差异为平方关系 (σ = sqrt(λ)). diagnostics.py 采用特征值比, 与 base.py 的 `condition_number_` 一致, 避免诊断指标与算法内部不一致.
+5. **JSON 序列化的 inf/nan 处理**: 标准 JSON 不允许 Infinity/NaN 字面量 (ECMAScript 兼容性), 需递归转换为 null. `_to_jsonable()` 函数处理 numpy 类型 + inf→null, 确保 `json.loads(json_str)` 不报错且 `Infinity`/`NaN` 字面量不出现在输出字符串中.
+
+### O3b 经验教训
+
+1. **TDD 共享 bug 陷阱 (核心教训)**: HC3 公式实现用 `residuals / (1-h)^2` (应为 `residuals**2 / (1-h)^2`), 测试代码用同一错误公式校验, 单元测试 17/17 通过但实现是错的. 只有与独立实现 (statsmodels cov_HC3) 对比才暴露此 bug. 结论: **TDD 测试与实现共享同一公式错误时无法发现 bug, 必须用第三方独立实现 (statsmodels/scipy) 做手工校验**. 这是 ADR-018 "手工数值校验是 TDD 必要补充" 经验的更深层印证.
+2. **sqrt(invalid value) 警告是 bug 指示器**: HC3 公式错误导致 cov 矩阵非 PSD (对角线为负), `np.sqrt(负数)` 产生 nan + RuntimeWarning. 最初用 `np.maximum(diag, 0)` clip 掩盖了警告, 实际是公式错误的信号. 结论: **数值警告不应被 clip 掩盖, 应追溯根因**. clip 仅在公式正确后作为极端数值误差的防御性措施保留.
+3. **BH 校正 rank 方向易混淆**: BH 算法定义 rank 为升序位置 (最小 p = rank 1, 最大 p = rank K), 从大到小处理时 rank = K-i. 手工计算时若用降序 (argsort(-p)) 且 rank 从 1 递增, 会得到错误结果. 结论: **BH 校正测试必须与 statsmodels.stats.multitest.multipletests 对比验证**.
+4. **HC3 se > OLS se 不是数学保证**: 最初测试断言 "异方差下 HC3 se > OLS se", 实际 HC3 se 是否大于 OLS se 取决于残差与杠杆的关联方向, 非数学保证. 结论: **测试断言应基于数学恒等式 (如公式实现正确性), 非经验性大小关系**.
+5. **惰性初始化兼容直接注入测试场景**: `fit()` 中填充 `y_normalized_` 但测试直接注入 `F_`/`y_` 跳过 `fit()`, 导致 `y_normalized_` 未初始化. 解法: `__init__` 中设 `y_normalized_ = None`, `_double_lasso_test` 中惰性初始化. 结论: **属性初始化必须考虑测试直接注入的场景, 惰性初始化是简洁的兼容方案**.
+
+### O4 经验教训
+
+1. **np.bool_ 与 Python bool 的 is 比较陷阱**: `is_orth = np.zeros(T, dtype=bool)` 产生 numpy bool 数组, `is_orth[0] is False` 在 numpy bool_ 类型下返回 False (因为 `np.False_ is False` 为 False, 它们是不同对象). 解法: 用 `== False` / `== True` 替代 `is False` / `is True`. 结论: **numpy bool 数组的断言必须用 == 比较, 不能用 is**.
+2. **look-ahead bias 测试需用反证法**: 验证 "t 期 W 不含 F[t] 信息" 不能只检查 W 数值正确, 需构造 "修改 F[t] 后 W_t 不变" 的反证场景. 直接对比 W_ 与用过去数据 fit 的 W 一致性是正向验证, 反证法 (修改未来数据不影响当前 W) 才是 look-ahead bias 的严格验证. 结论: **look-ahead bias 测试必须用反证法, 仅正向数值一致不足以证明无前瞻**.
+3. **增量 Gram 更新的累积浮点误差**: `G += F.T @ F` 在长期滑动后会累积浮点误差, 表现为 G 不再严格对称 (G[0,1] ≠ G[1,0] 微小差异). O4.11.1 的 reset_interval 定期从 window_ 全量重堆叠 G 是必要的数值稳定性保障. 结论: **增量更新的累积误差必须用定期全量重置消除, 不能依赖浮点运算的精度**.
+4. **fit_from_gram 对称化是 defensive programming**: 即使调用方传入的 G 看似对称, fit_from_gram 内部强制 `G = (G + G.T) / 2` 是必要的, 因为: (a) 增量更新可能产生微小不对称; (b) eigh 要求严格对称输入, 不对称会返回错误特征向量. 测试用 G[0,1] += 1e-10 验证此 defensive 行为. 结论: **数值算法的输入校验应该是 defensive 的, 即使文档要求对称输入也应在内部强制**.
+5. **min_obs 边界 off-by-one 语义**: "window 长度 >= min_obs 时正交化" 的语义在 t=0 时 window=[] (长度 0), t=1 时 window=[F[0]] (长度 1), t=k 时 window=[F[0..k-1]] (长度 k). 所以 min_obs=5 时, t=5 是首次正交化 (window 长度恰等于 5). 测试必须覆盖 "恰等于" 和 "小于" 两个边界. 结论: **边界测试的 off-by-one 必须基于实际语义而非直觉, 用具体 t 值验证**.
+
+### O5 经验教训
+
+1. **单期 Gram vs 全样本 Gram 的混淆**: Grouped 正交化在全样本 (N·T, K) 上估计 W, 然后应用到每期 (N, K). 单期 T_t^T T_t 不严格 = I (因为 W 是基于全样本估计, 单期应用有偏差), 但全样本堆叠 T^T T 应接近 I. 最初手工校验用单期 Gram 阈值 0.1 失败 (实际 0.1385), 改为全样本 Gram 阈值 1e-10 通过. 结论: **Löwdin 正交化 T^T T = I 的性质在估计样本上成立, 应用到不同样本 (单期) 时不严格成立, 校验必须基于估计样本**.
+2. **设计文档代码 snippet 的方法路径错误**: O5.2 设计文档写 `CrossSectionalOrthogonalizer._align_factors(group_dict)` 但 `_align_factors` 是模块级函数 (utils.stacking.align_factors), 不是 CrossSectionalOrthogonalizer 的方法. 实现时需对照现有代码而非盲信设计文档. 结论: **设计文档的代码 snippet 是设计意图, 不是 API 规格, 实现时必须对照现有代码确认方法路径**.
+3. **数据流契约校验的位置**: O5.6.1 要求数据流契约 (keys 一致 + shape 一致) 校验, 最初在 `_compute_full_diagnosis` 内部校验, 但缓存检查在 `_compute_full_diagnosis` 之前, 导致契约不一致的输入也被缓存 (永远返回错误结果). 修正: 契约校验放在缓存检查之前. 结论: **输入校验必须在缓存之前, 否则错误输入会被缓存**.
+4. **缓存 hash 的内存权衡**: `_hash_factor_dict` 用 `df.values.tobytes()` 计算内容 hash, 对 K=20 因子 × N=3000 × T=252 ≈ 240MB 数据, 每次 hash 都需要全量序列化. 设计文档建议大规模数据关闭缓存. 结论: **缓存的 hash 计算成本不能忽略, 大规模数据应关闭缓存或用增量 hash**.
+5. **resolve_conflicts 的策略语义需明确**: conservative/aggressive/ic_priority 三策略的边界条件易混淆. conservative 是 "全有利才 keep", aggressive 是 "任一有利就 keep", ic_priority 是 "只看 IC". 测试必须覆盖每个策略的典型 case (如 ic_priority 下 VRR 极低但 IC 显著的因子应 keep). 结论: **策略模式测试必须覆盖每个策略的差异化行为, 不能只测一个策略**.
+
+---
+
+## ADR-021: v2.6.0 目标函数对齐 ADR-004 — health_penalty 代理指标方案
+
+**日期**: 2026-07-03
+**状态**: 待实施 (E4 阶段, EXECUTION_V2.6.0.md)
+**优先级**: P1
+
+### 背景
+
+ADR-004 (2026-07-01) 设计目标函数为 `score = IC - stability_penalty - ks_penalty - health_penalty - coverage_penalty`, 其中 health_penalty 取自 HealthMonitor 综合得分 (< 40 → -0.5, < 60 → -0.2). 但代码实现 (`optimizer.py:_composite_objective`) 存在两处偏离:
+
+1. **health_penalty 缺失**: 目标函数没有 health_penalty 项, ADR-004 设计与代码不一致
+2. **fidelity 符号相反**: ADR-004 设计为 `- ks_penalty` (惩罚), 代码实现为 `+ lambda_fidelity * fidelity` (奖励)
+3. **时序依赖问题**: `HealthMonitorAdapter.build_report_from_engine` 需要 engine_results 字典 (含 rank_icir/hit_rate/rank_ic_series/turnover), 只能在回测后计算, 不能在 CV fold 内部直接调用 (CV fold 仅计算 IC series, 不构建 engine_results)
+
+### 决策
+
+**采用代理指标方案 B (proxy indicators)**.
+
+在 CV fold 内部用 IC decay / hit_rate / ic_volatility 三个代理指标近似 health_score, 解决时序依赖问题:
+
+```python
+def _health_penalty_proxy(self, ic_array: np.ndarray) -> float:
+    decay_ratio = ...  # IC[t] / IC[0], 衰减比例
+    hit_rate = ...     # IC > 0 比例
+    ic_vol = float(np.nanstd(ic_array))
+
+    if decay_ratio < 0.5 or hit_rate < 0.4 or ic_vol > 0.2:
+        return 0.5  # ADR-004: < 40 → -0.5
+    elif decay_ratio < 0.8 or hit_rate < 0.5 or ic_vol > 0.15:
+        return 0.2  # ADR-004: < 60 → -0.2
+    return 0.0
+```
+
+同时修正 fidelity 符号方向: `+ lambda_fidelity * fidelity` → `- lambda_fidelity * (1 - fidelity)`.
+
+### 备选方案
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| A: CV fold 内部调用 HealthMonitorAdapter | 与 ADR-004 字面一致 | 时序依赖破坏 CV 闭环, 需重写 _cv_evaluate | ❌ |
+| **B: 代理指标 (IC decay/hit_rate/ic_vol)** | 时序无依赖, CV fold 内部可计算 | 与 health_score 相关性需 A/B 验证 | ✅ |
+| C: 两阶段评估 (CV 用代理 + 最终用 HealthMonitor) | 严谨 | 计算成本翻倍 | ❌ (远期) |
+
+### 后果
+
+- **正面**: 目标函数与 ADR-004 设计对齐, health_penalty 通过代理指标在 CV fold 内部可计算, 不破坏时序闭环
+- **负面**: 代理指标与 health_score 的相关性需 A/B 测试验证 (E4 手工校验三档: 0.5/0.2/0.0)
+- **风险**: 代理指标可能引导方向偏差, 若 A/B 测试相关性不足需调整为方案 C
+
+### 实施位置
+
+- `optimizer.py:_composite_objective` 添加 `_health_penalty_proxy` 调用
+- `optimizer.py:_health_penalty_proxy` 新方法 (E4 阶段)
+- 修正 `_composite_objective` 中 fidelity 符号方向
+
+### 测试
+
+- ~10 个 TDD 测试 (test_p3_phase3_optimizer.py 扩展)
+- 手工校验: 三档场景 (decay_ratio/hit_rate/ic_vol 各档组合) 验证 penalty 值
+
+---
+
+## ADR-022: v2.6.0 搜索空间扩展 — 正交化参数纳入 (P3-13)
+
+**日期**: 2026-07-03
+**状态**: 待实施 (E5 阶段, EXECUTION_V2.6.0.md)
+**优先级**: P1
+
+### 背景
+
+v2.5.0 完成多因子横截面正交化三层架构 (ADR-020), 但 `EndToEndThresholdOptimizer` 的搜索空间 (`DEFAULT_SEARCH_SPACE`) 仍为 8 维 ADR-005 阈值, 未纳入正交化参数. 用户希望优化器能联合搜索阈值 + 正交化参数, 找到全局最优组合.
+
+`OrthogonalizationConfig` (config_v2.py:266-356) 已有 16 个字段, 但优化器仅搜索 `migration_threshold` 字段位置错误 (optimizer.py:155-158 设置到 `config.monitor` 上, 实际应在 `config` 上, E2 修复).
+
+### 决策
+
+**新增 `DEFAULT_SEARCH_SPACE_ORTH` 搜索空间, 默认关闭 (`search_orth=False`)**.
+
+扩展 3 个正交化参数:
+| 维度 | 类型 | 范围 | 当前值 | 说明 |
+|------|------|------|--------|------|
+| `orth_method` | categorical | ['symmetric', 'ridge', 'pca', 'gram_schmidt', 'cholesky'] | 'symmetric' | 正交化算法 |
+| `align_mode` | categorical | ['intersection', 'union_nan', 'raise_on_mismatch'] | 'intersection' | 因子对齐模式 |
+| `ridge_lambda` | float | [0.01, 100.0] (log) | 1.0 | Ridge λ (仅 orth_method='ridge' 时生效) |
+
+**不搜索 `orth_enabled`** (默认关闭, 启用搜索即隐含启用正交化).
+
+### 备选方案
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| A: 搜索全部 16 字段 | 完整 | 搜索维度爆炸, 多数字段非数值 | ❌ |
+| **B: 仅搜索 3 关键字段 (method/align/lambda)** | 维度可控, 覆盖主决策点 | 其他字段用默认值 | ✅ |
+| C: 不扩展搜索空间 | 零风险 | 优化器与 v2.5.0 正交化解耦 | ❌ |
+
+### 后果
+
+- **正面**: 优化器可联合搜索阈值 + 正交化参数, 找到全局最优组合
+- **负面**: 搜索维度从 8 增至 11, n_trials 需从 100 提到 150-200
+- **风险**: look-ahead bias — 正交化参数搜索时必须在 CV fold 内部 fit (用 train 数据), 不能用全量数据
+
+### look-ahead bias 防护
+
+`_cv_evaluate` 中正交化参数的 fit 必须在 train fold 内部完成:
+```python
+# 正确: train fold 内部 fit
+pipeline.fit(train_factor)  # OrthogonalizerAdapter.fit 用 train 数据
+# 错误: 全量 fit + train/test transform
+# pipeline.fit(full_factor)  # ❌ look-ahead bias
+```
+
+### 实施位置
+
+- `optimizer.py:DEFAULT_SEARCH_SPACE_ORTH` 新增 (E5 阶段)
+- `optimizer.py:_params_to_config` 扩展设置 `OrthogonalizationConfig`
+- `optimizer.py:optimize` 扩展 categorical 采样支持
+
+### 测试
+
+- ~8 个 TDD 测试 (含 look-ahead bias 反证法测试)
+- 手工校验: 验证 train fold 内部 fit 不使用 test 数据
+
+---
+
+## ADR-023: v2.6.0 阈值漂移监测 — ThresholdDriftMonitor
+
+**日期**: 2026-07-03
+**状态**: 待实施 (E8 阶段, EXECUTION_V2.6.0.md)
+**优先级**: P2
+
+### 背景
+
+`EndToEndThresholdOptimizer.optimize()` 返回 best_params 后, 阈值组合在部署后可能因市场体制变化而失效. 现有 `UnifiedDriftReporter` (backtest/unified_drift.py) 监测的是**因子值漂移** (structure + performance + turnover 三信号融合), 不监测**阈值组合本身的有效性漂移**.
+
+P3-12 原方案引用 Hsu (2010) 并称为 "Bayesian 重新校准", 但 Hsu (2010) 实际是 frequentist 的 SDF 估计, 非 Bayesian. v1.1 修正为引用 Sullivan-TW (1999) data snooping + McLean-Pontiff (2016) publish decay.
+
+### 决策
+
+**新建 `backtest/threshold_drift_monitor.py`, 采用 EWMA 衰减检测**.
+
+`ThresholdDriftMonitor` 类监测 best_score 的衰减:
+- EWMA 平滑: `alpha = 1 - exp(-ln2/halflife)`, halflife=63 (约 3 个月交易日)
+- 衰减触发: 当 EWMA(current_score) < (1 - decay_threshold) * best_score 时, 标记 `needs_research=True`
+- 默认 decay_threshold=0.20 (即衰减超过 20% 触发重新搜索)
+- min_observations=5: 至少 5 个观测后才触发, 避免早期噪声
+
+```python
+class ThresholdDriftMonitor:
+    def __init__(self, best_score, best_params, halflife=63,
+                 decay_threshold=0.2, min_observations=5):
+        ...
+    def update(self, current_score) -> Dict:
+        # 返回 {ewma_score, decay_ratio, needs_research, n_observations}
+```
+
+### 备选方案
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| A: 简单阈值 (current < 0.8 * best) | 简单 | 噪声敏感, 单期波动误触发 | ❌ |
+| **B: EWMA 衰减检测** | 平滑噪声, halflife 可调 | 滞后响应 | ✅ |
+| C: CUSUM 变点检测 | 严格变点检测 | 实现复杂, 参数多 | ❌ (远期) |
+| D: Bayesian 在线学习 | 持续更新 | 计算成本高 | ❌ (远期) |
+
+### 与 UnifiedDriftReporter 的边界
+
+| 监测器 | 监测对象 | 信号源 | 触发动作 |
+|--------|---------|--------|---------|
+| `UnifiedDriftReporter` | 因子值漂移 | structure (KS) + performance (ICIR) + turnover | 因子重新分类/插补 |
+| `ThresholdDriftMonitor` | 阈值组合有效性 | best_score EWMA 衰减 | 阈值重新搜索 (调用 optimizer.optimize) |
+
+### 后果
+
+- **正面**: 阈值组合失效有自动告警, 触发重新搜索流程
+- **负面**: halflife=63 与 decay_threshold=0.20 是经验参数, 需在实际数据上调参
+- **风险**: 早期观测 (n < min_observations) 不触发, 可能在体制突变时延迟响应
+
+### 实施位置
+
+- `backtest/threshold_drift_monitor.py` 新建 (E8 阶段)
+- `optimizer.py` 末尾可选注入 `ThresholdDriftMonitor` 实例
+
+### 测试
+
+- ~10 个 TDD 测试 (含 EWMA 数学正确性 + 触发边界 + 早期不触发)
+- 手工校验: 模拟 score 序列验证 EWMA 衰减检测
 
 ---
 
@@ -1216,39 +1547,53 @@ v2.2.3 (ADR-013) 引入子包化 + `pip install -e .` 管理 7 个外部模块, 
 - [x] TD-3.5: ADR-018 记录 + project_memory 更新
 
 
-### 计划中 (v2.4.0 — 外部模块内化, ADR-019)
+### 已完成 (v2.4.0 — 外部模块内化, ADR-019)
 
-- [ ] I1.1: 阶段 1 — Factor_Decoupler + Factor_Fingerprint 内化 (零新增依赖, 命名规范化, ~45 处 import 替换)
-- [ ] I1.2: 阶段 1 TDD + 全量回归验证
-- [ ] I2.1: 阶段 2 — Factor_AdaptiveWinsor 内化 (最小子包化: 只迁 core/, 新增 sklearn 依赖)
-- [ ] I2.2: 阶段 2 TDD + 全量回归验证
-- [ ] I3.1: 阶段 3 — Factor_Imputer 内化 (版本后缀移除, sklearn 共享)
-- [ ] I3.2: 阶段 3 TDD + 全量回归验证
-- [ ] I4.1: 阶段 4 — Factor_Neutralizer 内化 (src-layout → flat-layout, 依赖裁剪, 导入 bug 验证)
-- [ ] I4.2: 阶段 4 TDD + 全量回归验证
-- [ ] I5.1: 阶段 5 — CI/文档清理 (删除 git clone 块, 简化 tox, 更新 pyproject 依赖)
-- [ ] I5.2: ADR-019 状态更新为已实施 + project_memory 更新
+- [x] I1.1: 阶段 1 — Factor_Decoupler + Factor_Fingerprint 内化 (零新增依赖, 命名规范化, ~45 处 import 替换)
+- [x] I1.2: 阶段 1 TDD + 全量回归验证 (632 passed)
+- [x] I2.1: 阶段 2 — Factor_AdaptiveWinsor 内化 (最小子包化: 只迁 core/, 新增 sklearn 依赖)
+- [x] I2.2: 阶段 2 TDD + 全量回归验证 (632 passed, 依赖上界冲突检测)
+- [x] I3.1: 阶段 3 — Factor_Imputer 内化 (版本后缀移除, sklearn 共享, 22 处导入清理)
+- [x] I3.2: 阶段 3 TDD + 全量回归验证 (632 passed)
+- [x] I4.1: 阶段 4 — Factor_Neutralizer 内化 (src-layout → flat-layout, 依赖裁剪, plt.Figure 注解修复)
+- [x] I4.2: 阶段 4 TDD + 全量回归验证 (632 passed)
+- [x] I5.1: 阶段 5 — CI/文档清理 (CI monorepo 7→2, 删除 7 个失效脚本, 版本号 11 处统一)
+- [x] I5.2: ADR-019 状态更新为已实施 + project_memory 更新
 
 ### 计划中 (v2.5.0 — 多因子横截面正交化, ADR-020)
 
-- [ ] O1: 核心算法 + TDD (symmetric_orthogonalize / gram_schmidt / variance_retention_ratio)
-- [ ] O2: 适配器集成 (CrossSectionalOrthogonalizerAdapter, 扩展 PipelineStep 支持多因子输入)
-- [ ] O3: 诊断工具 (冗余因子识别 VRR 排序, 正交化前后 IC 对比)
-- [ ] O4: 回测集成 (多因子输入, 独立 alpha 贡献拆解)
-- [ ] O5: 与 Factor_Fingerprint/Decoupler 协同验证 (因子诊断三件套)
-- [ ] O6: ADR-020 状态更新为已实施 + project_memory 更新
+- [x] O1: 核心算法 + TDD (symmetric_orthogonalize / gram_schmidt / variance_retention_ratio) — 44 测试 + 15 手工校验
+- [x] O2: 适配器集成 (OrthogonalizerAdapter + CrossSectionalOrthogonalizer + O2.8 六项深化) — 22 测试 + 12 手工校验, 全量回归 698 passed
+- [x] O3a: 几何诊断 (VRR/κ/VIF/正交性误差 + O3a.6 深化) — 18 单元测试 + 24 手工校验, 含 VRR 数学修正
+- [x] O3b: Layer 3 因子检验 (双重 Lasso Belloni 2014 PDS + O4.9 七项深化) — 17 单元测试 + 14 手工校验, 含 HC3 公式 bug 修复
+- [x] O4: 回测扩展 (RollingOrthogonalizer + ICChangeMonitor + O4.9/O4.11 深化) — 11 单元测试 + 19 手工校验, 含 O4.11.1/2/3/5 深化 (warm-start O4.11.4 设计标注可选未实现)
+- [x] O5: 与 Factor_Fingerprint/Decoupler 协同验证 (Grouped + TripleChain + O5.6 深化) — 15 单元测试 + 17 手工校验, 含 O5.6.1 数据流协议/O5.6.2 中性化顺序/O5.6.3 缺失因子/O5.6.4 缓存/O5.6.5 冲突解决
+- [x] O6: ADR-020 状态更新为已实施 + project_memory 更新 + 全量回归 860 passed + 5 skipped (sys.path 污染技术债 #5 已修复: tests/manual/test_adapter_manual.py:test_disabled_adapter_no_import 添加 try/finally 恢复 sys.modules)
 
-### 计划中 (v2.6.0 — 优化器与漂移检测增强)
+### 计划中 (v2.6.0 — 优化器与漂移检测增强, ADR-021/022/023)
 
-- [ ] P3-1: P2 时间衰减 (EWMA) — 锦上添花,低优先级
-- [ ] P3-9: 端到端自动阈值搜索 (8 维，修正目标函数)
-- [ ] P3-10: PipelineV2Config 扩展 + 硬编码 → 配置迁移
-- [ ] P3-11: 搜索参数重要性可视化
-- [ ] P3-12: 定期重新搜索 + 阈值漂移监测
+**分析报告**: [docs/ANALYSIS_V2.6.0.md](docs/ANALYSIS_V2.6.0.md) v1.1 (810 行, 8 类问题 / 8 项任务 / 11 项风险)
+**执行方案**: [docs/EXECUTION_V2.6.0.md](docs/EXECUTION_V2.6.0.md) (1595 行, 9 阶段 E1-E9, ~59 新测试)
+
+- [x] E1 / P3-11': 文档状态修正 (P0, 仅文档) — DECISIONS.md P3-11 状态 `[ ]` → `[x]`, 学术依据分拆 (TPE→Bergstra 2011, fANOVA→Hutter 2014)
+- [x] E2 / P3-10': migration_threshold 字段位置修正 + ADR-005 更新 (P0, 5 测试) — optimizer.py:150-158 字段位置错误 (config.monitor → config), ADR-005 末尾追加修订日志
+- [x] E3 / P3-1': IC 时间加权 EWMA (P1, 8 测试) — factor_metrics.py compute_ic_series 添加 weighting/halflife 参数, optimizer._compute_ic 集成 EWMA, 学术依据改引 Ferson-Siegel (2001)
+- [x] E4 / P3-9': 目标函数对齐 ADR-004 (P1, 10 测试, 依赖 E3) — _composite_objective 添加 health_penalty (代理指标方案 B), 修正 fidelity 符号方向 (+ → -), 新增 _health_penalty_proxy (decay_ratio/hit_rate/ic_vol 三档), 全量回归 883 passed (877 + phase4 6)
+- [x] E5 / P3-13: 正交化参数纳入搜索空间 (P1, 8 测试, 依赖 E2) — DEFAULT_SEARCH_SPACE_ORTH 添加 orth_method/align_mode/ridge_lambda (不搜索 orth_enabled), optimize() 添加 categorical + log-uniform 采样, 全量回归 885 passed
+- [x] E6 / P3-14: 几何诊断纳入目标函数 (P2, 12 测试, 依赖 E5) — OrthogonalizerAdapter.fit() 保存 _F_stacked_/_T_stacked_, get_diagnostics() 新方法, _redundancy_penalty 基于 compute_vrr (λ=0.05, v1.1 从 0.1 降), _composite_objective 6 项对齐 ADR-004 (IC-vol-cov-ks-health-redundancy), look-ahead bias 防护 (F/T 来自 train fit), 全量回归 903 passed (885+12+6 subtests)
+- [x] E7 / P3-15: Layer 3 显著性最终验证 (P2, 6 测试, 依赖 E4) — _validate_significance 调用 FactorSignificanceTest (Belloni 2014 PDS Lasso+HC3+BH), optimize() 添加 validate_significance 参数 (默认 False 向后兼容), 对齐+dropna 处理 NaN (LassoCV 不接受), 异常防护 (空 factor_data/Pipeline 失败返回错误报告), 手工校验 6/6 通过
+- [x] E8 / P3-12': 阈值漂移监测 (P2, 10 测试, 依赖 E4) — backtest/threshold_drift_monitor.py 新建, ThresholdDriftMonitor (EWMA 衰减检测, decay > 20% 触发 needs_research), update/get_history/reset 三方法, min_observations=5 保护, 学术依据 Bailey-López de Prado 2014 + Sullivan-TW 1999 + McLean-Pontiff 2016, 手工校验 6/6 通过
+- [x] E9: 文档验证 + 全量回归 (P1, 依赖 E1-E8) — README/CHANGELOG/CODE_WIKI/project_memory 更新, verify_v2_6_0_manual.py 8/8 手工校验通过, 全量回归 918 passed + 6 skipped + 11 subtests passed (19:31)
+
+**总计**: ~59 新测试 + 860 基线 = ~919 passed
 
 ### 远期 (v3.0.0)
 
 - [ ] 指纹维度扩展至 20+（尾部依赖、体制转换）
 - [ ] 流式处理支持
 - [ ] 在线迁移检测（CUSUM）
-- [ ] Benjamini-Hochberg FDR 替代 Bonferroni
+- [x] Benjamini-Hochberg FDR 替代 Bonferroni — 已实施 (2026-07-04, ADR-002a, E1-E3 全部完成, 934 passed + 6 skipped + 11 subtests)
+  - 核心改动: `pipelines_v2.py:236-457` `_ks_migration_significance` 新增 `correction_method` 参数 (默认 'benjamini_hochberg'), 三路径分流 (BH/Bonferroni/none), 字段隔离
+  - 测试: tests/test_pipelines_v2/test_ks_migration_bh.py (13 测试) + tests/manual/test_factor_significance_manual.py TestKSMigrationBHCorrection (3 测试) + verify_v3_0_0_t4_manual.py (8/8 手工校验)
+  - 文档: docs/ANALYSIS_V3.0.0.md v1.1 + docs/EXECUTION_V3.0.0_T4.md v1.1
+  - 行为变化: BH 比 Bonferroni 宽松, `is_sig` 可能 False→True, 显式 `correction_method='bonferroni'` 可回退

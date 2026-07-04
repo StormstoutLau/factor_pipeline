@@ -4,7 +4,8 @@
 校验:
   1. transform 内部 KS 检验路径使用 factor_data (transform 参数) 而非 self.factors
   2. KS 拆分语义: 按时间(columns/dates)拆分, 转置后逐股票做时间维度 KS
-  3. Bonferroni 校正: alpha / n_tests
+     (显式 correction_method='bonferroni' 保持 Fix 1 校验语义不变, T4 v3.0.0 默认已改 BH)
+  3. BH-FDR 校正公式 (T4 v3.0.0): p_adj_(k) = p_(k) * K / rank, 累积 min, clip [0,1]
   4. KS p 值与 scipy 独立计算一致
 """
 from __future__ import annotations
@@ -94,17 +95,18 @@ for col in hist_for_ks.columns:
 manual_min_p = min(manual_p_values)
 manual_n_tests = len(manual_p_values)
 manual_alpha = 0.05
+# Fix 1 校验语义: 显式 Bonferroni (T4 v3.0.0 默认已改 BH, 这里 opt-in 旧路径)
 manual_alpha_corrected = manual_alpha / manual_n_tests
 manual_is_sig = manual_min_p < manual_alpha_corrected
 
-print(f"  手工: n_tests={manual_n_tests}, min_p={manual_min_p:.6f}, "
+print(f"  手工 (Bonferroni opt-in): n_tests={manual_n_tests}, min_p={manual_min_p:.6f}, "
       f"alpha_corrected={manual_alpha_corrected:.6f}, is_sig={manual_is_sig}")
 
-# 程序: _ks_migration_significance
+# 程序: _ks_migration_significance (显式 Bonferroni 保持 Fix 1 校验语义)
 prog_is_sig, prog_min_p, prog_details = _ks_migration_significance(
-    hist_for_ks, recent_for_ks, alpha=0.05
+    hist_for_ks, recent_for_ks, alpha=0.05, correction_method='bonferroni'
 )
-print(f"  程序: n_tests={prog_details['n_columns']}, min_p={prog_min_p:.6f}, "
+print(f"  程序 (Bonferroni opt-in): n_tests={prog_details['n_columns']}, min_p={prog_min_p:.6f}, "
       f"alpha_corrected={prog_details['alpha_corrected']:.6f}, is_sig={prog_is_sig}")
 
 assert abs(manual_min_p - prog_min_p) < 1e-10, (
@@ -122,23 +124,46 @@ assert manual_is_sig == prog_is_sig, (
 print("  ✓ KS 拆分语义与手工计算完全一致")
 
 
-# ── 校验 3: Bonferroni 校正公式 ─────────────────────────────────
-print("\n[3] Bonferroni 校正公式校验")
-# 不同列数下校验
+# ── 校验 3: BH-FDR 校正公式 (T4 v3.0.0) ─────────────────────────
+print("\n[3] BH-FDR 校正公式校验 (T4 v3.0.0 默认)")
+# 不同列数下校验 BH 公式: p_adj_(k) = p_(k) * K / rank, 累积 min, clip [0,1]
+def _manual_bh(p_values):
+    """手工 BH 校正, 返回 p_adj 数组"""
+    p_arr = np.asarray(p_values, dtype=float)
+    K = len(p_arr)
+    order = np.argsort(p_arr)
+    p_adj = np.empty_like(p_arr)
+    prev = 1.0
+    for i in range(K - 1, -1, -1):
+        rank = i + 1
+        idx = order[i]
+        bh = p_arr[idx] * K / rank
+        prev = min(prev, bh)
+        p_adj[idx] = min(prev, 1.0)
+    return p_adj
+
 for n_cols in [1, 5, 10, 20]:
     alpha = 0.05
-    expected_corrected = alpha / n_cols
-    # 程序内部: alpha_corrected = alpha / max(n_tests, 1)
-    # 通过构造数据触发
     np.random.seed(n_cols)
     hist = pd.DataFrame(np.random.randn(50, n_cols))
     recent = pd.DataFrame(np.random.randn(50, n_cols))
+    # 默认 correction_method='benjamini_hochberg'
     _, _, details = _ks_migration_significance(hist, recent, alpha=alpha)
-    actual_corrected = details['alpha_corrected']
-    assert abs(actual_corrected - expected_corrected) < 1e-10, (
-        f"n_cols={n_cols}: 期望 {expected_corrected}, 实际 {actual_corrected}"
+
+    # 手工计算 BH p_adj
+    prog_p_values = [c['p_value'] for c in details['per_column']]
+    expected_p_adj = _manual_bh(prog_p_values)
+    actual_p_adj = [c['p_value_adjusted'] for c in details['per_column']]
+
+    assert details['correction_method'] == 'benjamini_hochberg', (
+        f"n_cols={n_cols}: 期望 correction_method='benjamini_hochberg', "
+        f"实际 {details['correction_method']}"
     )
-    print(f"  n_cols={n_cols}: alpha_corrected={actual_corrected:.6f} ✓")
+    for i, (actual, expected) in enumerate(zip(actual_p_adj, expected_p_adj)):
+        assert abs(actual - expected) < 1e-10, (
+            f"n_cols={n_cols}, col {i}: 期望 p_adj={expected}, 实际 {actual}"
+        )
+    print(f"  n_cols={n_cols}: min_p_adj={details['min_p_value_adjusted']:.6f} ✓")
 
 
 # ── 校验 4: 无迁移场景 — 相同分布应不显著 ────────────────────────

@@ -19,6 +19,35 @@
 
 ## Version Update Summary
 
+### v3.0.0 T4 KS Migration BH-FDR Replaces Bonferroni (2026.07, Implemented)
+
+> **Status**: Implemented, 934 passed + 6 skipped + 11 subtests passed (zero regression, 16 new tests vs v2.6.0's 918)
+> **Docs**: [docs/EXECUTION_V3.0.0_T4.md](docs/EXECUTION_V3.0.0_T4.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
+> **Baseline**: 918 passed + 6 skipped (v2.6.0) → 934 passed + 6 skipped (v3.0.0 T4, with 11 subtests)
+> **Scope**: T4 (P0) of v3.0.0 long-term 4 tasks (T1-T4) completed; T1 (fingerprint expansion) / T2 (streaming) / T3 (CUSUM) pending
+
+**3-Stage Execution (E1-E3)**:
+
+| Stage | Task | Tests | Key Changes |
+|-------|------|-------|-------------|
+| **E1** | BH core implementation (Red→Green→Review) | 13 | `_ks_migration_significance` adds `correction_method` parameter (default 'benjamini_hochberg'), three-path dispatch (BH/Bonferroni/none), field isolation, ADR-002a written to DECISIONS.md |
+| **E2** | Test updates | 3 | verify_fix1_manual.py validation 3 changed to BH-FDR formula check, test_factor_significance_manual.py adds TestKSMigrationBHCorrection class |
+| **E3** | Doc sync + full regression | 0 | CHANGELOG/CODE_WIKI/README sync, verify_v3_0_0_t4_manual.py 8/8 manual verification, full regression 934 passed |
+
+**1 New ADR**:
+- **ADR-002a**: Benjamini-Hochberg FDR replaces Bonferroni (supersedes ADR-002's correction method, ADR-002 history preserved)
+
+**5 Key Design Decisions**:
+1. Default switched to BH, Bonferroni retained for backward compat (`correction_method='bonferroni'` opts into legacy path)
+2. Three-path field isolation (BH: min_p_value_adjusted/correction_method; Bonferroni: alpha_corrected/bonferroni_correction)
+3. None path for research/debugging (`correction_method='none'` no correction, direct `min_p < alpha`)
+4. Golden reference: p=[0.01, 0.04, 0.03, 0.20, 0.50], K=5 → p_adj=[0.05, 0.0667, 0.0667, 0.25, 0.50]
+5. Behavior change: BH is more lenient than Bonferroni, previously non-significant migrations may now become significant (`is_sig` may go False→True)
+
+**Academic Basis**:
+- Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *JRSS-B*, 57(1), 289-300.
+- Consistent with `factor_significance.py`'s BH default (E7 already uses BH)
+
 ### v2.5.0 Multi-Factor Orthogonalization Three-Layer Architecture (Planning, Execution Plan v1.1)
 
 > **Status**: Execution plan v1.1 completed (40 deepened sub-sections), pending implementation
@@ -178,7 +207,7 @@ price_data = loader.get_price_matrix(field="close", start_date, end_date)
 | **Unified `fit()` Intermediate Data** | P1 | Three pipelines unified `_intermediate_data` + `get_intermediate_data()` | Full traceability |
 | **Adapter Fallback Warning** | P1 | `warnings.warn(UserWarning)` when external modules unavailable, replaces silent failure | Improved transparency |
 | **Migration Weight Fusion** | P1 | `_merge_transition_weights()` fuses classification weights + exponentially decayed migration weights | Smooth transition period |
-| **KS Migration Significance Test** | P2 | `scipy.stats.ks_2samp` + Bonferroni correction, filters noise migration | Greatly reduced false positives |
+| **KS Migration Significance Test** | P2 | `scipy.stats.ks_2samp` + BH-FDR correction (T4 v3.0.0, default; Bonferroni backward-compat), filters noise migration | Controlled false positives, improved detection power |
 | **`importlib` Context Manager** | P2 | `_temp_sys_path` replaces `sys.path.insert`, exception-safe recovery | Global state isolation |
 
 **Tests**: 229 tests, 222 passed, 3 pre-existing failures, no new regressions.
@@ -812,13 +841,13 @@ factor_pipeline/
 
 ## Version Information
 
-- **Pipeline Version**: v2.4.0-internalized (currently implemented) / v2.5.0-orthogonalizer (planning, execution plan v1.1)
-- **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer (v2.4.0, ADR-019)
+- **Pipeline Version**: v3.0.0 T4 (implemented, 934 passed + 6 skipped + 11 subtests)
+- **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **External Data Boundary**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **Test Baseline**: 632 passed, 5 skipped, 0 failed
+- **Test Baseline**: 934 passed, 6 skipped, 0 failed
 - **CI Matrix**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **Build Date**: 2026.07.03
-- **Status**: STABLE (v2.4.0) / PLANNING (v2.5.0)
+- **Build Date**: 2026.07.04
+- **Status**: STABLE (v3.0.0 T4)
 
 ### Version History
 
@@ -832,7 +861,9 @@ factor_pipeline/
 | v2.2.2 | 2026.07.02 | 7 code quality fixes (self.factors bug / config unification / version unification / backtest exports / core namespace isolation / hardcoded path config) |
 | v2.3.0 | 2026.07.02 | CI matrix (Python 3.10/3.11/3.12 × ubuntu, ADR-017) + tox dual-track CI + CI config script validation (37/37) |
 | v2.4.0 | 2026.07.03 | External module internalization (5 modules → modules/, ADR-019) + naming unification lowercase snake_case + dependency trimming + 632 tests zero regression |
-| v2.5.0 | Planning | Multi-factor orthogonalization three-layer architecture (ADR-020): Layer 2 cross-sectional orthogonalization + Layer 3 double Lasso testing, execution plan v1.1 (40 deepened sub-sections) |
+| v2.5.0 | 2026.07.03 | Multi-factor orthogonalization three-layer architecture (ADR-020, O1-O6 all completed): Layer 2 cross-sectional orthogonalization (5 algorithms) + Layer 3 double Lasso testing + rolling/grouping/triple-set, 860 passed + 5 skipped |
+| v2.6.0 | 2026.07.04 | Optimizer and drift detection enhancement (ADR-021/022/023, E1-E9 all completed): objective function aligned with ADR-004 (6 items IC-vol-cov-ks-health-redundancy) + orthogonalization param search space + Layer 3 significance test (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA decay detection), 918 passed + 6 skipped + 11 subtests |
+| v3.0.0 T4 | 2026.07.04 | KS migration detection BH-FDR replaces Bonferroni (ADR-002a, E1-E3 all completed): `_ks_migration_significance` three-path dispatch (BH/Bonferroni/none, default BH) + field isolation + backward compat + golden reference verification, Benjamini-Hochberg (1995) FDR control, 934 passed + 6 skipped + 11 subtests |
 
 ---
 

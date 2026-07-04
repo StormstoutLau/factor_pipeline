@@ -236,45 +236,66 @@ from scipy import stats as _scipy_stats
 def _ks_migration_significance(
     historical_data: 'pd.DataFrame | pd.Series',
     recent_data: 'pd.DataFrame | pd.Series',
-    alpha: float = 0.05
+    alpha: float = 0.05,
+    correction_method: str = 'benjamini_hochberg',
 ) -> Tuple[bool, float, Dict[str, Any]]:
     """
     使用 Kolmogorov-Smirnov 双样本检验判断因子迁移是否显著。
 
-    对每列（或单列）分别进行 KS 检验，取最小 p 值。
-    若 min_p < alpha，则拒绝原假设（分布相同），确认迁移显著。
+    对每列（或单列）分别进行 KS 检验, 然后按 correction_method 进行多重比较校正:
+    - 'benjamini_hochberg' (默认, T4 v3.0.0): BH-FDR 校正, p_adj_(k) = p_(k) * K / rank
+      累积 min 后 clip [0,1], is_significant = (min_p_value_adjusted < alpha)
+    - 'bonferroni' (向后兼容): alpha_corrected = alpha / K,
+      is_significant = (min_p_value < alpha_corrected)
+    - 'none': 无校正, is_significant = (min_p_value < alpha)
 
-    手工计算验证:
-      对每列 i:
-        stat_i, p_i = scipy.stats.ks_2samp(historical_data[:, i], recent_data[:, i])
-      min_p = min(p_i)
-      is_significant = (min_p < alpha)
+    学术依据: Benjamini-Hochberg (1995) Controlling the false discovery rate
 
-    示例:
-      >>> hist = pd.DataFrame(np.random.randn(100, 5))
-      >>> recent = pd.DataFrame(np.random.randn(100, 5) + 1.0)  # 均值偏移
-      >>> is_sig, p, details = _ks_migration_significance(hist, recent, alpha=0.05)
-      >>> is_sig  # True — 分布显著不同
+    黄金参考 (附录 B):
+      输入 p_values = [0.01, 0.04, 0.03, 0.20, 0.50], K=5, alpha=0.05
+      BH 路径:
+        排序后 [0.01, 0.03, 0.04, 0.20, 0.50], rank=[1,2,3,4,5]
+        bh_raw = [0.05, 0.075, 0.0667, 0.25, 0.50]
+        累积 min (从大到小): prev=[0.50, 0.25, 0.0667, 0.0667, 0.05]
+        p_adj (原顺序) = [0.05, 0.0667, 0.0667, 0.25, 0.50]
+        min_p_value_adjusted = 0.05
+        is_significant = (0.05 < 0.05) = False
+      Bonferroni 路径:
+        alpha_corrected = 0.05/5 = 0.01
+        is_significant = (0.01 < 0.01) = False
 
     Args:
         historical_data: 历史因子数据 (DataFrame 或 Series)
         recent_data: 近期因子数据 (DataFrame 或 Series)
         alpha: 显著性水平，默认 0.05
+        correction_method: 多重比较校正方法, 默认 'benjamini_hochberg'
+            - 'benjamini_hochberg': BH-FDR (T4 v3.0.0 默认)
+            - 'bonferroni': Bonferroni 校正 (向后兼容)
+            - 'none': 无校正
 
     Returns:
         Tuple[bool, float, Dict]:
             - is_significant: 迁移是否显著
-            - min_p_value: 所有列中最小的 p 值
+            - min_p_value: 所有列中最小的原始 p 值 (未校正)
             - details: 包含每列统计量的字典
-                {
-                    'per_column': [{'column': str, 'statistic': float, 'p_value': float}, ...],
-                    'n_columns': int,
-                    'alpha': float,
-                    'method': 'ks_2samp'
-                }
+                BH 路径: {per_column, n_columns, min_p_value, min_p_value_adjusted,
+                         alpha, correction_method, method}
+                Bonferroni 路径: {per_column, n_columns, min_p_value,
+                                 alpha, alpha_corrected, bonferroni_correction, method}
+                none 路径: {per_column, n_columns, min_p_value,
+                          alpha, correction_method, method}
+                per_column 每项: {column, statistic, p_value[, p_value_adjusted]}
     """
+    # 参数校验
+    _valid_methods = {'benjamini_hochberg', 'bonferroni', 'none'}
+    if correction_method not in _valid_methods:
+        raise ValueError(
+            f"correction_method 必须为 {sorted(_valid_methods)}, "
+            f"实际: {correction_method!r}"
+        )
+
     # P2.5: scipy 现为 REQUIRED 依赖, 不再有 HAS_SCIPY fallback
-    # 处理空数据
+    # 处理空数据 (保护路径, 不受 correction_method 影响)
     if historical_data.empty or recent_data.empty:
         return False, 1.0, {
             'per_column': [],
@@ -330,31 +351,108 @@ def _ks_migration_significance(
         }
 
     min_p_value = float(np.min(p_values))
-    # Bonferroni 校正: 多重比较时调整显著性阈值
     n_tests = len(p_values)
-    alpha_corrected = alpha / max(n_tests, 1)
-    is_significant = (min_p_value < alpha_corrected)
 
-    details = {
-        'per_column': per_column,
-        'n_columns': len(per_column),
-        'min_p_value': min_p_value,
-        'alpha': alpha,
-        'alpha_corrected': alpha_corrected,
-        'bonferroni_correction': True,
-        'method': 'ks_2samp',
-    }
+    # ── 三路径分流 ──────────────────────────────────────────
+    if correction_method == 'benjamini_hochberg':
+        # BH-FDR 校正 (T4 v3.0.0 默认)
+        # 学术依据: Benjamini-Hochberg (1995)
+        # 公式: p_adj_(k) = p_(k) * K / rank, 从大到小累积 min, clip [0,1]
+        K = n_tests
+        p_arr = np.asarray(p_values, dtype=float)
+        order = np.argsort(p_arr)
+        p_adj = np.empty_like(p_arr)
+        prev = 1.0
+        for i in range(K - 1, -1, -1):
+            rank = i + 1
+            idx = order[i]
+            bh = p_arr[idx] * K / rank
+            prev = min(prev, bh)
+            p_adj[idx] = min(prev, 1.0)
 
-    if is_significant:
-        logger.info(
-            f"KS 迁移显著性检验: 显著 (min_p={min_p_value:.4f} < alpha_corrected={alpha_corrected:.4f}), "
-            f"{len(per_column)} 列参与检验"
-        )
-    else:
-        logger.info(
-            f"KS 迁移显著性检验: 不显著 (min_p={min_p_value:.4f} >= alpha_corrected={alpha_corrected:.4f}), "
-            f"{len(per_column)} 列参与检验"
-        )
+        min_p_value_adjusted = float(np.min(p_adj))
+        is_significant = (min_p_value_adjusted < alpha)
+
+        # 将 p_value_adjusted 写入 per_column (保持原列顺序)
+        for i, c in enumerate(per_column):
+            c['p_value_adjusted'] = float(p_adj[i])
+
+        details = {
+            'per_column': per_column,
+            'n_columns': len(per_column),
+            'min_p_value': min_p_value,
+            'min_p_value_adjusted': min_p_value_adjusted,
+            'alpha': alpha,
+            'correction_method': 'benjamini_hochberg',
+            'method': 'ks_2samp',
+        }
+
+        if is_significant:
+            logger.info(
+                f"KS 迁移显著性检验 (BH-FDR): 显著 "
+                f"(min_p_adj={min_p_value_adjusted:.4f} < alpha={alpha:.4f}), "
+                f"{len(per_column)} 列参与检验"
+            )
+        else:
+            logger.info(
+                f"KS 迁移显著性检验 (BH-FDR): 不显著 "
+                f"(min_p_adj={min_p_value_adjusted:.4f} >= alpha={alpha:.4f}), "
+                f"{len(per_column)} 列参与检验"
+            )
+
+    elif correction_method == 'bonferroni':
+        # Bonferroni 校正 (向后兼容, 旧路径字段全部保留)
+        alpha_corrected = alpha / max(n_tests, 1)
+        is_significant = (min_p_value < alpha_corrected)
+
+        details = {
+            'per_column': per_column,
+            'n_columns': len(per_column),
+            'min_p_value': min_p_value,
+            'alpha': alpha,
+            'alpha_corrected': alpha_corrected,
+            'bonferroni_correction': True,
+            'method': 'ks_2samp',
+        }
+
+        if is_significant:
+            logger.info(
+                f"KS 迁移显著性检验 (Bonferroni): 显著 "
+                f"(min_p={min_p_value:.4f} < alpha_corrected={alpha_corrected:.4f}), "
+                f"{len(per_column)} 列参与检验"
+            )
+        else:
+            logger.info(
+                f"KS 迁移显著性检验 (Bonferroni): 不显著 "
+                f"(min_p={min_p_value:.4f} >= alpha_corrected={alpha_corrected:.4f}), "
+                f"{len(per_column)} 列参与检验"
+            )
+
+    else:  # correction_method == 'none'
+        # 无校正
+        is_significant = (min_p_value < alpha)
+
+        details = {
+            'per_column': per_column,
+            'n_columns': len(per_column),
+            'min_p_value': min_p_value,
+            'alpha': alpha,
+            'correction_method': 'none',
+            'method': 'ks_2samp',
+        }
+
+        if is_significant:
+            logger.info(
+                f"KS 迁移显著性检验 (none): 显著 "
+                f"(min_p={min_p_value:.4f} < alpha={alpha:.4f}), "
+                f"{len(per_column)} 列参与检验"
+            )
+        else:
+            logger.info(
+                f"KS 迁移显著性检验 (none): 不显著 "
+                f"(min_p={min_p_value:.4f} >= alpha={alpha:.4f}), "
+                f"{len(per_column)} 列参与检验"
+            )
 
     return is_significant, min_p_value, details
 
@@ -558,6 +656,16 @@ class PipelineV2Config:
     merge_alpha: float = 0.50
     ks_alpha: float = 0.05
     mixed_winsor_sigma: float = 3.0
+
+    # v2.6.0 E2 (P3-10'): migration_threshold 字段位置修正
+    # 修正前: optimizer.py:155-158 错误设置到 config.monitor.migration_threshold
+    #         (MonitorConfig 无此字段, hasattr 静默跳过, 参数被丢弃)
+    # 修正后: 字段位于 config 本身, 默认值与 PipelineV2ConfigUnified.migration_threshold 对齐
+    migration_threshold: float = 0.10
+
+    # v2.5.0 正交化配置 (Layer 2, ADR-020) — Optional[Any] 避免循环导入
+    # 接收 OrthogonalizationConfig (Pydantic) 整对象, enabled=False 时 None
+    orthogonalization: Optional[Any] = None
 
     @classmethod
     def from_unified(cls, unified) -> 'PipelineV2Config':
@@ -912,6 +1020,14 @@ class FactorProcessingPipelineV2:
         self.factor_pipelines: Dict[str, Any] = {}
         self.is_fitted = False
 
+        # v2.5.0: post_transform_hooks (Layer 2 正交化等, 半侵入式)
+        # O2.8.4: enabled=False 时 hooks 为空列表 (零循环开销)
+        self.post_transform_hooks: List[Any] = []
+        ortho_config = getattr(self.config, 'orthogonalization', None)
+        if ortho_config is not None and getattr(ortho_config, 'enabled', False):
+            from factor_pipeline.adapters import OrthogonalizerAdapter
+            self.post_transform_hooks.append(OrthogonalizerAdapter(ortho_config))
+
         logger.info("FactorProcessingPipelineV2 initialized")
 
     def fit(self,
@@ -1159,6 +1275,14 @@ class FactorProcessingPipelineV2:
             results[name] = _apply_weighted_transform(
                 data, active_pipelines, active_weights, **kwargs
             )
+
+        # v2.5.0: post_transform_hooks (Layer 2 正交化等, O2.8.3)
+        # 半侵入式: per-factor 循环外, return 之前
+        for hook in self.post_transform_hooks:
+            if not getattr(hook, 'is_fitted_', False):
+                results = hook.fit_transform(results, **kwargs)
+            else:
+                results = hook.transform(results, **kwargs)
 
         return results
 

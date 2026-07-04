@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v2.2.2-drift-optimizer | **构建日期**: 2026-07-01 | **状态**: STABLE
+> **版本**: v2.5.0-orthogonalizer | **构建日期**: 2026-07-04 | **状态**: STABLE (v2.5.0) / PLANNING (v2.6.0)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -132,7 +132,7 @@ v2.0: 智能自适应流程
               │  │                                 ↓                       │  │
               │  │   _merge_transition_weights()  ←  FactorFingerprintMonitor│  │
               │  │                                 ↓                       │  │
-              │  │   _ks_migration_significance() ←  KS 双样本 + Bonferroni│  │
+              │  │   _ks_migration_significance() ←  KS 双样本 + BH-FDR    │  │
               │  │                                 ↓                       │  │
               │  │   _apply_weighted_transform()  → 加权混合输出           │  │
               │  │                                                         │  │
@@ -318,74 +318,168 @@ v2.0: 智能自适应流程
 | **SemanticStatisticalFusion** | 前置智能层 | 语义 + 统计融合分类 | 先验引导，后验校准，5 种冲突诊断 |
 | **FactorHealthMonitor** | 持续监测层 | 五维正交评估：拥挤度/效能/容量/衰减/体制敏感性 | 量化因子健康度的标准化框架 |
 
+### v2.5.0 三层架构 (已实施, ADR-020)
+
+v2.5.0 引入**多因子正交化三层架构分离**, 职责清晰:
+
+| Layer | 职责 | 模块位置 | 监督性 | 状态 |
+|-------|------|---------|--------|------|
+| **Layer 1** | per-factor 处理 (已有) | `pipelines_v2.py` | 无监督 | 已实施 |
+| **Layer 2** | cross-factor 横截面正交化 (新增) | `modules/factor_orthogonalizer/` | 无监督 | 已实施 |
+| **Layer 3** | target-aware 显著性检验 (新增) | `backtest/factor_significance.py` | 有监督 (需 Y) | 已实施 |
+
+**Layer 2 核心算法** (5 种):
+- **Symmetric (Löwdin)**: 默认主方法, `W = (F^T F)^(-1/2)`, VRR=1, 无顺序依赖
+- **Ridge**: 病态矩阵兜底, λ 自适应 (Ledoit-Wolf 2004)
+- **PCA**: 降维场景, center 参数兼容 Layer 1 标准化
+- **Gram-Schmidt**: 顺序依赖场景, κ>100 启用 Kahan (1966) 二次投影
+- **Cholesky**: 半正定保证场景
+
+**Layer 3 显著性检验**:
+- **双重 Lasso** (Belloni-Chernozhukov 2014 PDS): treatment 轮询模式, HC3 稳健标准误, BH FDR 校正
+- **Elastic Net**: α/λ 网格搜索, 处理多因子共线性
+
+**核心约束**: 正交化默认关闭 (`enabled=False`), 不影响 632 基线测试; Pipeline 不重构, 通过 `post_transform_hooks` 半侵入式接入。
+
+**实施成果** (O1-O6 全部完成, 860 passed + 5 skipped):
+
+| 阶段 | 模块 | 单元测试 | 手工校验 |
+|------|------|---------|---------|
+| O1 算法核心 | `modules/factor_orthogonalizer/core/` | 44 | 15 |
+| O2 适配器 | `adapters.py:OrthogonalizerAdapter` + `cross_sectional.py` | 22 | 12 |
+| O3a 几何诊断 | `modules/factor_orthogonalizer/diagnostics.py` | 18 | 24 |
+| O3b Layer 3 检验 | `backtest/factor_significance.py` | 17 | 14 |
+| O4 回测扩展 | `modules/factor_orthogonalizer/rolling.py` | 11 | 19 |
+| O5 协同验证 | `modules/factor_orthogonalizer/grouped.py` + `triple_chain.py` | 15 | 17 |
+| O6 文档验证 | `tests/manual/verify_v2_5_0_manual.py` | 0 | 5 |
+| **合计** | — | **127** | **106** |
+
+详见 [docs/EXECUTION_V2.5.0.md](docs/EXECUTION_V2.5.0.md) (执行方案 v1.1, 40 个深化子章节)。
+
+#### Layer 2 使用示例 — `factor_orthogonalizer`
+
+**1. 全样本对称正交化 (默认主方法)**:
+
+```python
+from factor_pipeline.modules.factor_orthogonalizer.core import SymmetricOrthogonalizer
+import numpy as np
+
+# F: (N_stocks, K_factors) 横截面因子矩阵
+F = np.random.randn(100, 5)
+orth = SymmetricOrthogonalizer()
+T = orth.fit_transform(F)  # T^T T ≈ I, VRR=1
+```
+
+**2. 通过适配器接入 Pipeline (半侵入式)**:
+
+```python
+from factor_pipeline.adapters import OrthogonalizerAdapter
+from factor_pipeline.config_v2 import OrthogonalizationConfig
+
+# 默认 enabled=False (零开销, 不影响基线)
+config = OrthogonalizationConfig(enabled=True, method='symmetric')
+adapter = OrthogonalizerAdapter(config)
+
+# factor_dict: Dict[str, DataFrame], 每个 DataFrame 为 (N_stocks, T_dates)
+result = adapter.fit_transform(factor_dict)  # 输出格式与输入一致
+```
+
+**3. 滚动正交化 (无 look-ahead bias)**:
+
+```python
+from factor_pipeline.modules.factor_orthogonalizer.rolling import RollingOrthogonalizer
+
+# F_panel: (T, N, K) 因子面板
+rolling = RollingOrthogonalizer(window_size=252, min_obs=60)
+T_result, is_orth = rolling.fit_transform(F_panel)
+# is_orth[t] = True 表示该期已正交化 (样本 > min_obs)
+# 用 [t-window, t-1] 数据估计 W_t, 应用到 F_t (无 look-ahead)
+```
+
+**4. Layer 3 因子显著性检验 (双重 Lasso)**:
+
+```python
+from factor_pipeline.backtest.factor_significance import FactorSignificanceTest
+
+test = FactorSignificanceTest(method='double_lasso', cv_folds=5)
+test.fit(factor_dict, fwd_returns, factor_names=['f0', 'f1', 'f2'])
+result = test.test_incremental_alpha('f0')  # f0 作为 treatment
+# result: {coefficient, std_error, t_statistic, p_value, ci_lower, ci_upper, ...}
+```
+
+**5. 三件套串联 (Fingerprint → Decoupler → Orthogonalizer)**:
+
+```python
+from factor_pipeline.modules.factor_orthogonalizer.triple_chain import TripleChainCoordinator
+
+coordinator = TripleChainCoordinator()
+# 描述 (Fingerprint) → 时序解耦 (Decoupler) → 横截面正交化 (Orthogonalizer)
+result = coordinator.run_chain(factor_dict, method='symmetric')
+```
+
 ---
 
 ## 3. 目录结构
 
 ```
 factor_pipeline/
-├── __init__.py                  # 包入口，版本号 v2.0.0，统一导出
+├── __init__.py                  # 包入口，版本号 v2.5.0，统一导出
 ├── types.py                     # 核心类型系统（Protocol、TypedDict、DataClass）
 ├── config.py                    # v1.0 配置管理（StepType、PipelineConfig）
 ├── config_v2.py                 # v2.0 Pydantic 配置管理（统一验证）
 ├── exceptions.py                # 自定义异常体系（8 种异常类型）
 ├── adapters.py                  # 统一适配器层（5 个适配器）
 │   ├── PipelineStep             # 抽象基类
-│   ├── ImputerAdapter           # 插补适配器
-│   ├── ProcessingAdapter        # 处理适配器（去极值/变换/标准化）
-│   ├── NeutralizerAdapter       # 中性化适配器
-│   └── GarchWhiteningAdapter    # GARCH 白化适配器（v2.0 新增）
+│   ├── ImputerAdapter           # 插补适配器 (REQUIRED)
+│   ├── ProcessingAdapter        # 处理适配器（去极值/变换/标准化, REQUIRED）
+│   ├── NeutralizerAdapter       # 中性化适配器 (REQUIRED, ADR-018 fit/transform 语义一致)
+│   └── GarchWhiteningAdapter    # GARCH 白化适配器 (OPTIONAL, arch 依赖)
 ├── dag.py                       # DAG 有向无环图（依赖关系与拓扑排序）
 ├── pipeline.py                  # v1.0 核心流水线 + 顺序校验器
-├── pipelines_v2.py              # v2.0 智能流水线（三条差异化管道）
+├── pipelines_v2.py              # v2.0 智能流水线（三条差异化管道 + 软路由 + KS 迁移）
+├── optimizer.py                 # v2.6.0 优化器 (Pipeline-in-the-loop + CV + 6 项目标函数 + 正交化搜索 + Layer 3 显著性)
 ├── cache.py                     # 中间结果缓存（parquet 格式）
 ├── performance.py               # 性能优化工具（计时/缓存/批量处理/基准测试）
 ├── reporting.py                 # 执行报告生成（Markdown/JSON/Text）
-├── default_pipeline_config.json # 默认流水线配置（JSON 格式）
-├── demo.py                      # v1.0 演示脚本
-├── demo_v2.py                   # v2.0 演示脚本（含语义融合演示）
-├── cli_arcade_intro.html        # CLI 风格介绍页面
-├── backtest/                    # 回测引擎模块 (v2.2.0 新增)
-│   ├── __init__.py              # 包初始化
+├── exceptions.py                # 自定义异常体系
+├── types.py                     # 核心类型系统
+├── pyproject.toml               # 项目配置 (flat-layout, where=[".."], ADR-014)
+├── tox.ini                      # 双轨 CI 本地配置 (ADR-017)
+├── .github/workflows/ci.yml     # GitHub Actions CI 矩阵 (Python 3.10/3.11/3.12)
+├── backtest/                    # 回测引擎模块 (v2.2.0, ADR-007)
+│   ├── __init__.py              # 26 个公开 API 导出
 │   ├── factor_metrics.py        # 因子级指标单一真相源（IC/ICIR/Decay/Turnover/LS/Spread/HitRate）
 │   ├── data_bridge.py           # Pipeline → DataLoaderV3 格式适配器
 │   ├── engine.py                # 因子回测引擎（改编自 engine_v3_vector.py）
 │   ├── health_bridge.py         # 回测引擎 → FactorHealthMonitor 适配器
-│   ├── unified_drift.py         # 双轨融合漂移判定（结构+性能+换手率）
-│   └── pipeline_integration.py  # 端到端 Pipeline 集成运行器
+│   ├── unified_drift.py         # 双轨融合漂移判定（滚动 KS + EWMA + 三模式融合）
+│   ├── pipeline_integration.py  # 端到端 Pipeline 集成运行器
+│   ├── cache_manager.py         # L2 磁盘缓存基础设施 (ADR-008)
+│   ├── cached_data_loader.py    # 缓存统一入口 (一处替换启用缓存)
+│   ├── factor_cache.py          # 因子矩阵缓存 (部分命中)
+│   ├── price_cache.py           # 价格矩阵缓存
+│   ├── fwd_returns_cache.py     # 前向收益缓存
+│   ├── factor_pivot.py          # DuckDB PIVOT 因子宽表转换
+│   └── parallel_runner.py       # 多因子进程并行 (按日期分组, ADR-009)
+├── modules/                     # 内化处理模块 (v2.4.0 ADR-019 + v2.5.0 ADR-020)
+│   ├── factor_fingerprint/      # 因子指纹 (13维统计指标 + 5维健康度)
+│   ├── factor_decoupler/        # 时序解耦 (AR 建模 + 残差中性化)
+│   ├── factor_adaptive_winsor/  # 自适应缩尾 (仅 core/ 最小子包化)
+│   ├── factor_imputer/          # 因子插补 (无前瞻偏差)
+│   ├── factor_neutralizer/      # 因子中性化 (38 方法, 仅内化类不实例化)
+│   └── factor_orthogonalizer/   # 多因子横截面正交化 (v2.5.0, ADR-020, 5 种算法 + 滚动/分组/三件套)
 ├── docs/                        # 文档目录
-│   ├── KABC_paper_draft.md
-│   ├── KABC_theoretical_framework.md
-│   ├── core_topics_analysis.md
-│   ├── doc_pipeline_analysis.md
-│   ├── factor_preprocessing_meaning.md
-│   └── pipeline_analysis.md
-├── tests/                       # 测试目录
+│   ├── EXECUTION_V2.5.0.md      # v2.5.0 执行方案 v1.1 (40 深化子章节)
+│   ├── ANALYSIS_V2.5.0.md       # v2.5.0 方案分析报告
+│   ├── KABC_paper_draft.md      # KABC 论文草稿
+│   └── ...                      # 其他分析文档
+├── tests/                       # 测试目录 (632+ 测试)
 │   ├── conftest.py              # pytest 共享 fixtures
-│   ├── test_cache.py            # 缓存测试
-│   ├── test_dag.py              # DAG 测试
-│   ├── test_integration.py      # 集成测试
-│   ├── test_pipelines_v2.py     # v2.0 管道测试
-│   ├── test_pipeline_v2_full.py # v2.0 完整流程测试
-│   ├── test_dynamic_pipeline.py # 动态管道测试
-│   ├── test_pipeline_comprehensive.py # 综合测试
-│   ├── test_backtest/           # 回测模块测试 (v2.2.0 新增)
-│   │   ├── __init__.py
-│   │   ├── test_factor_metrics.py  # 30/30 测试通过
-│   │   ├── test_data_bridge.py     # 10/10 测试通过
-│   │   ├── test_engine.py          # 20/20 测试通过
-│   │   ├── test_health_bridge.py   # 13/13 测试通过
-│   │   ├── test_unified_drift.py   # 13/13 测试通过
-│   │   └── test_pipeline_integration.py # 9/9 测试通过
-│   └── unit/                    # 单元测试
-│       ├── test_adapters_mock.py
-│       ├── test_config.py
-│       ├── test_config_v2.py
-│       ├── test_exceptions.py
-│       ├── test_performance.py
-│       ├── test_pipeline_order_validator.py
-│       ├── test_pipeline_v1.py
-│       └── test_reporting.py
+│   ├── unit/                    # 单元测试
+│   ├── test_backtest/           # 回测模块测试
+│   ├── test_fix1-7_*.py         # v2.2.2 代码质量修复测试
+│   ├── test_p0-p3_*.py          # v2.1/v2.2 改进测试
+│   └── verify_*_manual.py       # 手工数值校验脚本
 └── README.md                    # 项目主文档
 ```
 
@@ -1415,11 +1509,15 @@ intermediate = pipeline.get_intermediate_data()
 **位置**: `pipelines_v2.py` — `_ks_migration_significance()`
 
 ```python
+# T4 v3.0.0: 默认 BH-FDR, 三路径分流
 is_sig, p_value, details = _ks_migration_significance(
     historical_data, recent_data, alpha=0.05
 )
-# Bonferroni 校正: alpha_corrected = 0.05 / n_columns
-# 仅当 min_p < alpha_corrected 时确认迁移
+# 默认 correction_method='benjamini_hochberg':
+#   p_adj_(k) = p_(k) * K / rank, 累积 min, clip [0,1]
+#   is_significant = (min_p_value_adjusted < alpha)
+# 向后兼容: correction_method='bonferroni' (alpha_corrected = alpha / K)
+# 研究调试: correction_method='none' (无校正, min_p < alpha)
 ```
 
 ### 11.6 P2-8: importlib 上下文管理器
@@ -1437,36 +1535,45 @@ with _temp_sys_path(full_path):
 
 ## 12. P3 规划: 端到端自动阈值搜索
 
-### 12.1 目标函数 (修正版)
+### 12.1 目标函数 (v2.6.0 修正版, 6 项 ADR-004)
 
-**决策**: ADR-004 — IC 主目标 + 三项约束替代五指标加权
+**决策**: ADR-004 + ADR-021 — IC 主目标 + 5 项约束惩罚 (v2.6.0 E4+E6 完成)
 
 ```python
-score = IC_score - stability_penalty - ks_penalty - health_penalty - coverage_penalty
+score = (IC
+         - λ_vol       * volatility_penalty      # 0.5
+         - λ_cov       * coverage_penalty        # 0.3
+         - λ_fid       * ks_distortion_penalty   # 0.1 (符号修正: + → -)
+         - λ_health    * health_penalty          # 0.4 (代理方案 B)
+         - λ_red       * redundancy_penalty)     # 0.05 (v1.1 从 0.1 降)
 ```
 
 | 指标 | 原方案 | 修正方案 | 依据 |
 |------|--------|---------|------|
-| IC + ICIR | 0.40 + 0.25 | IC 主目标 | Q3: ρ=0.885 冗余 |
-| stability | 0.15 | KS 约束 (p<0.001→-0.3) | 约束优于目标 |
+| IC + ICIR | 0.40 + 0.25 | IC 主目标 (EWMA 时间加权, Ferson-Siegel 2001) | Q3: ρ=0.885 冗余 |
+| stability | 0.15 | KS 扭曲惩罚 (符号修正) | 约束优于目标 |
 | coverage | 0.10 | 覆盖率约束 (<0.70→-0.5) | Q3: std=0.014 无区分力 |
-| diversity | 0.10 | 移除 | 系统级指标 |
-| — | — | HM 约束 (<40→-0.5) | 覆盖 regime/crowding |
+| diversity | 0.10 | 移除 → redundancy_penalty (VRR) | 几何诊断直接测量 |
+| — | — | health_penalty 代理 (decay/hit_rate/ic_vol 三档) | ADR-021 方案 B |
+| — | — | HM 约束 (<40→-0.5) → 代理指标 | ADR-021 |
 
-### 12.2 搜索空间 (8 维)
+### 12.2 搜索空间 (8 维默认 + 3 维正交化可选, ADR-005 + ADR-022)
 
-**决策**: ADR-005 — 合并 2 对冗余 + 新增 1 个遗漏
+**决策**: ADR-005 + ADR-022 — 默认 8 维 (向后兼容), `search_orth=True` 时扩展至 11 维
 
-| 维度 | 范围 | 当前值 |
-|------|------|--------|
-| `classification_midpoint` | [0.45, 0.75] | 0.60 |
-| `classification_interval` | [0.15, 0.50] | 0.40 |
-| `hard_routing_prob` | [0.70, 0.99] | 0.90 |
-| `merge_alpha` | [0.10, 0.90] | 0.50 |
-| `ks_alpha` | [0.01, 0.20] | 0.05 |
-| `migration_threshold` | [0.03, 0.30] | 0.10 |
-| `mixed_winsor_sigma` | [2.0, 5.0] | 3.0 |
-| `transform_aggressiveness` | [0.5, 2.0] | 1.0 |
+| 维度 | 范围 | 当前值 | 类别 |
+|------|------|--------|------|
+| `hard_routing_prob` | [0.5, 1.0] | 0.90 | float |
+| `merge_alpha` | [0.0, 1.0] | 0.50 | float |
+| `ks_alpha` | [0.001, 0.5] | 0.05 | float |
+| `mixed_winsor_sigma` | [1.0, 10.0] | 3.0 | float |
+| `transform_aggressiveness` | [0.3, 5.0] | 1.0 | float |
+| `classification_threshold_static` | [0.5, 1.0] | 0.7 | float |
+| `classification_threshold_dynamic` | [0.0, 0.5] | 0.3 | float |
+| `migration_threshold` | [0.0, 1.0] | 0.10 | float |
+| `orth_method` | symmetric/ridge/pca/gram_schmidt | symmetric | categorical (search_orth) |
+| `orth_align_mode` | intersection/union_nan | intersection | categorical (search_orth) |
+| `orth_ridge_lambda` | [0.01, 100.0] | 1.0 | log-uniform (search_orth) |
 
 ### 12.3 搜索算法
 
@@ -1631,7 +1738,29 @@ score = IC_score - stability_penalty - ks_penalty - health_penalty - coverage_pe
 
 **测试**: 9/9 通过。
 
-### 13.8 配置扩展 (`config_v2.py`)
+### 13.8 `threshold_drift_monitor.py` — 阈值组合有效性漂移监测 (v2.6.0 E8, ADR-023)
+
+**文件路径**: [threshold_drift_monitor.py](file:///f:/Coding/factor_pipeline/backtest/threshold_drift_monitor.py)
+
+监测优化器最优阈值组合的有效性漂移 (区别于 `UnifiedDriftReporter` 监测因子漂移)。当 EWMA 加权的 score 相对 best_score 衰减超过 `decay_threshold` (默认 20%) 时, 触发 `needs_research` 标志, 提示需要重新搜索阈值参数。
+
+**类: `ThresholdDriftMonitor`**
+
+| 方法 | 说明 |
+|------|------|
+| `__init__(best_score, best_params, halflife=63, decay_threshold=0.2, min_observations=5)` | 初始化监测器, halflife 默认 63 (约一个季度) |
+| `update(score)` | 接收新 score, 更新 EWMA, 返回 `{ewma_score, decay_ratio, needs_research}` |
+| `_compute_ewma()` | 手工计算 EWMA 用于校验: `alpha = 1 - exp(-ln2/halflife)` |
+| `get_history()` | 返回 score 历史副本 (避免外部修改) |
+| `reset(best_score, best_params)` | 重置监测器 (新阈值搜索后调用) |
+
+**触发逻辑**: `decay_ratio = ewma_score / best_score`, 当 `decay_ratio < (1 - decay_threshold)` 且观测数 ≥ `min_observations` 时触发 `needs_research=True`。
+
+**学术依据**: Bailey-López de Prado (2014) Sharpe ratio efficient frontier + Sullivan-TW (1999) data snooping + McLean-Pontiff (2016) factor decay。
+
+**测试**: 10/10 通过 (test_p3_phase3_threshold_drift_monitor.py)。
+
+### 13.9 配置扩展 (`config_v2.py`)
 
 **新增 `BacktestConfig` 类**:
 
@@ -1742,6 +1871,139 @@ price_data = loader.get_price_matrix(field="close", start_date, end_date)
 
 ---
 
+## 15. v2.6.0 优化器与漂移检测增强 (规划中, ADR-021/022/023)
+
+### 15.1 章节定位
+
+本章节描述 v2.6.0 的执行方案设计阶段产出。v2.5.0 完成多因子横截面正交化三层架构 (ADR-020) 后, v2.6.0 聚焦于**优化器层面**与**漂移检测层面**的增强, 让三层架构在优化器层面完整闭环, 同时对齐 ADR-004 (目标函数) / ADR-005 (搜索空间) / ADR-006 (扩展窗口 CV) 三项设计契约。
+
+**核心文档**:
+- [docs/ANALYSIS_V2.6.0.md](docs/ANALYSIS_V2.6.0.md) v1.1 (810 行) — 深度核查 8 类问题 / 8 项任务 / 11 项风险
+- [docs/EXECUTION_V2.6.0.md](docs/EXECUTION_V2.6.0.md) (1595 行) — 9 个执行阶段 (E1-E9), ~59 新测试
+
+### 15.2 9 阶段执行方案 (E1-E9)
+
+```
+v2.6.0 优化器与漂移检测增强 [ADR-004/005/006 修订 + ADR-021/022/023 新增]
+│
+├─ E1: P3-11' 文档状态修正 (P0, 无依赖, 仅文档)
+├─ E2: P3-10' migration_threshold 字段位置 + ADR-005 更新 (P0)
+├─ E3: P3-1' IC 时间加权 EWMA (P1)
+├─ E4: P3-9' 目标函数对齐 ADR-004 — health_penalty 代理 (P1, 依赖 E3)
+├─ E5: P3-13 正交化参数纳入搜索空间 (P1, 依赖 E2)
+├─ E6: P3-14 几何诊断纳入目标函数 (P2, 依赖 E5)
+├─ E7: P3-15 Layer 3 显著性最终验证 (P2, 依赖 E4)
+├─ E8: P3-12' 阈值漂移监测 (P2, 依赖 E4)
+└─ E9: 文档验证 + 全量回归 (P1, 依赖 E1-E8)
+```
+
+| 阶段 | 任务 | 优先级 | 依赖 | 测试数 | 关键文件变更 |
+|------|------|--------|------|--------|-------------|
+| E1 | P3-11' 文档状态修正 | P0 | 无 | 0 (仅文档) | DECISIONS.md |
+| E2 | P3-10' migration_threshold 字段位置 + ADR-005 | P0 | 无 | ~5 | optimizer.py:150-158, DECISIONS.md |
+| E3 | P3-1' IC 时间加权 EWMA | P1 | 无 | ~8 | factor_metrics.py, optimizer.py |
+| E4 | P3-9' 目标函数对齐 ADR-004 | P1 | E3 | ~10 | optimizer.py (_composite_objective) |
+| E5 | P3-13 正交化参数纳入搜索空间 | P1 | E2 | ~8 | optimizer.py (DEFAULT_SEARCH_SPACE_ORTH) |
+| E6 | P3-14 几何诊断 + Adapter 扩展 | P2 | E5 | ~12 | adapters.py, optimizer.py |
+| E7 | P3-15 Layer 3 显著性最终验证 | P2 | E4 | ~6 | optimizer.py (_validate_significance) |
+| E8 | P3-12' 阈值漂移监测 | P2 | E4 | ~10 | backtest/threshold_drift_monitor.py (新建) |
+| E9 | 文档验证 + 全量回归 | P1 | E1-E8 | 8 项手工校验 | README/CHANGELOG/CODE_WIKI/DECISIONS |
+
+**总计**: ~59 新测试 + 860 基线 = ~919 passed
+
+### 15.3 ADR-021: 目标函数对齐 ADR-004 — health_penalty 代理指标方案
+
+**问题**: ADR-004 设计 `score = IC - stability_penalty - ks_penalty - health_penalty - coverage_penalty`, 但代码实现 (1) 缺 health_penalty 项, (2) fidelity 符号相反 (+ 奖励而非 - 惩罚), (3) `HealthMonitorAdapter.build_report_from_engine` 需要 engine_results 字典, 只能在回测后计算, 不能在 CV fold 内部直接调用 (时序依赖).
+
+**决策 (ADR-021)**: 采用代理指标方案 B — 在 CV fold 内部用 IC decay / hit_rate / ic_volatility 三档近似 health_score:
+
+```python
+def _health_penalty_proxy(self, ic_array: np.ndarray) -> float:
+    decay_ratio = ...  # IC[t] / IC[0], 衰减比例
+    hit_rate = ...     # IC > 0 比例
+    ic_vol = float(np.nanstd(ic_array))
+
+    if decay_ratio < 0.5 or hit_rate < 0.4 or ic_vol > 0.2:
+        return 0.5  # ADR-004: < 40 → -0.5
+    elif decay_ratio < 0.8 or hit_rate < 0.5 or ic_vol > 0.15:
+        return 0.2  # ADR-004: < 60 → -0.2
+    return 0.0
+```
+
+同时修正 fidelity 符号: `+ lambda_fidelity * fidelity` → `- lambda_fidelity * (1 - fidelity)`.
+
+### 15.4 ADR-022: 搜索空间扩展 — 正交化参数纳入 (P3-13)
+
+**问题**: v2.5.0 完成正交化三层架构, 但优化器搜索空间仍为 8 维 ADR-005 阈值, 未纳入正交化参数.
+
+**决策 (ADR-022)**: 新增 `DEFAULT_SEARCH_SPACE_ORTH` 搜索空间, 默认关闭 (`search_orth=False`):
+
+| 维度 | 类型 | 范围 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `orth_method` | categorical | ['symmetric', 'ridge', 'pca', 'gram_schmidt', 'cholesky'] | 'symmetric' | 正交化算法 |
+| `align_mode` | categorical | ['intersection', 'union_nan', 'raise_on_mismatch'] | 'intersection' | 因子对齐模式 |
+| `ridge_lambda` | float (log) | [0.01, 100.0] | 1.0 | Ridge λ (仅 orth_method='ridge' 时生效) |
+
+**不搜索 `orth_enabled`** (默认关闭, 启用搜索即隐含启用正交化).
+
+**look-ahead bias 防护**: 正交化参数的 fit 必须在 CV fold 内部用 train 数据完成, 不能用全量数据 fit + train/test transform.
+
+### 15.5 ADR-023: 阈值漂移监测 — ThresholdDriftMonitor (P3-12')
+
+**问题**: `optimizer.optimize()` 返回 best_params 后, 阈值组合在部署后可能因市场体制变化而失效. 现有 `UnifiedDriftReporter` 监测的是**因子值漂移**, 不监测**阈值组合本身的有效性漂移**.
+
+**决策 (ADR-023)**: 新建 `backtest/threshold_drift_monitor.py`, 采用 EWMA 衰减检测:
+
+```python
+class ThresholdDriftMonitor:
+    def __init__(self, best_score, best_params, halflife=63,
+                 decay_threshold=0.2, min_observations=5):
+        ...
+
+    def update(self, current_score) -> Dict:
+        # EWMA: alpha = 1 - exp(-ln2/halflife)
+        # 触发: EWMA(current) < (1 - decay_threshold) * best_score
+        # 返回 {ewma_score, decay_ratio, needs_research, n_observations}
+```
+
+**与 UnifiedDriftReporter 的边界**:
+
+| 监测器 | 监测对象 | 信号源 | 触发动作 |
+|--------|---------|--------|---------|
+| `UnifiedDriftReporter` | 因子值漂移 | structure (KS) + performance (ICIR) + turnover | 因子重新分类/插补 |
+| `ThresholdDriftMonitor` | 阈值组合有效性 | best_score EWMA 衰减 | 阈值重新搜索 (调用 optimizer.optimize) |
+
+### 15.6 核心约束 (6 项)
+
+1. **基线保护**: 默认行为不变, 不影响 860 测试基线
+2. **ADR 契约对齐**: ADR-004 (health_penalty) 改代码, ADR-005 (static/dynamic) 改 ADR
+3. **TDD 开发**: 每阶段严格 Red-Green-Refactor, 含手工数值校验
+4. **数值精度**: 与独立 numpy/statsmodels 实现对比, 精度 < 1e-10
+5. **无 look-ahead bias**: 正交化参数搜索时必须在 CV fold 内部 fit (用 train 数据)
+6. **计算成本控制**: FactorSignificanceTest 仅用于最终验证, 不用于每 trial 评估
+
+### 15.7 学术依据修正 (v1.0 → v1.1)
+
+| 任务 | v1.0 误引 | v1.1 修正 | 原因 |
+|------|----------|----------|------|
+| P3-1 IC 时间加权 | Cohen-Coval-Pastor (2005) | Ferson-Siegel (2001) | Cohen-Coval 讨论基金持仓相似度, 与 EWMA 无关 |
+| P3-1 IC 时间加权 | Dimson / Moreira-Muir | Barroso-Santa-Clara (2015) | Dimson 是 beta 估计, Moreira-Muir 是 risk premium |
+| P3-12 阈值漂移 | Hsu (2010) 误称 Bayesian | Sullivan-TW (1999) + McLean-Pontiff (2016) | Hsu (2010) 实际是 frequentist SDF |
+| P3-11 参数重要性 | — | Bergstra (2011) TPE + Hutter (2014) fANOVA | 拆分原引用 |
+
+### 15.8 风险与回退
+
+| 风险 | 概率 | 影响 | 缓解 |
+|------|------|------|------|
+| health_penalty 代理与 health_score 相关性不足 | 中 | 目标函数引导偏差 | E4 手工校验 + A/B 测试 |
+| 正交化搜索维度增加致 n_trials 不足 | 中 | 优化不收敛 | n_trials 从 100 提到 150-200 |
+| FactorSignificanceTest 计算成本超预期 | 低 | E7 集成测试超时 | 仅最终验证, 不每 trial 评估 |
+| fidelity 符号修正改变历史 best_score | 中 | 与 v2.5.0 best_score 不可比 | 文档标注 + 重新运行优化 |
+
+**8 阶段独立回退**: 各阶段文件变更隔离, 失败可独立回退 (详见 EXECUTION_V2.6.0.md:1555-1566).
+
+---
+
 ## 版本历史
 
 | 版本 | 日期 | 主要更新 |
@@ -1752,3 +2014,12 @@ price_data = loader.get_price_matrix(field="close", start_date, end_date)
 | v2.1.0 | 2026-07-01 | 架构修复：软路由 + 阈值校准 + 统一 fit() + 适配器 Warning + 迁移权重 + KS 显著性 + importlib 重构 |
 | v2.2.0 | 2026-07-01 | Backtest 集成：回测引擎 (95/95) + 双轨漂移融合 + HealthMonitor 适配器 + BacktestConfig 配置扩展 |
 | v2.2.1 | 2026-07-01 | L2 磁盘缓存层：CacheManager + PriceMatrixCache + FactorMatrixCache + FwdReturnsCache + CachedDataLoader (85/85) |
+| v2.2.2 | 2026-07-01 | 漂移检测与优化器改进：滚动窗口 KS + Pipeline-in-the-loop + per-factor min_dates + 三模式信号融合 + CV 改进 + 分组并行 A/B 实验 (ADR-009) |
+| v2.2.3 | 2026-07-02 | 外部模块子包化 + 命名空间根治 (ADR-013): 6 个外部模块 __init__.py + pyproject.toml, importlib/sys.path 黑魔法清理 |
+| v2.2.4 | 2026-07-02 | 依赖锁定 (ADR-014): pyproject.toml REQUIRED + OPTIONAL extras 分离, 删除优雅回退, HAS_SCIPY/STATSMODELS 死代码清理 |
+| v2.2.5 | 2026-07-02 | adapters 重构 (ADR-015): NeutralizerAdapter REQUIRED 化 + GarchWhiteningAdapter 模块级导入 |
+| v2.2.6 | 2026-07-02 | 技术债清理 (ADR-016): Factor_Trading_v3.0 子包化 + data_bridge importlib hack 清理 + test_parallel flaky 修复 |
+| v2.3.0 | 2026-07-02 | 跨版本 CI 矩阵 (ADR-017): GitHub Actions (Python 3.10/3.11/3.12 × ubuntu) + tox 双轨 |
+| v2.4.0 | 2026-07-03 | 外部模块内化 (ADR-019): 5 个处理模块 (Fingerprint/Decoupler/AdaptiveWinsor/Imputer/Neutralizer) 内化到 modules/, 632 passed 零回归 |
+| v2.5.0 | 2026-07-03 | 多因子正交化三层架构 (ADR-020): Layer 1/2/3 分离 + 5 种正交化算法 + VRR/κ/VIF 诊断 + 双重 Lasso (Belloni 2014 PDS) + Rolling + Grouped + TripleChain, 860 passed + 5 skipped |
+| v2.6.0 | 2026-07-04 | 优化器与漂移检测增强 (已实施, ADR-021/022/023, E1-E9 全部完成): 6 项目标函数 (IC-vol-cov-ks-health-redundancy) + 正交化参数搜索空间 (8→11 维) + Layer 3 显著性最终验证 (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA 衰减检测), 918 passed + 6 skipped + 11 subtests |
