@@ -9,7 +9,7 @@ Fix 3: 版本号统一 — TDD 测试
   - test_config_v2.py:  期望 '2.0.0' (历史失败)
   - test_reporting.py:  期望 "2.0.0"
 
-修复: 统一到 "2.4.0" (v2.4.0 ADR-019 内化后版本)
+修复: 统一到 "2.5.0" (v2.5.0 ADR-020 多因子正交化模块版本)
   - 缓存 code_version = "v2.2.0-cache" 保持不变 (缓存语义版本, 非项目版本)
 """
 
@@ -25,14 +25,14 @@ for ext in ["F:/Coding/Factor_Fingerprint", "F:/Coding/Factor_Decoupler"]:
         sys.path.insert(0, ext)
 
 # 期望的统一版本号
-EXPECTED_VERSION = "2.4.0"
+EXPECTED_VERSION = "2.5.0"
 
 
 class TestFix3VersionUnification(unittest.TestCase):
     """Fix 3: 版本号统一测试"""
 
     def test_01_project_version_is_unified(self):
-        """test_01: 项目主版本号 __version__ 统一到 2.4.0"""
+        """test_01: 项目主版本号 __version__ 统一到 2.5.0"""
         import factor_pipeline
         self.assertEqual(
             factor_pipeline.__version__, EXPECTED_VERSION,
@@ -40,7 +40,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         )
 
     def test_02_unified_config_version_default(self):
-        """test_02: PipelineV2ConfigUnified.version 默认值为 2.4.0"""
+        """test_02: PipelineV2ConfigUnified.version 默认值为 2.5.0"""
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         config = PipelineV2ConfigUnified()
         self.assertEqual(
@@ -49,7 +49,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         )
 
     def test_03_reporting_pipeline_version_default(self):
-        """test_03: PipelineExecutionReport.pipeline_version 默认值为 2.4.0"""
+        """test_03: PipelineExecutionReport.pipeline_version 默认值为 2.5.0"""
         from factor_pipeline.reporting import PipelineExecutionReport
         report = PipelineExecutionReport()
         self.assertEqual(

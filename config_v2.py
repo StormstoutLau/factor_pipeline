@@ -260,6 +260,103 @@ class BacktestConfig(BaseModel):
 
 
 # =============================================================================
+# v2.5.0 正交化配置 (Layer 2, ADR-020)
+# =============================================================================
+
+class OrthogonalizationConfig(BaseModel):
+    """正交化配置 (Layer 2, v2.5.0)
+
+    默认关闭 (enabled=False), 不影响基线.
+    启用后作为 Pipeline.transform() 的 post_transform_hook 应用.
+
+    学术依据: Löwdin (1950) 对称正交化, Ledoit-Wolf (2004) 收缩, Kahan (1966) 二次投影
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="启用正交化 (默认关闭, 保护基线)"
+    )
+    method: Literal['symmetric', 'gram_schmidt', 'pca', 'cholesky', 'ridge'] = Field(
+        default='symmetric',
+        description="正交化方法: symmetric (默认, Löwdin) / gram_schmidt / pca / cholesky / ridge"
+    )
+    window_mode: Literal['full_sample', 'rolling'] = Field(
+        default='full_sample',
+        description="窗口模式: full_sample (研究用, 单一 W) / rolling (回测用, 每期 W)"
+    )
+    window_size: int = Field(
+        default=252,
+        ge=20,
+        description="滚动窗口大小 (日), 仅 window_mode=rolling 时生效"
+    )
+    min_obs: int = Field(
+        default=60,
+        ge=10,
+        description="最小样本数, 不足时跳过正交化"
+    )
+    shrinkage: bool = Field(
+        default=True,
+        description="启用 Ledoit-Wolf 收缩预处理 (病态矩阵保护)"
+    )
+    vrr_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="VRR 冗余阈值, VRR < threshold 的因子标记为冗余"
+    )
+    groups: Optional[dict] = Field(
+        default=None,
+        description="分组正交化: {组名: [因子名]}, 组内正交 + 组间保留 (O5 阶段)"
+    )
+    use_gpu: bool = Field(
+        default=False,
+        description="启用 GPU 加速 (需 CuPy, HAS_CUPY 标记)"
+    )
+    align_mode: Literal['intersection', 'union_nan', 'raise_on_mismatch'] = Field(
+        default='intersection',
+        description=(
+            "因子对齐策略 (O2.8.1): "
+            "'intersection' (默认, 取交集) / "
+            "'union_nan' (取并集, 缺失填 NaN) / "
+            "'raise_on_mismatch' (不匹配时抛错)"
+        )
+    )
+
+    # 方法特定参数
+    ridge_lambda: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Ridge λ (仅 method=ridge)"
+    )
+    ridge_lambda_selection: Literal['fixed', 'cv', 'ledoit_wolf'] = Field(
+        default='fixed',
+        description="Ridge λ 选择方式 (仅 method=ridge)"
+    )
+    pca_variance_threshold: float = Field(
+        default=0.95,
+        gt=0.0,
+        le=1.0,
+        description="PCA 方差保留阈值 (仅 method=pca)"
+    )
+    pca_center: bool = Field(
+        default=True,
+        description="PCA 中心化 (仅 method=pca)"
+    )
+    gs_order: Optional[list] = Field(
+        default=None,
+        description="GS 正交化顺序 (仅 method=gram_schmidt)"
+    )
+    gs_reorthogonalize: bool = Field(
+        default=False,
+        description="GS 二次投影 (Kahan 1966, κ>100 时启用)"
+    )
+    # 注: O1.12.1 threshold_mode (relative/absolute/auto) 是算法层参数,
+    # 不在 Layer 2 配置中暴露 (使用 O1 默认 'auto'), 保持配置简洁.
+
+    model_config = {"validate_assignment": True}
+
+
+# =============================================================================
 # 统一配置
 # =============================================================================
 
@@ -279,7 +376,7 @@ class PipelineV2ConfigUnified(BaseModel):
     """
     
     name: str = Field(default="factor_pipeline_v2", description="流水线名称")
-    version: str = Field(default="2.4.0", description="版本")
+    version: str = Field(default="2.5.0", description="版本")
     description: str = Field(default="", description="描述")
     
     # 全局设置
@@ -336,9 +433,16 @@ class PipelineV2ConfigUnified(BaseModel):
     
     # 回测配置 (P6 - Backtest 集成)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
-    
+
+    # v2.5.0 正交化配置 (Layer 2, ADR-020) — 默认关闭, 不影响基线
+    orthogonalization: OrthogonalizationConfig = Field(
+        default_factory=OrthogonalizationConfig,
+        description="Layer 2 正交化配置 (默认关闭)"
+    )
+
     model_config = {
         "validate_assignment": True,
+        "extra": "ignore",  # O2.8.5: 向后兼容旧 JSON (忽略未知字段)
         "json_schema_extra": {
             "example": {
                 "name": "my_pipeline",
@@ -379,7 +483,9 @@ class PipelineV2ConfigUnified(BaseModel):
           - 概念对应:
               classification_threshold_static  → classification.static_ar1_threshold
               classification_threshold_dynamic → classification.dynamic_ar1_threshold
-              migration_threshold              → monitor.migration_threshold (or similarity_threshold)
+              migration_threshold              → migration_threshold (v2.6.0 E2 修正: 直接传递,
+                                                 字段位于 PipelineV2Config 本身, 不再尝试
+                                                 设置到 MonitorConfig)
           - 嵌套 → 扁平:
               static.garch.enabled/p/q/vol/min_obs → static_enable_garch/static_garch_p/q/vol/min_obs
               dynamic.decorrelation_strength/max_ar_order/ar_criterion → dynamic_*
@@ -402,9 +508,9 @@ class PipelineV2ConfigUnified(BaseModel):
         )
 
         # 构造 MonitorConfig
-        # 注: Unified.migration_threshold 是 Unified-only 字段, MonitorConfig 无直接对应字段
-        #     (MonitorConfig 有 short/medium/long_threshold 三个窗口阈值).
-        #     此处保持 MonitorConfig 默认值, 与 optimizer.py 现有 hasattr 行为一致.
+        # v2.6.0 E2 修正: Unified.migration_threshold 不再尝试映射到 MonitorConfig
+        #     (MonitorConfig 有 short/medium/long_threshold 三个窗口阈值, 无 migration_threshold).
+        #     字段直接传递到 PipelineV2Config.migration_threshold (config 本身).
         #     Unified.enable_monitoring → monitor.enable_smooth_transition 概念对应
         monitor = MonitorConfig(
             enable_smooth_transition=self.enable_monitoring,
@@ -433,6 +539,10 @@ class PipelineV2ConfigUnified(BaseModel):
             merge_alpha=self.merge_alpha,
             ks_alpha=self.ks_alpha,
             mixed_winsor_sigma=self.mixed_winsor_sigma,
+            # v2.6.0 E2: migration_threshold 字段直接传递 (字段位于 config 本身)
+            migration_threshold=self.migration_threshold,
+            # v2.5.0 正交化配置 (整对象透传, dataclass 字段为 Optional[Any])
+            orthogonalization=self.orthogonalization,
         )
 
 

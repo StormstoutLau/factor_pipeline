@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "factor-pipeline"
-version = "2.4.0"
+version = "2.5.0"
 description = "因子处理统一流水线 (Factor Processing Pipeline) — 5 个处理模块内化 (Fingerprint/Decoupler/AdaptiveWinsor/Imputer/Neutralizer) + 指纹分类 + 回测引擎"
 readme = "README.md"
 requires-python = ">=3.9"

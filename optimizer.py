@@ -50,9 +50,27 @@ DEFAULT_SEARCH_SPACE = {
     'ks_alpha':                       {'type': 'float', 'low': 0.001, 'high': 0.5},
     'mixed_winsor_sigma':             {'type': 'float', 'low': 1.0,  'high': 10.0},
     'transform_aggressiveness':       {'type': 'float', 'low': 0.3,  'high': 5.0},
-    'classification_threshold_static': {'type': 'float', 'low': 0.5,  'high': 1.0},
+    'classification_threshold_static': {'type': 'float', 'low': 0.5, 'high': 1.0},
     'classification_threshold_dynamic': {'type': 'float', 'low': 0.0, 'high': 0.5},
     'migration_threshold':            {'type': 'float', 'low': 0.0,  'high': 1.0},
+}
+
+
+# v2.6.0 P3-13 (E5): 正交化参数搜索空间 (仅 search_orth=True 时激活)
+# 不搜索 orth_enabled (用户决策, 非优化器决策)
+DEFAULT_SEARCH_SPACE_ORTH = {
+    'orth_method': {
+        'type': 'categorical',
+        'choices': ['symmetric', 'ridge', 'pca', 'gram_schmidt'],
+    },
+    'orth_align_mode': {
+        'type': 'categorical',
+        'choices': ['intersection', 'union_nan'],  # 不搜索 raise_on_mismatch
+    },
+    'orth_ridge_lambda': {
+        'type': 'float', 'low': 0.01, 'high': 100.0,
+        'log': True,  # log-uniform (λ 跨度大)
+    },
 }
 
 
@@ -95,7 +113,10 @@ class EndToEndThresholdOptimizer:
         lambda_volatility: float = 0.5,
         lambda_coverage: float = 0.3,
         lambda_fidelity: float = 0.1,
+        lambda_health: float = 0.4,  # v2.6.0 E4: health_penalty 代理权重
+        lambda_redundancy: float = 0.05,  # v2.6.0 E6: 冗余惩罚 (v1.1 从 0.1 降为 0.05)
         random_seed: int = 42,
+        search_orth: bool = False,  # v2.6.0 E5: 正交化参数搜索
     ):
         if not HAS_OPTUNA:
             raise ImportError(
@@ -108,9 +129,15 @@ class EndToEndThresholdOptimizer:
         self.lambda_volatility = lambda_volatility
         self.lambda_coverage = lambda_coverage
         self.lambda_fidelity = lambda_fidelity
+        self.lambda_health = lambda_health  # v2.6.0 E4
+        self.lambda_redundancy = lambda_redundancy  # v2.6.0 E6
         self.random_seed = random_seed
+        self.search_orth = search_orth  # v2.6.0 E5
 
+        # v2.6.0 E5: 根据 search_orth 标志合并搜索空间
         self.search_space = dict(DEFAULT_SEARCH_SPACE)
+        if search_orth:
+            self.search_space.update(DEFAULT_SEARCH_SPACE_ORTH)
 
         # 优化结果
         self.study: Optional['optuna.Study'] = None
@@ -147,15 +174,34 @@ class EndToEndThresholdOptimizer:
                 1.0, config.mixed_winsor_sigma / max(aggr, 0.1)
             )
 
-        # P0-2: migration_threshold — 影响 monitor 的迁移判定
+        # P3-10' (v2.6.0 E2): migration_threshold 字段位置修正
+        # 修正前: 错误设置到 config.monitor.migration_threshold (MonitorConfig 无此字段,
+        #         hasattr 静默跳过, 参数被丢弃)
+        # 修正后: 字段位于 PipelineV2Config.migration_threshold (config 本身),
+        #         默认值 0.10 与 PipelineV2ConfigUnified.migration_threshold 对齐
         if 'migration_threshold' in params:
+            config.migration_threshold = params['migration_threshold']
             config.monitor.enable_smooth_transition = True
-            # migration_threshold 用作 monitor 的相似度阈值
-            # 如果 MonitorConfig 有相关字段则设置
-            if hasattr(config.monitor, 'migration_threshold'):
-                config.monitor.migration_threshold = params['migration_threshold']
-            elif hasattr(config.monitor, 'similarity_threshold'):
-                config.monitor.similarity_threshold = params['migration_threshold']
+
+        # P3-13 (v2.6.0 E5): 正交化参数 (仅 search_orth=True 时存在)
+        # 不搜索 orth_enabled (用户决策), 但设置 orth_method 后自动启用
+        if 'orth_method' in params:
+            # config.orthogonalization 默认 None, 需先实例化
+            if config.orthogonalization is None:
+                from factor_pipeline.config_v2 import OrthogonalizationConfig
+                config.orthogonalization = OrthogonalizationConfig()
+            config.orthogonalization.enabled = True  # 自动启用
+            config.orthogonalization.method = params['orth_method']
+        if 'orth_align_mode' in params:
+            if config.orthogonalization is None:
+                from factor_pipeline.config_v2 import OrthogonalizationConfig
+                config.orthogonalization = OrthogonalizationConfig()
+            config.orthogonalization.align_mode = params['orth_align_mode']
+        # ridge_lambda 仅 method='ridge' 时设置 (避免污染其他方法)
+        if ('orth_ridge_lambda' in params
+                and config.orthogonalization is not None
+                and config.orthogonalization.method == 'ridge'):
+            config.orthogonalization.ridge_lambda = params['orth_ridge_lambda']
 
         return config
 
@@ -180,14 +226,29 @@ class EndToEndThresholdOptimizer:
         self,
         factor_values: np.ndarray,
         forward_returns: np.ndarray,
+        weighting: str = 'equal',
+        halflife: int = None,
     ) -> float:
         """
-        计算 cross-sectional IC。
+        计算 cross-sectional IC (v2.6.0 P3-1' 新增 EWMA 加权选项).
 
         输入 shape: (n_entities, n_periods) — 每行是一个实体 (stock),
-        每列是一个时期。对每个时期 t 计算截面 corr,取均值。
+        每列是一个时期。对每个时期 t 计算截面 corr, 取均值或 EWMA 加权.
 
-        手工计算: IC = mean(corr(factor[:, t], return[:, t]) for each period t)
+        手工计算:
+        - weighting='equal': IC = mean(corr(factor[:, t], return[:, t]) for each t)
+        - weighting='ewma':  IC = sum(w[t] * corr(factor[:, t], return[:, t]))
+                              其中 w[t] = (1-alpha)^(n-1-t), alpha = 1 - exp(-ln2/halflife)
+
+        Parameters
+        ----------
+        factor_values, forward_returns : np.ndarray, shape (n_entities, n_periods)
+        weighting : 'equal' | 'ewma'  (v2.6.0 P3-1' 新增)
+            'equal': 等权 (默认, 向后兼容)
+            'ewma': 指数加权, 近期 IC 权重更高
+        halflife : int, optional
+            EWMA 半衰期 (仅 weighting='ewma' 时生效)
+            默认: max(1, n_periods // 4) (自适应)
         """
         if factor_values.shape != forward_returns.shape:
             logger.warning(
@@ -209,6 +270,16 @@ class EndToEndThresholdOptimizer:
             corr_matrix = np.corrcoef(f_t[valid], r_t[valid])
             ics[t] = corr_matrix[0, 1] if not np.isnan(corr_matrix[0, 1]) else np.nan
 
+        # v2.6.0 P3-1': EWMA 时间加权
+        if weighting == 'ewma':
+            n = len(ics)
+            if halflife is None:
+                halflife = max(1, n // 4)
+            alpha = 1.0 - np.exp(-np.log(2.0) / max(halflife, 1))
+            weights = (1.0 - alpha) ** np.arange(n)[::-1]
+            weights /= weights.sum()
+            return float(np.nansum(ics * weights))
+
         return float(np.nanmean(ics))
 
     def _ic_volatility_penalty(self, ic_array: np.ndarray) -> float:
@@ -227,12 +298,15 @@ class EndToEndThresholdOptimizer:
         after: np.ndarray,
     ) -> float:
         """
-        KS 分布保真度约束。
+        KS 分布保真度 (v2.6.0 E4 修正语义).
 
-        手工计算: 对变换前后的因子分别做 KS 检验。
-        fidelity = min(1.0, -log10(min_p) / 10)
-        当 min_p 很小时（分布显著不同），fidelity 接近 0。
-        当 min_p 很大时（分布相似），fidelity 接近 1。
+        手工计算: 对变换前后的因子分别做 KS 检验.
+        - p 高 = 分布相似 = 高保真 (fidelity 接近 1)
+        - p 低 = 分布不同 = 低保真 (fidelity 接近 0)
+
+        v2.6.0 E4 修正:
+        - 原实现: fidelity = -log10(min_p) / 10 (p 高 → fidelity 低, 语义反, 实际是 distortion)
+        - 新实现: fidelity = 1 - distortion (p 高 → fidelity 高, 语义正)
         """
         # P2.5: scipy 现为 REQUIRED 依赖, 不再有 HAS_SCIPY fallback
         if before.ndim == 1:
@@ -257,9 +331,12 @@ class EndToEndThresholdOptimizer:
             return 1.0
 
         min_p = min(p_values)
+        # distortion: p 低 → distortion 高 (分布不同)
         # -log10 变换: p=0.01 → 2, p=0.001 → 3, p=1e-10 → 10
         # 除以 10 归一化到 [0, 1]
-        fidelity = min(1.0, -np.log10(max(min_p, 1e-10)) / 10.0)
+        distortion = min(1.0, -np.log10(max(min_p, 1e-10)) / 10.0)
+        # fidelity: 1 - distortion (p 高 → fidelity 高, 语义正)
+        fidelity = 1.0 - distortion
         return float(fidelity)
 
     def _coverage_penalty(
@@ -278,6 +355,52 @@ class EndToEndThresholdOptimizer:
         coverage = n_processed / n_total
         return max(0.0, 0.5 - coverage)
 
+    def _health_penalty_proxy(self, ic_array: np.ndarray) -> float:
+        """HealthMonitor 代理惩罚 (v2.6.0 E4 / P3-9')
+
+        用 IC decay / hit rate / volatility 作为 health_score 的近似,
+        避免 HealthMonitorAdapter.build_report_from_engine 的 engine_results 时序依赖.
+
+        ADR-004 第 153 行:
+            HealthMonitor 综合得分 (< 40 → -0.5, < 60 → -0.2)
+
+        代理指标映射:
+        - IC decay ratio (后半段/前半段): < 0.5 → 健康度低
+        - IC hit rate: < 0.4 → 健康度低
+        - IC volatility: > 0.2 → 健康度低
+
+        Returns
+        -------
+        float
+            0.5 (低健康度), 0.2 (中健康度), 0.0 (高健康度)
+        """
+        clean = ic_array[~np.isnan(ic_array)]
+        if len(clean) < 6:
+            return 0.0  # 数据不足, 不惩罚
+
+        mid = len(clean) // 2
+        ic_early = float(np.mean(clean[:mid]))
+        ic_late = float(np.mean(clean[mid:]))
+
+        # IC decay ratio
+        if abs(ic_early) < 1e-10:
+            decay_ratio = 1.0
+        else:
+            decay_ratio = ic_late / ic_early
+
+        # IC hit rate
+        hit_rate = float(np.mean(clean > 0))
+
+        # IC volatility
+        ic_vol = float(np.std(clean))
+
+        # 代理 health_score: decay_ratio > 0.8 + hit_rate > 0.55 + ic_vol < 0.1 → 健康
+        if decay_ratio < 0.5 or hit_rate < 0.4 or ic_vol > 0.2:
+            return 0.5  # ADR-004: < 40 → -0.5
+        elif decay_ratio < 0.8 or hit_rate < 0.5 or ic_vol > 0.15:
+            return 0.2  # ADR-004: < 60 → -0.2
+        return 0.0
+
     def _composite_objective(
         self,
         ic_array: np.ndarray,
@@ -285,33 +408,85 @@ class EndToEndThresholdOptimizer:
         n_total: int,
         before: Optional[np.ndarray] = None,
         after: Optional[np.ndarray] = None,
+        redundancy_penalty: float = 0.0,  # v2.6.0 E6: 冗余惩罚
     ) -> float:
         """
-        复合目标函数。
+        复合目标函数 (v2.6.0 E4 对齐 ADR-004, E6 新增 redundancy).
 
-        手工计算:
-          objective = IC_mean
-                    - lambda_volatility * vol_penalty
-                    - lambda_coverage * coverage_penalty
-                    + lambda_fidelity * fidelity
+        ADR-004 第 147 行:
+            score = IC_score - stability_penalty - ks_penalty - health_penalty - coverage_penalty
 
-        最大化 IC 的同时惩罚高波动、低覆盖率和分布失真。
+        v2.6.0 E4 修正:
+        1. fidelity 符号方向: 奖励 → 惩罚 (ks_distortion_penalty = 1 - fidelity)
+        2. 新增 health_penalty (代理指标, 解决 health_bridge 时序问题)
+
+        v2.6.0 E6 新增:
+        3. redundancy_penalty (基于 VRR, ADR-020): VRR < threshold 的因子扣分
         """
         ic_mean = float(np.nanmean(ic_array))
         vol_penalty = self._ic_volatility_penalty(ic_array)
         cov_penalty = self._coverage_penalty(n_processed, n_total)
 
-        fidelity = 0.0
+        # 修正 1: KS 分布扭曲惩罚 (原 + λ_fid * fidelity 奖励, 符号方向相反)
+        ks_distortion_penalty = 0.0
         if before is not None and after is not None:
             fidelity = self._ks_distribution_fidelity(before, after)
+            ks_distortion_penalty = 1.0 - fidelity
+
+        # 修正 2: HealthMonitor 代理惩罚 (基于 IC 系列特征)
+        health_penalty = self._health_penalty_proxy(ic_array)
+
+        # v2.6.0 E6: 冗余惩罚 (基于 VRR, ADR-020)
+        # redundancy_penalty 已由 _redundancy_penalty 计算并传入
 
         objective = (
             ic_mean
             - self.lambda_volatility * vol_penalty
             - self.lambda_coverage * cov_penalty
-            + self.lambda_fidelity * fidelity
+            - self.lambda_fidelity * ks_distortion_penalty  # 修正: + → -
+            - self.lambda_health * health_penalty            # 新增 (v2.6.0 E4)
+            - self.lambda_redundancy * redundancy_penalty    # 新增 (v2.6.0 E6)
         )
         return float(objective)
+
+    def _redundancy_penalty(
+        self,
+        pipeline: 'FactorProcessingPipelineV2',
+        config: 'PipelineV2Config',
+    ) -> float:
+        """冗余惩罚 (v2.6.0 P3-14 / E6, 基于 VRR, ADR-020)
+
+        VRR_k = Var(T_k)/Var(F_k), VRR << 1 表示因子 k 高度冗余.
+        惩罚 = mean(max(0, vrr_threshold - VRR_k))  # VRR < threshold 的因子扣分
+
+        lambda_redundancy = 0.05 (v1.1 从 0.1 降为 0.05, 避免与 IC 主目标双重惩罚)
+
+        look-ahead bias 防护:
+        - 正交化作为 post_transform_hook, 随 pipeline.fit(train_factor) 在 train 上估计 W
+        - transform 时用 train 的 W 应用到 test
+        - get_diagnostics() 返回的 F/T 是 train 上的, 无 look-ahead
+        """
+        # config.orthogonalization 默认 None (PipelineV2Config), 需先检查
+        if config.orthogonalization is None or not config.orthogonalization.enabled:
+            return 0.0  # 正交化未启用, 无冗余诊断
+
+        # 从 OrthogonalizerAdapter (post_transform_hook) 获取 F/T 矩阵
+        for hook in getattr(pipeline, 'post_transform_hooks', []):
+            if hasattr(hook, 'get_diagnostics'):
+                diag = hook.get_diagnostics()
+                if 'F_stacked' in diag and diag['F_stacked'] is not None:
+                    from factor_pipeline.modules.factor_orthogonalizer.core.diagnostics import (
+                        OrthogonalizationDiagnostics
+                    )
+                    vrr = OrthogonalizationDiagnostics.compute_vrr(
+                        diag['F_stacked'], diag['T_stacked']
+                    )
+                    vrr_threshold = config.orthogonalization.vrr_threshold
+                    penalty = float(np.mean([
+                        max(0.0, vrr_threshold - v) for v in vrr
+                    ]))
+                    return penalty
+        return 0.0
 
     # =========================================================================
     # 扩展窗口交叉验证
@@ -539,6 +714,7 @@ class EndToEndThresholdOptimizer:
         forward_returns: pd.DataFrame,
         n_jobs: int = 1,
         show_progress: bool = True,
+        validate_significance: bool = False,  # v2.6.0 E7: Layer 3 显著性最终验证
     ) -> Dict[str, float]:
         """
         执行端到端阈值优化。
@@ -553,6 +729,9 @@ class EndToEndThresholdOptimizer:
             并行任务数（默认 1）
         show_progress : bool
             是否显示进度条
+        validate_significance : bool
+            v2.6.0 E7: 是否在最优解找到后运行 Layer 3 显著性检验
+            (默认 False, 仅最终验证, 计算成本约束)
 
         Returns
         -------
@@ -573,8 +752,19 @@ class EndToEndThresholdOptimizer:
             params = {}
             for name, spec in self.search_space.items():
                 if spec['type'] == 'float':
-                    params[name] = trial.suggest_float(
-                        name, spec['low'], spec['high']
+                    if spec.get('log', False):
+                        # v2.6.0 E5: log-uniform 采样 (λ 跨度大)
+                        params[name] = trial.suggest_float(
+                            name, spec['low'], spec['high'], log=True
+                        )
+                    else:
+                        params[name] = trial.suggest_float(
+                            name, spec['low'], spec['high']
+                        )
+                elif spec['type'] == 'categorical':
+                    # v2.6.0 E5: categorical 采样 (orth_method/align_mode)
+                    params[name] = trial.suggest_categorical(
+                        name, spec['choices']
                     )
 
             # 约束: 确保静态阈值 > 动态阈值
@@ -621,7 +811,151 @@ class EndToEndThresholdOptimizer:
             f"best_params={self.best_params}"
         )
 
+        # v2.6.0 P3-15 / E7: Layer 3 显著性最终验证 (可选)
+        self.significance_report = None
+        if validate_significance:
+            logger.info("Running Layer 3 significance validation...")
+            try:
+                self.significance_report = self._validate_significance(
+                    self.best_params, factor_data, forward_returns
+                )
+                if self.significance_report.get('warning'):
+                    logger.warning(self.significance_report['warning'])
+            except Exception as e:
+                logger.warning(f"Layer 3 significance validation failed: {e}")
+                self.significance_report = {
+                    'n_significant': 0, 'n_total': 0,
+                    'significance_ratio': 0.0, 'details': {},
+                    'warning': f'显著性验证失败: {e}',
+                }
+
         return self.best_params
+
+    def _validate_significance(
+        self,
+        best_params: Dict[str, float],
+        factor_data: Dict[str, pd.DataFrame],
+        forward_returns: pd.DataFrame,
+    ) -> Dict:
+        """对最优配置运行 Layer 3 显著性检验 (v2.6.0 P3-15 / E7)
+
+        使用 FactorSignificanceTest (Belloni et al. 2014 PDS Lasso + HC3 + BH 校正)
+        评估 best_params 下各因子的增量显著性.
+
+        注意: 计算成本高 (K 次 LassoCV + K 次 OLS), 仅用于最终验证,
+        不用于每 trial 评估 (计算成本约束).
+
+        Args:
+            best_params: 最优参数字典
+            factor_data: 因子数据
+            forward_returns: 前向收益率
+
+        Returns:
+            {
+                'n_significant': int,
+                'n_total': int,
+                'significance_ratio': float,
+                'details': Dict[str, Dict],
+                'warning': Optional[str],  # significance_ratio < 0.5 时警告
+            }
+        """
+        from factor_pipeline.backtest.factor_significance import FactorSignificanceTest
+
+        # 空 factor_data 防护
+        if not factor_data:
+            return {
+                'n_significant': 0, 'n_total': 0,
+                'significance_ratio': 0.0, 'details': {},
+                'warning': '因子数据为空, 无法验证',
+            }
+
+        # 用 best_params 构造 config, 处理因子
+        config = self._params_to_config(best_params)
+        pipeline = FactorProcessingPipelineV2(config=config, strict_mode=False)
+        try:
+            pipeline.fit(factor_data)
+            processed = pipeline.transform(factor_data)
+        except Exception as e:
+            return {
+                'n_significant': 0, 'n_total': len(factor_data),
+                'significance_ratio': 0.0, 'details': {},
+                'warning': f'Pipeline 处理失败: {e}',
+            }
+
+        if not processed:
+            return {
+                'n_significant': 0, 'n_total': 0,
+                'significance_ratio': 0.0, 'details': {},
+                'warning': 'Pipeline 处理后无因子',
+            }
+
+        # 运行 Layer 3 显著性检验
+        fst = FactorSignificanceTest(
+            method='double_lasso', alpha=0.05,
+            correction='benjamini_hochberg',
+        )
+        factor_names = list(processed.keys())
+
+        # v2.6.0 E7: 对齐 + dropna (LassoCV 不接受 NaN)
+        # 1. 对齐所有因子到共同的 (date, stock) 索引
+        # 2. 与 forward_returns 对齐
+        # 3. 删除含 NaN 的行 (保证 LassoCV 能跑)
+        aligned_factors = {}
+        common_dates = processed[factor_names[0]].columns.intersection(
+            forward_returns.index
+        )
+        common_stocks = processed[factor_names[0]].index.intersection(
+            forward_returns.columns
+        )
+        for name in factor_names:
+            df = processed[name].loc[common_stocks, common_dates]
+            aligned_factors[name] = df
+        aligned_returns = forward_returns.loc[common_dates, common_stocks]
+
+        # 构造堆叠矩阵后 dropna (FactorSignificanceTest._stack_factor_returns 不 dropna)
+        try:
+            fst.fit(aligned_factors, aligned_returns, factor_names)
+            # 内部 F_/y_ 可能含 NaN, dropna
+            valid_mask = ~(np.isnan(fst.F_).any(axis=1) | np.isnan(fst.y_))
+            if valid_mask.sum() < len(factor_names) + 5:
+                # 有效样本不足, 直接返回 0
+                return {
+                    'n_significant': 0, 'n_total': len(factor_names),
+                    'significance_ratio': 0.0, 'details': {},
+                    'warning': f'有效样本不足 ({valid_mask.sum()} < {len(factor_names)+5})',
+                }
+            fst.F_ = fst.F_[valid_mask]
+            fst.y_ = fst.y_[valid_mask]
+            if fst.y_normalized_ is not None:
+                fst.y_normalized_ = fst.y_normalized_[valid_mask]
+            results = fst.test_all_factors()
+        except Exception as e:
+            return {
+                'n_significant': 0, 'n_total': len(factor_names),
+                'significance_ratio': 0.0, 'details': {},
+                'warning': f'显著性检验失败: {e}',
+            }
+
+        n_significant = sum(
+            1 for r in results.values() if r.get('is_significant', False)
+        )
+        n_total = len(results)
+        significance_ratio = n_significant / n_total if n_total > 0 else 0.0
+
+        warning = None
+        if significance_ratio < 0.5:
+            warning = (
+                f"显著性比例 {significance_ratio:.1%} < 50%, "
+                f"建议检查因子冗余或调整 P3-14 redundancy_penalty"
+            )
+
+        return {
+            'n_significant': n_significant,
+            'n_total': n_total,
+            'significance_ratio': significance_ratio,
+            'details': results,
+            'warning': warning,
+        }
 
     def get_best_config(self) -> 'PipelineV2Config':
         """获取最优配置"""

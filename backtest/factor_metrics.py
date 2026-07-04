@@ -110,9 +110,11 @@ def compute_ic_series(
     factor: np.ndarray,
     returns: np.ndarray,
     method: Literal['rank', 'pearson'] = 'rank',
+    weighting: Literal['equal', 'ewma'] = 'equal',
+    halflife: Optional[int] = None,
 ) -> np.ndarray:
     """
-    计算 IC 时间序列。
+    计算 IC 时间序列 (v2.6.0 P3-1' 新增 EWMA 加权选项).
 
     手工计算: 对每期 t，计算 factor[:, t] 与 return[:, t+1] 的 IC。
 
@@ -124,11 +126,24 @@ def compute_ic_series(
         收益率矩阵
     method : 'rank' | 'pearson'
         IC 计算方法
+    weighting : 'equal' | 'ewma'  (v2.6.0 P3-1' 新增)
+        'equal': 等权 (默认, 向后兼容, 返回完整 IC 序列)
+        'ewma': 指数加权, 近期 IC 权重更高 (返回加权后的标量, shape (1,))
+    halflife : int, optional
+        EWMA 半衰期 (仅 weighting='ewma' 时生效)
+        默认: max(1, len(ic_series) // 4) (自适应)
 
     Returns
     -------
-    np.ndarray, shape (n_periods - 1,)
-        IC 序列
+    np.ndarray
+        weighting='equal': shape (n_periods - 1,), IC 序列
+        weighting='ewma': shape (1,), 加权 IC 标量 (有效 IC 不足时为 NaN)
+
+    学术依据:
+    - equal: 行业标准
+    - ewma: Ferson & Siegel (2001) JF 56(3):967-982 (条件信息时变加权)
+            Barroso & Santa-Clara (2015) JFE 115(3):464-482 (IC 高波动期衰减)
+            RiskMetrics (1996) EWMA 框架
     """
     n_periods = factor.shape[1]
     ic_series = np.full(n_periods - 1, np.nan)
@@ -142,6 +157,25 @@ def compute_ic_series(
 
     for t in range(n_periods - 1):
         ic_series[t] = ic_func(factor[:, t], returns[:, t + 1])
+
+    # v2.6.0 P3-1': EWMA 时间加权
+    if weighting == 'ewma':
+        n = len(ic_series)
+        if halflife is None:
+            halflife = max(1, n // 4)
+
+        # EWMA 权重: w[t] = (1-alpha)^(n-1-t), 近期 (t 大) 权重大
+        # alpha = 1 - exp(-ln2/halflife), 半衰期含义: w[t-halflife] = 0.5 * w[t]
+        alpha = 1.0 - np.exp(-np.log(2.0) / max(halflife, 1))
+        weights = (1.0 - alpha) ** np.arange(n)[::-1]
+        weights /= weights.sum()
+
+        # 加权求和 (忽略 NaN)
+        valid = ~np.isnan(ic_series)
+        if valid.sum() < MIN_VALID_PAIRS:
+            return np.array([np.nan])
+        weighted_ic = np.nansum(ic_series * weights)
+        return np.array([weighted_ic])
 
     return ic_series
 

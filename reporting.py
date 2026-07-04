@@ -37,7 +37,7 @@ class PipelineExecutionReport:
     """
     
     pipeline_name: str = "factor_pipeline"
-    pipeline_version: str = "2.4.0"
+    pipeline_version: str = "2.5.0"
     start_time: float = field(default_factory=time.time)
     end_time: float = 0.0
     steps: list[StepExecutionRecord] = field(default_factory=list)

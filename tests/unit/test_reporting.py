@@ -19,7 +19,7 @@ class TestPipelineExecutionReport:
         """测试默认创建"""
         report = PipelineExecutionReport()
         assert report.pipeline_name == "factor_pipeline"
-        assert report.pipeline_version == "2.4.0"
+        assert report.pipeline_version == "2.5.0"
         assert report.step_count == 0
         assert report.success is True  # 无步骤时默认为成功
     

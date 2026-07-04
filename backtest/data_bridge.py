@@ -156,9 +156,9 @@ class DataBridge:
         for name, df in filtered_factors.items():
             # df: (n_stocks, n_dates) → 转置为 (n_dates, n_stocks)
             factor_df = df.T.copy()
-            # 统一索引类型以便 reindex
-            factor_df.index = factor_df.index.astype(close_index.dtype)
-            factor_df.columns = factor_df.columns.astype(close_columns.dtype)
+            # 统一索引类型为 str 以便 reindex (pandas 2.x: astype(object) 不转换 Timestamp)
+            factor_df.index = factor_df.index.astype(str)
+            factor_df.columns = factor_df.columns.astype(str)
             # reindex 对齐: 行(日期)与列(股票)都对齐到 close_df,缺失填 NaN
             factor_df = factor_df.reindex(index=close_index, columns=close_columns)
             factor_dict_for_v3[name] = factor_df

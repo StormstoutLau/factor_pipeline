@@ -247,6 +247,262 @@ class TestICSeries(unittest.TestCase):
 
         print(f"\n  手工校验: Pearson IC series mean={np.nanmean(result):.6f}")
 
+    # =====================================================================
+    # E3 (v2.6.0): IC 时间加权 EWMA
+    # =====================================================================
+
+    def test_e3_01_compute_ic_series_equal_weighting_default(self):
+        """[v2.6.0-E3-01] 默认 weighting='equal', 与现有行为一致."""
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        factor = np.random.randn(20, 10)
+        returns = np.random.randn(20, 10)
+
+        # 不传 weighting (使用默认值)
+        result_default = compute_ic_series(factor, returns, method='rank')
+        # 显式传 weighting='equal'
+        result_equal = compute_ic_series(factor, returns, method='rank', weighting='equal')
+
+        # 两者应完全一致
+        self.assertEqual(len(result_default), 9)
+        np.testing.assert_array_equal(result_default, result_equal)
+
+        print(f"\n  手工校验 E3-01: 默认 weighting='equal' 一致")
+
+    def test_e3_02_compute_ic_series_ewma_returns_shape_one(self):
+        """[v2.6.0-E3-02] weighting='ewma' 返回 shape (1,) 数组."""
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        factor = np.random.randn(20, 10)
+        returns = np.random.randn(20, 10)
+
+        result = compute_ic_series(factor, returns, method='rank', weighting='ewma', halflife=3)
+
+        self.assertEqual(result.shape, (1,),
+                         f"EWMA 应返回 shape (1,), 实际 {result.shape}")
+        self.assertFalse(np.isnan(result[0]),
+                         "EWMA 结果不应为 NaN (输入数据有效)")
+
+        print(f"\n  手工校验 E3-02: EWMA shape={result.shape}, value={result[0]:.6f}")
+
+    def test_e3_03_compute_ic_series_ewma_halflife_default(self):
+        """[v2.6.0-E3-03] halflife=None 时自动设为 n_periods // 4."""
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        n_periods = 24
+        factor = np.random.randn(50, n_periods)
+        returns = np.random.randn(50, n_periods)
+
+        # halflife=None (默认), 期望自动设为 n_periods // 4 = 6
+        # 但实际 ic_series 长度为 n_periods - 1 = 23, 所以 halflife = 23 // 4 = 5
+        expected_halflife = (n_periods - 1) // 4  # 5
+
+        # 用 halflife=None 和 halflife=expected_halflife 应得到相同结果
+        result_auto = compute_ic_series(factor, returns, weighting='ewma')
+        result_explicit = compute_ic_series(factor, returns, weighting='ewma',
+                                            halflife=expected_halflife)
+
+        self.assertAlmostEqual(result_auto[0], result_explicit[0], places=10,
+                               msg="halflife=None 应自动设为 len(ic_series)//4")
+
+        print(f"\n  手工校验 E3-03: 自动 halflife={expected_halflife}, "
+              f"IC={result_auto[0]:.6f}")
+
+    def test_e3_04_compute_ic_series_ewma_weights_correct(self):
+        """[v2.6.0-E3-04] EWMA 权重手工计算与实现对比精度 < 1e-10."""
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        n_stocks, n_periods = 30, 10
+        factor = np.random.randn(n_stocks, n_periods)
+        returns = np.random.randn(n_stocks, n_periods)
+
+        halflife = 4
+        # 先获取等权 IC 序列
+        ic_series_equal = compute_ic_series(factor, returns, method='pearson',
+                                             weighting='equal')
+        # 手工计算 EWMA 权重
+        # alpha = 1 - exp(-ln2/halflife)
+        # w[t] = (1-alpha)^(T-1-t), 即最近一期权重最大
+        alpha = 1.0 - np.exp(-np.log(2.0) / halflife)
+        n = len(ic_series_equal)
+        weights = (1.0 - alpha) ** np.arange(n)[::-1]
+        weights /= weights.sum()
+
+        # 手工加权 IC
+        valid = ~np.isnan(ic_series_equal)
+        expected_weighted_ic = np.nansum(ic_series_equal * weights)
+
+        # 实现 EWMA IC
+        result = compute_ic_series(factor, returns, method='pearson',
+                                   weighting='ewma', halflife=halflife)
+
+        self.assertAlmostEqual(result[0], expected_weighted_ic, places=10,
+                               msg=f"EWMA 权重计算错误: {result[0]} != {expected_weighted_ic}")
+
+        # 同时验证权重正确性: 权重应单调递增 (近期权重更大)
+        self.assertTrue(np.all(np.diff(weights) > 0),
+                        "EWMA 权重应单调递增 (近期权重更大)")
+        # 最近一期权重应最大, 等于 1.0 / sum (因为 (1-alpha)^0 = 1)
+        # 验证: w[t] = (1-alpha)^(n-1-t), 所以 w[-1] = (1-alpha)^0 = 1.0 (未归一化)
+        unnormalized_last = 1.0
+        sum_unnormalized = np.sum((1.0 - alpha) ** np.arange(n)[::-1])
+        expected_last_weight = unnormalized_last / sum_unnormalized
+        self.assertAlmostEqual(weights[-1], expected_last_weight, places=10,
+                               msg="最近一期权重应等于 1/sum (未归一化值=1)")
+
+        print(f"\n  手工校验 E3-04: 权重单调递增")
+        print(f"    weights[0]={weights[0]:.6f} (最远)")
+        print(f"    weights[-1]={weights[-1]:.6f} (最近)")
+        print(f"    EWMA IC={result[0]:.6f}, 手工 IC={expected_weighted_ic:.6f}")
+
+    def test_e3_05_compute_ic_series_ewma_recent_emphasis(self):
+        """[v2.6.0-E3-05] 近期 IC 高时, EWMA IC > 等权 IC.
+
+        注意: compute_ic_series 是跨期前瞻 (factor[:, t] vs returns[:, t+1]).
+        所以构造 returns[:, t+1] = ic_target_t * factor[:, t] + noise,
+        使 corr(factor[:, t], returns[:, t+1]) ≈ ic_target_t.
+        """
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        n_stocks, n_periods = 100, 24
+        factor = np.random.randn(n_stocks, n_periods)
+        returns = np.zeros_like(factor)
+
+        # 构造 IC 上升场景: 前 12 期 IC=0.01, 后 12 期 IC=0.10
+        # returns[:, t+1] = ic_target_t * factor[:, t] + noise (跨期前瞻关系)
+        for t in range(n_periods - 1):
+            ic_target = 0.01 if t < 12 else 0.10
+            returns[:, t + 1] = ic_target * factor[:, t] + np.random.randn(n_stocks) * 0.5
+
+        ic_equal = compute_ic_series(factor, returns, method='pearson',
+                                     weighting='equal')
+        ic_ewma = compute_ic_series(factor, returns, method='pearson',
+                                    weighting='ewma', halflife=6)
+
+        equal_mean = np.nanmean(ic_equal)
+        ewma_value = ic_ewma[0]
+
+        # EWMA 应更接近近期 IC (0.10), 等权应接近全局均值 (~0.055)
+        self.assertGreater(ewma_value, equal_mean,
+                           "EWMA 应更接近近期 IC (上升场景), 应大于等权 IC")
+
+        print(f"\n  手工校验 E3-05: 近期加权")
+        print(f"    equal IC mean: {equal_mean:.4f} (预期 ~0.055)")
+        print(f"    EWMA IC:       {ewma_value:.4f} (预期 > 0.055, 更接近近期 0.10)")
+
+    def test_e3_06_compute_ic_series_ewma_nan_handling(self):
+        """[v2.6.0-E3-06] 含 NaN 时, EWMA 忽略 NaN 加权."""
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        n_stocks, n_periods = 30, 10
+        factor = np.random.randn(n_stocks, n_periods)
+        returns = np.random.randn(n_stocks, n_periods)
+
+        # 在第 3 期注入 NaN (整列)
+        factor[:, 3] = np.nan
+
+        halflife = 4
+        ic_equal = compute_ic_series(factor, returns, method='pearson',
+                                     weighting='equal')
+        ic_ewma = compute_ic_series(factor, returns, method='pearson',
+                                    weighting='ewma', halflife=halflife)
+
+        # 等权序列中 t=2 (对应 factor[:, 2] vs returns[:, 3]) 应为 NaN
+        # 因为 factor[:, 3] 已被注入 NaN (但 returns[:, 3] 是有效的)
+        # 实际上 compute_pearson_ic 内部会忽略 NaN 配对
+        # 如果整列 factor 为 NaN, 则无法计算 IC, 返回 NaN
+        self.assertTrue(np.isnan(ic_equal[2]) or np.isfinite(ic_equal[2]),
+                        "t=2 的 IC 状态取决于实现")
+
+        # EWMA 结果应为有限值 (因为其他期 IC 有效)
+        # 如果有效 IC 不足 MIN_VALID_PAIRS=3, 则返回 NaN
+        valid_count = np.sum(~np.isnan(ic_equal))
+        if valid_count >= 3:
+            self.assertFalse(np.isnan(ic_ewma[0]),
+                             "EWMA 应在有效 IC 足够时返回有限值")
+        else:
+            self.assertTrue(np.isnan(ic_ewma[0]),
+                            "EWMA 应在有效 IC 不足时返回 NaN")
+
+        # 手工计算 (nansum)
+        alpha = 1.0 - np.exp(-np.log(2.0) / halflife)
+        n = len(ic_equal)
+        weights = (1.0 - alpha) ** np.arange(n)[::-1]
+        weights /= weights.sum()
+        expected = np.nansum(ic_equal * weights)
+
+        if not np.isnan(ic_ewma[0]):
+            self.assertAlmostEqual(ic_ewma[0], expected, places=10,
+                                   msg="EWMA NaN 处理与手工 nansum 一致")
+
+        print(f"\n  手工校验 E3-06: NaN 处理")
+        print(f"    valid IC count: {valid_count}")
+        print(f"    EWMA IC: {ic_ewma[0]:.6f}, 手工 nansum: {expected:.6f}")
+
+    def test_e3_07_optimizer_compute_ic_ewma_integration(self):
+        """[v2.6.0-E3-07] optimizer._compute_ic(weighting='ewma') 返回标量."""
+        from factor_pipeline.optimizer import EndToEndThresholdOptimizer
+
+        np.random.seed(42)
+        n_stocks, n_periods = 50, 20
+        factor_values = np.random.randn(n_stocks, n_periods)
+        forward_returns = 0.3 * factor_values + 0.7 * np.random.randn(n_stocks, n_periods)
+
+        optimizer = EndToEndThresholdOptimizer(n_trials=1)
+
+        # 等权模式
+        ic_equal = optimizer._compute_ic(factor_values, forward_returns,
+                                          weighting='equal')
+        # EWMA 模式
+        ic_ewma = optimizer._compute_ic(factor_values, forward_returns,
+                                         weighting='ewma', halflife=5)
+
+        # 两者应都返回 float 标量
+        self.assertIsInstance(ic_equal, float,
+                              "等权 IC 应返回 float 标量")
+        self.assertIsInstance(ic_ewma, float,
+                              "EWMA IC 应返回 float 标量")
+        self.assertFalse(np.isnan(ic_ewma), "EWMA IC 不应为 NaN")
+
+        print(f"\n  手工校验 E3-07: optimizer 集成")
+        print(f"    equal IC: {ic_equal:.6f}")
+        print(f"    EWMA IC:  {ic_ewma:.6f}")
+
+    def test_e3_08_compute_ic_series_backward_compatible(self):
+        """[v2.6.0-E3-08] 不传 weighting/halflife 时, 行为与 v2.5.0 完全一致."""
+        from factor_pipeline.backtest.factor_metrics import compute_ic_series
+
+        np.random.seed(42)
+        n_stocks, n_periods = 30, 12
+        factor = np.random.randn(n_stocks, n_periods)
+        returns = np.random.randn(n_stocks, n_periods)
+
+        # v2.6.0 调用 (带 weighting='equal')
+        result_v26 = compute_ic_series(factor, returns, method='rank',
+                                       weighting='equal')
+        # v2.5.0 等价调用 (不传 weighting, 使用默认值)
+        result_v25 = compute_ic_series(factor, returns, method='rank')
+
+        # 完全一致 (形状 + 数值)
+        self.assertEqual(result_v26.shape, result_v25.shape)
+        np.testing.assert_array_equal(result_v26, result_v25)
+
+        # 验证默认 weighting 值为 'equal'
+        import inspect
+        sig = inspect.signature(compute_ic_series)
+        self.assertEqual(sig.parameters['weighting'].default, 'equal',
+                         msg="weighting 默认值应为 'equal'")
+
+        print(f"\n  手工校验 E3-08: 向后兼容")
+        print(f"    v2.6.0 result == v2.5.0 result: True")
+        print(f"    shape: {result_v26.shape}")
+
 
 # =============================================================================
 # D. ICIR

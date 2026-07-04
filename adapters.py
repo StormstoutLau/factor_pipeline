@@ -761,3 +761,262 @@ class GarchWhiteningAdapter(PipelineStep):
             avg_aic = np.mean([m.aic for m in self._models.values()])
             stats['average_aic'] = avg_aic
         return stats
+
+
+# =============================================================================
+# v2.5.0 正交化适配器 (Layer 2, ADR-020)
+# =============================================================================
+
+class OrthogonalizerAdapter:
+    r"""正交化适配器 — Layer 2 接入点 (v2.5.0, ADR-020)
+
+    与 NeutralizerAdapter 模式一致, 但处理多因子输入 (Dict[str, DataFrame]).
+    架构层: Layer 2 (无监督变换)
+    位置: Pipeline.transform() 输出后 (post_transform_hook)
+
+    设计要点:
+    - REQUIRED 依赖 (scipy/sklearn), 无 fallback
+    - is_fallback_mode 永远为 False
+    - enabled=False 时零开销 (不导入 core, hooks 为空)
+    - 构造时缓存正交化器类, fit() 不重复导入
+
+    I/O:
+        fit(factor_dict: Dict[str, pd.DataFrame]) -> Self
+        transform(factor_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]
+
+    Args:
+        config: OrthogonalizationConfig 实例 (或含相同属性的任意对象)
+    """
+
+    def __init__(self, config):
+        """从 OrthogonalizationConfig 构造适配器
+
+        O2.8.4: enabled=False 时零开销 (不导入 core)
+        """
+        self.enabled = getattr(config, 'enabled', False)
+        self.method = getattr(config, 'method', 'symmetric')
+        self.window_mode = getattr(config, 'window_mode', 'full_sample')
+        self.window_size = getattr(config, 'window_size', 252)
+        self.min_obs = getattr(config, 'min_obs', 60)
+        self.shrinkage = getattr(config, 'shrinkage', True)
+        self.align_mode = getattr(config, 'align_mode', 'intersection')
+
+        # 方法特定参数
+        self.ridge_lambda = getattr(config, 'ridge_lambda', 1.0)
+        self.ridge_lambda_selection = getattr(config, 'ridge_lambda_selection', 'fixed')
+        self.pca_variance_threshold = getattr(config, 'pca_variance_threshold', 0.95)
+        self.pca_center = getattr(config, 'pca_center', True)
+        self.gs_order = getattr(config, 'gs_order', None)
+        self.gs_reorthogonalize = getattr(config, 'gs_reorthogonalize', False)
+
+        # 状态
+        self._orthogonalizer = None
+        self._orthogonalizer_class = None
+        self._cross_sectional = None
+        self.is_fitted_ = False
+        self.is_fallback_mode = False  # REQUIRED 依赖, 永远 False
+
+        # 对齐后的 index/columns (测试检查)
+        self._aligned_index_ = None
+        self._aligned_columns_ = None
+        self._factor_names_ = None
+        self.nan_drop_ratio_ = 0.0
+
+        # O2.8.4: enabled=False 时零开销 (不导入 core)
+        if not self.enabled:
+            return
+        # 仅 enabled=True 时才导入
+        self._orthogonalizer_class = self._get_orthogonalizer_class()
+
+    def _get_orthogonalizer_class(self):
+        """获取正交化器类 (构造时调用一次, 缓存)
+
+        REQUIRED 依赖 (factor_orthogonalizer 已内化), 失败抛 AdapterImportError
+        """
+        try:
+            from factor_pipeline.modules.factor_orthogonalizer.core import (
+                SymmetricOrthogonalizer,
+                GramSchmidtOrthogonalizer,
+                PCAOrthogonalizer,
+                CholeskyOrthogonalizer,
+                RidgeOrthogonalizer,
+            )
+        except ImportError as e:
+            raise AdapterImportError(
+                f"OrthogonalizerAdapter: REQUIRED 依赖 factor_orthogonalizer 导入失败: {e}. "
+                f"factor_orthogonalizer 模块已内化, 请运行 pip install -e . 安装 factor_pipeline",
+                module_path="factor_pipeline.modules.factor_orthogonalizer.core",
+                class_name=f"{self.method}Orthogonalizer",
+            ) from e
+
+        method_map = {
+            'symmetric': SymmetricOrthogonalizer,
+            'gram_schmidt': GramSchmidtOrthogonalizer,
+            'pca': PCAOrthogonalizer,
+            'cholesky': CholeskyOrthogonalizer,
+            'ridge': RidgeOrthogonalizer,
+        }
+        if self.method not in method_map:
+            raise ValueError(
+                f"未知 method: {self.method}, "
+                f"支持: {list(method_map.keys())}"
+            )
+        return method_map[self.method]
+
+    def _build_orthogonalizer_kwargs(self):
+        """根据 method 构造正交化器 __init__ 参数"""
+        if self.method == 'symmetric':
+            return {}  # threshold_mode 使用 O1 默认 'auto'
+        elif self.method == 'gram_schmidt':
+            return {
+                'order': self.gs_order,
+                'reorthogonalize': self.gs_reorthogonalize,
+            }
+        elif self.method == 'pca':
+            return {
+                'variance_threshold': self.pca_variance_threshold,
+                'center': self.pca_center,
+            }
+        elif self.method == 'cholesky':
+            return {}
+        elif self.method == 'ridge':
+            return {
+                'lambda_': self.ridge_lambda,
+                'lambda_selection': self.ridge_lambda_selection,
+            }
+        return {}
+
+    def fit(self, factor_dict, **kwargs):
+        """拟合正交化矩阵 W
+
+        Args:
+            factor_dict: {因子名: (N_stocks, T_dates) DataFrame}
+                         K 个因子的预处理后输出
+
+        架构:
+        - 全样本模式: 堆叠为 (N·T, K) 估计单一 W
+        - 滚动模式: 委托给 RollingOrthogonalizer (O4 阶段)
+
+        Raises:
+            ValueError: K < 2 / 无公共 index / N < K / NaN 丢弃后样本不足
+        """
+        if not self.enabled:
+            return self
+        if len(factor_dict) < 2:
+            raise ValueError(
+                f"正交化需要至少 2 个因子, 收到 {len(factor_dict)} 个"
+            )
+
+        # 1. 对齐 + 堆叠为 (N·T, K)
+        from factor_pipeline.modules.factor_orthogonalizer.utils.stacking import (
+            stack_factors_cross_section
+        )
+        F_stacked, factor_names, aligned_index, aligned_columns = (
+            stack_factors_cross_section(factor_dict, self.align_mode)
+        )
+
+        self._factor_names_ = factor_names
+        self._aligned_index_ = aligned_index
+        self._aligned_columns_ = aligned_columns
+
+        # 2. NaN 检查与丢弃 (O2.8.2)
+        n_before = F_stacked.shape[0]
+        mask = ~np.any(np.isnan(F_stacked), axis=1)
+        F_stacked = F_stacked[mask]
+        n_after = F_stacked.shape[0]
+        self.nan_drop_ratio_ = 1.0 - n_after / n_before if n_before > 0 else 0.0
+
+        if self.nan_drop_ratio_ > 0.5:
+            warnings.warn(
+                f"正交化 fit 丢弃了 {self.nan_drop_ratio_ * 100:.1f}% 的样本 (NaN), "
+                f"检查因子对齐或使用 align_mode='intersection'",
+                UserWarning
+            )
+
+        # 3. N >= K 检查
+        N, K = F_stacked.shape
+        if N < K:
+            raise ValueError(
+                f"NaN 丢弃后样本不足: N={N} < K={K}, "
+                f"无法估计 {K}×{K} Gram 矩阵"
+            )
+        if N < self.min_obs:
+            raise ValueError(
+                f"样本不足: N={N} < min_obs={self.min_obs}"
+            )
+
+        # 4. 构造正交化器实例并拟合 W
+        ctor_kwargs = self._build_orthogonalizer_kwargs()
+        self._orthogonalizer = self._orthogonalizer_class(**ctor_kwargs)
+        self._orthogonalizer.fit(F_stacked)
+
+        # 5. 构造 CrossSectionalOrthogonalizer 协调器 (O2.8.6: W 缓存)
+        from factor_pipeline.modules.factor_orthogonalizer.cross_sectional import (
+            CrossSectionalOrthogonalizer
+        )
+        self._cross_sectional = CrossSectionalOrthogonalizer(self._orthogonalizer)
+
+        # v2.6.0 P3-14 (E6): 保存 F/T 矩阵用于冗余诊断
+        # F_stacked: (N, K) 原始因子 (NaN 已丢弃)
+        # T_stacked: (N, K) 正交化后因子
+        self._F_stacked_ = F_stacked.copy()
+        self._T_stacked_ = self._orthogonalizer.transform(F_stacked)
+
+        self.is_fitted_ = True
+        logger.info(
+            f"正交化器拟合完成, method={self.method}, "
+            f"K={K}, N·T={N}, nan_drop={self.nan_drop_ratio_:.1%}"
+        )
+        return self
+
+    def get_diagnostics(self):
+        """返回 F/T 矩阵用于冗余诊断 (v2.6.0 P3-14 / E6)
+
+        用于 optimizer._redundancy_penalty 计算 VRR (Variance Retention Ratio).
+
+        Returns
+        -------
+        dict
+            {'F_stacked': (N, K), 'T_stacked': (N, K)} 或 {} (未 fit / 未启用)
+        """
+        if not getattr(self, 'is_fitted_', False):
+            return {}
+        F = getattr(self, '_F_stacked_', None)
+        T = getattr(self, '_T_stacked_', None)
+        if F is None or T is None:
+            return {}
+        return {
+            'F_stacked': F,
+            'T_stacked': T,
+        }
+
+    def transform(self, factor_dict, **kwargs):
+        """应用正交化到每期截面
+
+        对每期 t: T_t = F_t @ W (W 在 fit 中估计)
+
+        O2.8.2: 含 NaN 的行填 0 应用 W, 再恢复 NaN
+        O2.8.6: full_sample 模式 W 缓存命中
+        """
+        if not self.enabled or not self.is_fitted_:
+            return factor_dict
+        return self._cross_sectional.transform(factor_dict, self.align_mode)
+
+    def fit_transform(self, factor_dict, **kwargs):
+        """拟合并变换"""
+        return self.fit(factor_dict, **kwargs).transform(factor_dict, **kwargs)
+
+    def get_stats(self):
+        """获取步骤统计信息"""
+        return {
+            'name': 'Orthogonalizer',
+            'step_type': 'orthogonalization',
+            'method': self.method,
+            'enabled': self.enabled,
+            'is_fitted': self.is_fitted_,
+            'align_mode': self.align_mode,
+            'window_mode': self.window_mode,
+            'nan_drop_ratio': self.nan_drop_ratio_,
+            'factor_names': self._factor_names_,
+            'fallback_mode': self.is_fallback_mode,
+        }
