@@ -6,7 +6,7 @@
 
 ## Unified Factor Processing Pipeline
 
-**Factor Processing Pipeline** is a unified factor processing orchestration system for quantitative investment. The system has evolved from v1.0's "fixed pipeline" to v2.4.0's "intelligent adaptive + backtest closed-loop + external module internalization", and is planning v2.5.0's **multi-factor orthogonalization three-layer architecture** (Layer 1 per-factor / Layer 2 cross-factor transformation / Layer 3 target-aware testing). Core capabilities include **factor fingerprint diagnostic layer**, **semantic-statistical fusion classification**, **three differentiated processing pipelines**, **optional GARCH whitening**, **continuous migration monitoring**, **backtest engine integration**, **L2 disk cache layer**, and **dual-track drift fusion judgment**.
+**Factor Processing Pipeline** is a unified factor processing orchestration system for quantitative investment. The system has evolved from v1.0's "fixed pipeline" to v2.5.0's "multi-factor orthogonalization three-layer architecture", and is advancing v3.0.0's **fingerprint dimension expansion and migration detection enhancement** (ADR-024 fingerprint 21-dim + ADR-002a KS BH-FDR). Core capabilities include **factor fingerprint diagnostic layer (21-dim, v3.0.0 T1)**, **semantic-statistical fusion classification**, **three differentiated processing pipelines**, **optional GARCH whitening**, **continuous migration monitoring**, **backtest engine integration**, **L2 disk cache layer**, **multi-factor cross-sectional orthogonalization (5 algorithms)**, and **dual-track drift fusion judgment**.
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **Author**: Scott Peng Liu
@@ -18,6 +18,40 @@
 ---
 
 ## Version Update Summary
+
+### v3.0.0 T1 Fingerprint Dimension Expansion to 21-dim (2026.07, Implemented)
+
+> **Status**: Implemented, 974 passed + 6 skipped + 11 subtests passed (zero regression, 40 new tests vs v3.0.0 T4's 934)
+> **Docs**: [docs/EXECUTION_V3.0.0_T1.md](docs/EXECUTION_V3.0.0_T1.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
+> **Baseline**: 934 passed + 6 skipped (v3.0.0 T4) → 974 passed + 6 skipped (v3.0.0 T1, with 11 subtests)
+> **Scope**: T1 (P1) of v3.0.0 long-term 4 tasks (T1-T4) completed; T2 (streaming) / T3 (CUSUM) pending
+
+**3-Stage Execution (E1-E3)**:
+
+| Stage | Task | Tests | Key Changes |
+|-------|------|-------|-------------|
+| **E1** | Fingerprint core expansion (Red→Green→Review) | 32 | `FactorFingerprint` NamedTuple 13→21-dim (8 new fields default NaN), `FingerprintConfig` 8→14 fields, 8 new computation methods (tail_dependence/gpd_shape POT-MLE/hill_estimator/regime_*/tail_regime_score), ADR-014 tech debt cleanup (statsmodels top-level import) |
+| **E2** | Routing layer integration + test updates | 8 | `PipelineV2Config` adds `enable_multi_dim_routing` (default False), `_get_multi_dim_pipeline_weights` integrates into transform + Step 4 T1 corrections (tail_severity/regime_instability), `_make_fp` refactored to **kwargs pattern |
+| **E3** | Doc sync + full regression | 0 | ADR-024 written to DECISIONS.md, CHANGELOG/CODE_WIKI/README sync, verify_v3_0_0_t1_manual.py 8/8 manual verification, full regression 974 passed |
+
+**1 New ADR**:
+- **ADR-024**: Fingerprint dimension expansion to 21-dim (extends ADR-019 internalized module's fingerprint definition)
+
+**8 Key Design Decisions**:
+1. Tail dependence and regime switching default off (`enable_tail_dependence=False` / `enable_regime_switching=False`), explicit opt-in
+2. POT-MLE replaces Pickands estimator (`scipy.stats.genpareto.fit`), more robust for light-tailed distributions
+3. regime_ic_diff scheme C (first-order diff mean difference), preserves `extract_fingerprint` signature
+4. Routing integration with `enable_multi_dim_routing` toggle (default False, backward compatible)
+5. No extension to `AdaptiveFactorClassifier.classify` (still uses ar1 only), new dims only affect routing correction layer
+6. `_derive_tail_regime_score` M2 two-component weighting (tail_severity + regime_instability)
+7. statsmodels top-level import (ADR-014 tech debt cleanup)
+8. `_make_fp` test helper refactored to `**kwargs` pattern (21-dim field coverage, existing 12 tests backward compatible)
+
+**Academic Basis**:
+- Nelsen, R. B. (2006). *An Introduction to Copulas* (2nd ed.). Springer.
+- Pickands, J. (1975). Statistical inference using extreme order statistics. *Annals of Statistics*, 3(1), 119-131.
+- Hill, B. M. (1975). A simple general approach to inference about the tail of a distribution. *The Annals of Statistics*, 3(5), 1163-1174.
+- Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. *Econometrica*, 57(2), 357-384.
 
 ### v3.0.0 T4 KS Migration BH-FDR Replaces Bonferroni (2026.07, Implemented)
 

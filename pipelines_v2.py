@@ -100,13 +100,16 @@ def _get_multi_dim_pipeline_weights(
 ) -> Dict[str, float]:
     """多维指纹驱动的管道权重计算。
 
-    三叉决策树:
+    五叉决策树 (v3.0.0 T1 扩展至 5 步):
     1. 基底权重: 从 ar1_median 确定初始管道概率（复用 _get_pipeline_weights）
     2. 分布形状修正: skewness/kurtosis 极端 → 向混合偏移 +0.15
     3. 稳定性修正: 低 SNR → 向动态偏移 +0.15
-    4. 归一化: 权重和为 1
+    4. T1 新维度修正 (v3.0.0 T1):
+       4a. 尾部严重度 (gpd_shape/hill_estimator > 0.3): 重尾 → 向 mixed 偏移 +0.10
+       4b. 体制不稳定 (regime_transition_prob > 0.1): → 向 dynamic 偏移 +0.10
+    5. 归一化: 权重和为 1
 
-    手工计算验证:
+    手工计算验证 (既有 3 步):
       基底: static=0.90, mixed=0.10, dynamic=0.00
       分布修正: skew=2.5 > 1.5, kurt=8.0 > 5.0 → mixed 偏差 +0.20
       稳定性修正: snr=1.0 → 不触发
@@ -115,7 +118,7 @@ def _get_multi_dim_pipeline_weights(
       总和=1.0 ✓
 
     Args:
-        fingerprint: 13维因子指纹
+        fingerprint: 21维因子指纹 (v3.0.0 T1, 仅用 skewness/kurtosis/snr/gpd_shape/hill_estimator/regime_transition_prob)
         classification: 分类结果（含 ar1 驱动的初始概率）
         hard_routing_prob: 硬路由阈值
 
@@ -171,7 +174,42 @@ def _get_multi_dim_pipeline_weights(
             weights['mixed'] = max(0.0, weights['mixed'] - snr_shift * 0.5)
         weights['dynamic'] = weights['dynamic'] + snr_shift
 
-    # Step 4: 归一化
+    # Step 4: T1 新维度修正 (v3.0.0 T1, E2)
+    # 4a: 尾部严重度修正 — 重尾因子需复杂处理 → 向 mixed 偏移
+    gpd_shape = fingerprint.gpd_shape
+    hill_est = fingerprint.hill_estimator
+    gpd_valid = not (gpd_shape is None or (isinstance(gpd_shape, float) and np.isnan(gpd_shape)))
+    hill_valid = not (hill_est is None or (isinstance(hill_est, float) and np.isnan(hill_est)))
+
+    # 尾部严重度: 优先用 gpd_shape, 否则 hill_estimator
+    tail_severity = None
+    if gpd_valid:
+        tail_severity = abs(gpd_shape)
+    elif hill_valid:
+        tail_severity = abs(hill_est)
+
+    if tail_severity is not None and tail_severity > 0.3:
+        # 重尾阈值 0.3: 超过 → 向 mixed 偏移 (最多 0.10)
+        tail_shift = min(0.10, (tail_severity - 0.3) / 3.0)
+        if weights['static'] > 0:
+            weights['static'] = max(0.0, weights['static'] - tail_shift)
+        weights['mixed'] = weights['mixed'] + tail_shift
+
+    # 4b: 体制不稳定修正 — regime 频繁转换 → 向 dynamic 偏移
+    regime_trans_prob = fingerprint.regime_transition_prob
+    regime_valid = not (regime_trans_prob is None or
+                       (isinstance(regime_trans_prob, float) and np.isnan(regime_trans_prob)))
+
+    if regime_valid and regime_trans_prob > 0.1:
+        # 体制不稳定阈值 0.1: 超过 → 向 dynamic 偏移 (最多 0.10)
+        regime_shift = min(0.10, (regime_trans_prob - 0.1) / 2.0)
+        if weights['static'] > 0:
+            weights['static'] = max(0.0, weights['static'] - regime_shift * 0.5)
+        if weights['mixed'] > 0:
+            weights['mixed'] = max(0.0, weights['mixed'] - regime_shift * 0.5)
+        weights['dynamic'] = weights['dynamic'] + regime_shift
+
+    # Step 5: 归一化
     total = sum(weights.values())
     if total > 0:
         weights = {k: v / total for k, v in weights.items()}
@@ -666,6 +704,11 @@ class PipelineV2Config:
     # v2.5.0 正交化配置 (Layer 2, ADR-020) — Optional[Any] 避免循环导入
     # 接收 OrthogonalizationConfig (Pydantic) 整对象, enabled=False 时 None
     orthogonalization: Optional[Any] = None
+
+    # v3.0.0 T1 (E2): 多维指纹路由开关 (默认 False, 向后兼容)
+    # True: transform 使用 _get_multi_dim_pipeline_weights (含 T1 tail/regime 修正)
+    # False: 走旧路径 _get_pipeline_weights (仅 ar1 驱动)
+    enable_multi_dim_routing: bool = False
 
     @classmethod
     def from_unified(cls, unified) -> 'PipelineV2Config':
@@ -1184,9 +1227,25 @@ class FactorProcessingPipelineV2:
                 continue
 
             # P0-1: 使用概率加权路由
-            weights = _get_pipeline_weights(
-                classification, hard_routing_prob=self.config.hard_routing_prob
-            )
+            # v3.0.0 T1 (E2): enable_multi_dim_routing 开关控制路由路径
+            #   True: 多维指纹驱动 (含 T1 tail/regime 修正)
+            #   False (默认): 仅 ar1 驱动 (向后兼容)
+            if self.config.enable_multi_dim_routing:
+                # 从 monitor 获取指纹 (fit 阶段已存入)
+                fp = None
+                if self.monitor is not None:
+                    fp_history = self.monitor.fingerprint_history.get(name, [])
+                    fp = fp_history[-1] if fp_history else None
+                if fp is None:
+                    fp = FactorFingerprint()  # 全 NaN 兜底
+                weights = _get_multi_dim_pipeline_weights(
+                    fp, classification,
+                    hard_routing_prob=self.config.hard_routing_prob,
+                )
+            else:
+                weights = _get_pipeline_weights(
+                    classification, hard_routing_prob=self.config.hard_routing_prob
+                )
 
             # P1-5: 检查 monitor 的迁移权重，合并平滑过渡
             if self.monitor is not None and self.monitor.config.enable_smooth_transition:

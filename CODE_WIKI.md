@@ -40,7 +40,7 @@
 
 | 特性 | 说明 |
 |------|------|
-| **因子指纹诊断层** | 13 维核心指纹 + 5 维健康度指标（FactorHealthMonitor），自动诊断因子时序/截面特征 + 拥挤度/效能/容量/衰减/体制敏感性 |
+| **因子指纹诊断层** | 21 维核心指纹 (v3.0.0 T1, 13 维基础 + 8 维尾部依赖/体制转换) + 5 维健康度指标（FactorHealthMonitor），自动诊断因子时序/截面/尾部/体制特征 + 拥挤度/效能/容量/衰减/体制敏感性 |
 | **自适应因子分类** | 静态 / 动态 / 混合三类自动分流 |
 | **语义-统计融合** | 自然语言构造规则 + 统计指纹的贝叶斯融合 |
 | **三重中性化** | 原始值中性化 → AR 建模 → 残差中性化 |
@@ -95,7 +95,7 @@ v2.0: 智能自适应流程
               │  │  │  • batch_extract()   │    │ • fingerprint_window   │   │  │
               │  │  │  • extract_fingerprint│   │ • classification       │   │  │
               │  │  │                      │    │ • monitor thresholds   │   │  │
-              │  │  │  输出: 13维指纹向量   │    │ • pipeline params      │   │  │
+              │  │  │  输出: 21维指纹向量   │    │ • pipeline params      │   │  │
               │  │  │  • ar1_median        │    └───────────┬───────────┘   │  │
               │  │  │  • rank_autocorr     │                │               │  │
               │  │  │  • half_life         │                │               │  │
@@ -104,7 +104,7 @@ v2.0: 智能自适应流程
               │  │  │  • snr_estimate      │                │               │  │
               │  │  │  • skewness_std      │                │               │  │
               │  │  │  • kurtosis_std      │                │               │  │
-              │  │  │  • ... (共13维)       │                │               │  │
+              │  │  │  • ... (共21维, v3.0.0 T1) │           │               │  │
               │  │  └──────────┬───────────┘                │               │  │
               │  │             │ 指纹向量                     │ 配置          │  │
               │  │             ▼                            ▼               │  │
@@ -300,7 +300,7 @@ v2.0: 智能自适应流程
 
 | 层级 | 名称 | 核心类 | 职责 |
 |------|------|--------|------|
-| **Layer 1** | 前置智能层 | `FactorFingerprinter`, `AdaptiveFactorClassifier`, `SemanticStatisticalFusion` | 13维核心指纹提取 + 4层NLP语义理解 → 贝叶斯融合分类 |
+| **Layer 1** | 前置智能层 | `FactorFingerprinter`, `AdaptiveFactorClassifier`, `SemanticStatisticalFusion` | 21维核心指纹提取 (v3.0.0 T1, 含尾部依赖/体制转换) + 4层NLP语义理解 → 贝叶斯融合分类 |
 | **Layer 2** | 类型路由层 | 内嵌于 `FactorProcessingPipelineV2.fit()` | 根据 AR(1) 阈值将因子分流至三条管道 |
 | **Layer 3** | 差异化处理层 | `StaticFactorPipeline`, `DynamicFactorPipeline`, `MixedFactorPipeline` | 按因子类型执行差异化处理流程 |
 | **Layer 4** | 持续监测层 | `FactorFingerprintMonitor`, `FactorHealthMonitor` | 类型迁移检测（多时间尺度）+ 五维健康度评估（拥挤度/效能/容量/衰减/体制敏感性） |
@@ -314,7 +314,7 @@ v2.0: 智能自适应流程
 |------|--------|------|---------|
 | **PipelineOrderValidator** | 基础设施层 | 校验处理步骤顺序 | 开源社区完全空白领域 |
 | **Adapter Layer** | 适配器层 | 统一模块接口 + 回退 | sklearn-style 封装，子模块缺失时自动降级 |
-| **FactorFingerprint** | 前置智能层 | 13 维核心指纹 + 5 维健康度 | 从经验判断到数据驱动，覆盖因子全生命周期 |
+| **FactorFingerprint** | 前置智能层 | 21 维核心指纹 (v3.0.0 T1: 13 维基础 + 8 维尾部依赖/体制转换) + 5 维健康度 | 从经验判断到数据驱动，覆盖因子全生命周期 |
 | **SemanticStatisticalFusion** | 前置智能层 | 语义 + 统计融合分类 | 先验引导，后验校准，5 种冲突诊断 |
 | **FactorHealthMonitor** | 持续监测层 | 五维正交评估：拥挤度/效能/容量/衰减/体制敏感性 | 量化因子健康度的标准化框架 |
 
@@ -462,7 +462,7 @@ factor_pipeline/
 │   ├── factor_pivot.py          # DuckDB PIVOT 因子宽表转换
 │   └── parallel_runner.py       # 多因子进程并行 (按日期分组, ADR-009)
 ├── modules/                     # 内化处理模块 (v2.4.0 ADR-019 + v2.5.0 ADR-020)
-│   ├── factor_fingerprint/      # 因子指纹 (13维统计指标 + 5维健康度)
+│   ├── factor_fingerprint/      # 因子指纹 (21维统计指标 v3.0.0 T1 + 5维健康度)
 │   ├── factor_decoupler/        # 时序解耦 (AR 建模 + 残差中性化)
 │   ├── factor_adaptive_winsor/  # 自适应缩尾 (仅 core/ 最小子包化)
 │   ├── factor_imputer/          # 因子插补 (无前瞻偏差)
@@ -875,7 +875,7 @@ class PipelineV2Config:
 #### 类: `FactorProcessingPipelineV2` (v2.0 智能编排器)
 
 **核心组件**:
-- `fingerprinter: FactorFingerprinter` — 13 维核心指纹提取器
+- `fingerprinter: FactorFingerprinter` — 21 维核心指纹提取器 (v3.0.0 T1)
 - `classifier: AdaptiveFactorClassifier` — 因子分类器
 - `semantic_fusion: SemanticStatisticalFusion` — 语义-统计融合（5 种冲突诊断）
 - `static_pipeline / dynamic_pipeline / mixed_pipeline` — 三条处理管道
@@ -1078,7 +1078,7 @@ __init__.py
 | 属性 | 详情 |
 |------|------|
 | **核心类** | `FactorFingerprinter` / `AdaptiveFactorClassifier` / `SemanticStatisticalFusion` / `FactorFingerprintMonitor` / **`FactorHealthMonitor`** |
-| **指纹维度** | 13 维核心指纹：AR(1)、秩自相关、半衰期、波动率聚集、偏度、峰度等 |
+| **指纹维度** | 21 维核心指纹 (v3.0.0 T1): AR(1)、秩自相关、半衰期、波动率聚集、偏度、峰度等 (13 维基础) + 尾部依赖 (tail_dependence_lower/upper, gpd_shape, hill_estimator) + 体制转换 (regime_transition_prob/persistence/ic_diff) + 综合衍生 (tail_regime_score) |
 | **健康度维度** | **5 维正交评估**（FactorHealthMonitor）：拥挤度(0.25) / 效能(0.35) / 容量(0.15) / 衰减(0.15) / 体制敏感性(0.10)，加权合成综合健康分 [0-100] |
 | **分类方法** | AR(1) 阈值法 + 贝叶斯融合（支持语义先验），含 5 种冲突诊断类型 |
 | **监测功能** | 类型迁移检测（多时间尺度：快速1期/标准3期/长期6期）+ 五维健康度评估 + 四级警报（HEALTHY/WATCH/WARNING/CRITICAL） |

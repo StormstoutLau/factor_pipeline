@@ -1446,6 +1446,68 @@ class ThresholdDriftMonitor:
 
 ---
 
+## ADR-024: 指纹维度扩展至 21 维 (v3.0.0 T1)
+
+**日期**: 2026-07-04
+**状态**: 已实施 (E1-E3 全部完成, 974 passed + 6 skipped + 11 subtests passed)
+**优先级**: P1
+**supersedes**: 无 (扩展 ADR-019 内化模块的指纹定义, 不取代任何 ADR)
+
+### 背景
+
+`FactorFingerprint` NamedTuple 仅 13 维 (5 时序 + 5 截面 + 3 综合衍生), 尾部依赖完全缺失 (全仓库 `tail_dependence` / `copula` 命中 0 次), 体制转换仅 `FactorHealthMonitor` 有弱相关实现, 不属 `FactorFingerprint`。
+
+ANALYSIS_V3.0.0.md §1 调研发现 4 项关键事实:
+1. **孤儿函数**: `_get_multi_dim_pipeline_weights` (pipelines_v2.py) 在生产代码中从未被 `transform()` 调用, 仍用单维 `_get_pipeline_weights`
+2. **分类器单维瓶颈**: `AdaptiveFactorClassifier.classify` 仅用 `ar1_median`, 其余 12 维未读取
+3. **测试基线薄弱**: 无 `extract_fingerprint` 黄金参考测试, 无 `to_dict` 字段完整性测试
+4. **statsmodels 延迟导入**: `_test_volatility_clustering` 用 try/except 包裹 statsmodels, 违反 ADR-014
+
+### 决策
+
+扩展 `FactorFingerprint` 从 13 维至 21 维, 新增 8 维 (向后兼容, 追加在 NamedTuple 末尾):
+
+| 子任务 | 维度数 | 字段 | 学术依据 |
+|--------|--------|------|---------|
+| **T1.1 尾部依赖** | 4 | `tail_dependence_lower` / `tail_dependence_upper` / `gpd_shape` / `hill_estimator` | Nelsen (2006) Copula 经验条件概率; Pickands (1975) POT-MLE 替代; Hill (1975) 重尾指数 |
+| **T1.2 体制转换** | 3 | `regime_transition_prob` / `regime_persistence` / `regime_ic_diff` | Hamilton (1989) Markov 两状态, 中位数划分降级方案 |
+| **T1.3 综合衍生** | 1 | `tail_regime_score` | 双分量加权 (M2 修订): tail_severity + regime_instability |
+
+`FingerprintConfig` 从 8 字段扩展至 14 字段 (新增 6 配置: `tail_quantile` / `min_extreme_samples` / `enable_tail_dependence` / `enable_regime_switching` / `regime_min_samples` / `tail_regime_weight`)。
+
+### 关键设计
+
+1. **默认关闭尾部依赖与体制转换**: `enable_tail_dependence=False` (Copula O(N²) 成本), `enable_regime_switching=False` (m1 修订, 避免小样本日志噪音), 显式 opt-in
+2. **POT-MLE 替代 Pickands 估计量**: `_estimate_gpd_shape` 用 `scipy.stats.genpareto.fit` (POT-MLE), 比 Pickands 原始估计量对轻尾分布更稳健 (E1 Green 阶段修正)
+3. **Markov 拟合不收敛降级**: `ConvergenceWarning` 检测 + 返回 NaN, 不阻塞 fingerprint 提取
+4. **regime_ic_diff 方案 C**: 一阶差分均值差 (bull Δfactor 均值 - bear Δfactor 均值), 不破坏 `extract_fingerprint` 签名 (无前向收益数据输入)
+5. **路由接入加 `enable_multi_dim_routing` 开关**: `PipelineV2Config` 新增配置, 默认 `False` (向后兼容), `True` 时 `transform` 使用 `_get_multi_dim_pipeline_weights` (含 T1 tail/regime 修正)
+6. **不扩展 `AdaptiveFactorClassifier.classify`**: 仍仅用 `ar1_median`, 新维度仅作用于 `_get_multi_dim_pipeline_weights` 修正层 (Step 4: tail_severity 阈值 0.3 → mixed +0.10; regime_instability 阈值 0.1 → dynamic +0.10)
+7. **`_derive_tail_regime_score` M2 双分量加权**: `score = w * tail_severity + (1-w) * regime_instability`, 简化公式避免嵌套权重可读性差
+8. **statsmodels 顶部导入**: ADR-014 技术债清理, 移除 `_test_volatility_clustering` 的 try/except ImportError
+9. **`_make_fp` 测试辅助重构为 `**kwargs` 模式**: 支持 21 维字段覆盖, 未指定字段用 NamedTuple 默认值 (NaN), 既有 12 测试向后兼容
+
+### 测试
+
+- E1 Red→Green: 32 测试 (25 T1 新增 + 7 既有/fixture 复用, 含黄金参考 + `to_dict` 完整性 + 8 新计算方法)
+- E2 路由接入: 8 新测试 (4 TestTailRegimeAdjustment + 4 TestMultiDimRoutingConfig), 既有 12 测试零回归
+- E3 手工校验: `verify_v3_0_0_t1_manual.py` 8 项 (21 维字段完整性 / to_dict 21 键 / Config 14 字段 / 默认配置 / 关闭 NaN / 开启有值 / score ∈ [0,1] / 13 维黄金参考回归)
+- 全量回归: 974 passed + 6 skipped + 11 subtests (T4 基线 934 + E1 32 + E2 8 = 974, 零回归)
+
+### 文档
+
+- [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md) §1 — T1 分析
+- [docs/EXECUTION_V3.0.0_T1.md](docs/EXECUTION_V3.0.0_T1.md) v1.1 — E1-E3 三阶段执行方案
+
+### 学术依据
+
+- Nelsen, R. B. (2006). *An Introduction to Copulas* (2nd ed.). Springer. — 尾部依赖 Copula
+- Pickands, J. (1975). Statistical inference using extreme order statistics. *Annals of Statistics*, 3(1), 119-131. — GPD 极值理论 (实际用 POT-MLE 替代原始估计量)
+- Hill, B. M. (1975). A simple general approach to inference about the tail of a distribution. *The Annals of Statistics*, 3(5), 1163-1174. — Hill 重尾指数
+- Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. *Econometrica*, 57(2), 357-384. — Markov 体制转换
+
+---
+
 ## 路线图
 
 ### 已完成 (v2.1.0)
@@ -1589,7 +1651,12 @@ class ThresholdDriftMonitor:
 
 ### 远期 (v3.0.0)
 
-- [ ] 指纹维度扩展至 20+（尾部依赖、体制转换）
+- [x] 指纹维度扩展至 21 维（尾部依赖、体制转换）— 已实施 (2026-07-04, ADR-024, E1-E3 全部完成, 974 passed + 6 skipped + 11 subtests)
+  - 核心改动: `fingerprint.py` NamedTuple 13→21 维 (8 新: tail_dependence_lower/upper, gpd_shape, hill_estimator, regime_transition_prob/persistence/ic_diff, tail_regime_score) + `FingerprintConfig` 8→14 字段 + 8 新计算方法 + `pipelines_v2.py` `_get_multi_dim_pipeline_weights` 接入 transform + `enable_multi_dim_routing` 开关 (默认 False)
+  - 测试: tests/test_factor_fingerprint/ (32 测试, 含 tail_dependence/regime_switching/tail_regime_score/extract_fingerprint_golden) + tests/test_multi_dim_classifier.py (8 新测试) + verify_v3_0_0_t1_manual.py (8/8 手工校验)
+  - 文档: docs/ANALYSIS_V3.0.0.md §1 + docs/EXECUTION_V3.0.0_T1.md v1.1
+  - 学术依据: Nelsen (2006) / Pickands (1975, 实际用 POT-MLE 替代) / Hill (1975) / Hamilton (1989)
+  - 行为变化: 默认关闭 (enable_tail_dependence/enable_regime_switching=False), 显式 opt-in; 路由修正仅 enable_multi_dim_routing=True 时生效
 - [ ] 流式处理支持
 - [ ] 在线迁移检测（CUSUM）
 - [x] Benjamini-Hochberg FDR 替代 Bonferroni — 已实施 (2026-07-04, ADR-002a, E1-E3 全部完成, 934 passed + 6 skipped + 11 subtests)

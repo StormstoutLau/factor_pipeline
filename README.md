@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v2.5.0 的"多因子正交化三层架构 + 860 测试零回归"，并正在推进 v2.6.0 的**优化器与漂移检测增强** (ADR-004/005/006 修订 + ADR-021/022/023 新增)。核心能力涵盖**因子指纹前置诊断层**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v2.5.0 的"多因子正交化三层架构 + 860 测试零回归"，并正在推进 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR)。核心能力涵盖**因子指纹前置诊断层 (21 维, v3.0.0 T1)**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -28,6 +28,40 @@
 ---
 
 ## 版本更新摘要
+
+### v3.0.0 T1 指纹维度扩展至 21 维 (2026.07, 已实施)
+
+> **状态**: 已实施, 974 passed + 6 skipped + 11 subtests passed (零回归, 比 v3.0.0 T4 的 934 多 40 个新测试)
+> **文档**: [docs/EXECUTION_V3.0.0_T1.md](docs/EXECUTION_V3.0.0_T1.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
+> **基线**: 934 passed + 6 skipped (v3.0.0 T4) → 974 passed + 6 skipped (v3.0.0 T1, 含 11 subtests)
+> **关系**: v3.0.0 远期 4 项任务 (T1-T4) 中 T1 (P1) + T4 (P0) 已完成; T2 (流式) / T3 (CUSUM) 待启动
+
+**3 阶段执行方案 (E1-E3)**:
+
+| 阶段 | 任务 | 测试数 | 关键变更 |
+|------|------|--------|---------|
+| **E1** | 指纹核心扩展 (Red→Green→Review) | 32 | `FactorFingerprint` NamedTuple 13→21 维 (8 新字段默认 NaN), `FingerprintConfig` 8→14 字段, 8 新计算方法 (tail_dependence/gpd_shape POT-MLE/hill_estimator/regime_*/tail_regime_score), ADR-014 技术债清理 (statsmodels 顶部导入) |
+| **E2** | 路由层接入 + 测试更新 | 8 | `PipelineV2Config` 新增 `enable_multi_dim_routing` (默认 False), `_get_multi_dim_pipeline_weights` 接入 transform + Step 4 T1 修正 (tail_severity/regime_instability), `_make_fp` 重构为 **kwargs 模式 |
+| **E3** | 文档同步 + 全量回归 | 0 | ADR-024 写入 DECISIONS.md, CHANGELOG/CODE_WIKI/README 同步, verify_v3_0_0_t1_manual.py 8/8 手工校验, 全量回归 974 passed |
+
+**1 项新 ADR**:
+- **ADR-024**: 指纹维度扩展至 21 维 (扩展 ADR-019 内化模块的指纹定义)
+
+**8 项关键设计决策**:
+1. 默认关闭尾部依赖与体制转换 (`enable_tail_dependence=False` / `enable_regime_switching=False`), 显式 opt-in
+2. POT-MLE 替代 Pickands 估计量 (`scipy.stats.genpareto.fit`), 对轻尾分布更稳健
+3. regime_ic_diff 方案 C (一阶差分均值差), 不破坏 `extract_fingerprint` 签名
+4. 路由接入加 `enable_multi_dim_routing` 开关 (默认 False, 向后兼容)
+5. 不扩展 `AdaptiveFactorClassifier.classify` (仍仅用 ar1), 新维度仅作用于路由修正层
+6. `_derive_tail_regime_score` M2 双分量加权 (tail_severity + regime_instability)
+7. statsmodels 顶部导入 (ADR-014 技术债清理)
+8. `_make_fp` 测试辅助重构为 `**kwargs` 模式 (21 维字段覆盖, 既有 12 测试向后兼容)
+
+**学术依据**:
+- Nelsen, R. B. (2006). *An Introduction to Copulas* (2nd ed.). Springer.
+- Pickands, J. (1975). Statistical inference using extreme order statistics. *Annals of Statistics*, 3(1), 119-131.
+- Hill, B. M. (1975). A simple general approach to inference about the tail of a distribution. *The Annals of Statistics*, 3(5), 1163-1174.
+- Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. *Econometrica*, 57(2), 357-384.
 
 ### v3.0.0 T4 KS 迁移检测 BH-FDR 替代 Bonferroni (2026.07, 已实施)
 
@@ -345,6 +379,16 @@ v3.0.0 T4: KS 迁移检测 BH-FDR 替代 Bonferroni (已实施)
   字段隔离 + 向后兼容 + 黄金参考校验
   Benjamini-Hochberg (1995) FDR 控制, 检测力提升
   v3.0.0 远期 4 项任务 (T1-T4) 中 T4 (P0) 已完成
+
+v3.0.0 T1: 指纹维度扩展至 21 维 (已实施)
+  E1-E3 3 阶段 TDD (+40 新测试, 974 passed + 6 skipped + 11 subtests)
+  ADR-024 扩展 ADR-019 内化模块的指纹定义 (13 维 → 21 维)
+  FactorFingerprint NamedTuple + FingerprintConfig 8→14 字段
+  8 新计算方法: tail_dependence/gpd_shape (POT-MLE)/hill_estimator/regime_*/tail_regime_score
+  _get_multi_dim_pipeline_weights 接入 transform + enable_multi_dim_routing 开关 (默认 False)
+  ADR-014 技术债清理 (statsmodels 顶部导入)
+  Nelsen (2006) / Pickands (1975) / Hill (1975) / Hamilton (1989) 学术依据
+  v3.0.0 远期 4 项任务 (T1-T4) 中 T1 (P1) + T4 (P0) 已完成
 ```
 
 ---
@@ -915,13 +959,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.0.0 T4 (已实施, 934 passed + 6 skipped + 11 subtests)
+- **Pipeline 版本**: v3.0.0 T1 (已实施, 974 passed + 6 skipped + 11 subtests)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 934 passed, 6 skipped, 0 failed
+- **测试基线**: 974 passed, 6 skipped, 0 failed
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
 - **构建日期**: 2026.07.04
-- **状态**: STABLE (v3.0.0 T4)
+- **状态**: STABLE (v3.0.0 T1)
 
 ### 版本历史
 
@@ -938,6 +982,7 @@ factor_pipeline/
 | v2.5.0 | 2026.07.03 | 多因子正交化三层架构 (ADR-020, O1-O6 全部完成): Layer 2 横截面正交化 (5 种算法) + Layer 3 双重 Lasso 检验 + 滚动/分组/三件套, 860 passed + 5 skipped |
 | v2.6.0 | 2026.07.04 | 优化器与漂移检测增强 (ADR-021/022/023, E1-E9 全部完成): 目标函数对齐 ADR-004 (6 项 IC-vol-cov-ks-health-redundancy) + 正交化参数搜索空间 + Layer 3 显著性验证 (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA 衰减检测), 918 passed + 6 skipped + 11 subtests |
 | v3.0.0 T4 | 2026.07.04 | KS 迁移检测 BH-FDR 替代 Bonferroni (ADR-002a, E1-E3 全部完成): `_ks_migration_significance` 三路径分流 (BH/Bonferroni/none, 默认 BH) + 字段隔离 + 向后兼容 + 黄金参考校验, Benjamini-Hochberg (1995) FDR 控制, 934 passed + 6 skipped + 11 subtests |
+| v3.0.0 T1 | 2026.07.04 | 指纹维度扩展至 21 维 (ADR-024, E1-E3 全部完成): `FactorFingerprint` NamedTuple 13→21 维 (尾部依赖 4 + 体制转换 3 + 综合衍生 1) + `FingerprintConfig` 8→14 字段 + 8 新计算方法 (POT-MLE/Hill/Markov) + `_get_multi_dim_pipeline_weights` 接入 transform + `enable_multi_dim_routing` 开关 (默认 False) + ADR-014 技术债清理, Nelsen/Pickands/Hill/Hamilton 学术依据, 974 passed + 6 skipped + 11 subtests |
 
 ---
 

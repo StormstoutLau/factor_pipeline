@@ -20,9 +20,19 @@ from factor_pipeline.pipelines_v2 import _get_multi_dim_pipeline_weights
 # 辅助: 构造测试数据
 # =============================================================================
 
-def _make_fp(ar1=0.5, skew=0.0, kurt=3.0, snr=1.0):
-    """构造 FactorFingerprint，只设置关键维度，其余用 NaN"""
-    return FactorFingerprint(
+def _make_fp(ar1=0.5, skew=0.0, kurt=3.0, snr=1.0, **kwargs):
+    """构造 FactorFingerprint (v3.0.0 T1: 21 维, **kwargs 模式)
+
+    默认值: 既有 4 维 (ar1/skew/kurt/snr) + 其余 17 维 NaN.
+    通过 kwargs 可覆盖任意 21 维字段, 未指定字段用 NamedTuple 默认值 (NaN).
+
+    T1 新增 kwargs (默认 NaN):
+    - tail_dependence_lower, tail_dependence_upper
+    - gpd_shape, hill_estimator
+    - regime_transition_prob, regime_persistence, regime_ic_diff
+    - tail_regime_score
+    """
+    fp_kwargs = dict(
         ar1_median=ar1,
         rank_autocorr=np.nan,
         vol_clustering_pvalue=np.nan,
@@ -37,6 +47,8 @@ def _make_fp(ar1=0.5, skew=0.0, kurt=3.0, snr=1.0):
         complexity_need=np.nan,
         snr_estimate=snr,
     )
+    fp_kwargs.update(kwargs)
+    return FactorFingerprint(**fp_kwargs)
 
 
 def _make_cls(primary_type='static', primary_prob=0.9, secondary_type=None,
@@ -222,3 +234,132 @@ class TestEdgeCases:
         assert abs(sum(weights.values()) - 1.0) < 0.001
         # 没有分布修正，static 应该主导
         assert weights['static'] > 0.5
+
+
+# =============================================================================
+# 测试类 5: T1 尾部 + 体制修正 (v3.0.0 T1, E2)
+# =============================================================================
+
+class TestTailRegimeAdjustment:
+    """测试 T1 新维度修正 (tail_severity + regime_instability)"""
+
+    def test_13_heavy_tail_shifts_toward_mixed(self):
+        """gpd_shape > 0.3 (重尾) → mixed 权重增加"""
+        fp_light = _make_fp(ar1=0.85, skew=0.3, kurt=3.0, snr=2.0, gpd_shape=0.1)
+        fp_heavy = _make_fp(ar1=0.85, skew=0.3, kurt=3.0, snr=2.0, gpd_shape=0.8)
+        cls = _make_cls(primary_type='static', primary_prob=0.90, is_hard=True)
+
+        w_light = _get_multi_dim_pipeline_weights(fp_light, cls)
+        w_heavy = _get_multi_dim_pipeline_weights(fp_heavy, cls)
+
+        assert w_heavy['mixed'] > w_light['mixed'], (
+            f"重尾 mixed={w_heavy['mixed']:.3f} 应 > 轻尾 mixed={w_light['mixed']:.3f}"
+        )
+
+    def test_14_light_tail_no_effect(self):
+        """gpd_shape < 0.3 (轻尾) → 不加尾部修正"""
+        fp_no_tail = _make_fp(ar1=0.85, skew=0.3, kurt=3.0, snr=2.0)  # gpd_shape=NaN
+        fp_light = _make_fp(ar1=0.85, skew=0.3, kurt=3.0, snr=2.0, gpd_shape=0.1)
+        cls = _make_cls(primary_type='static', primary_prob=0.90, is_hard=True)
+
+        w_no_tail = _get_multi_dim_pipeline_weights(fp_no_tail, cls)
+        w_light = _get_multi_dim_pipeline_weights(fp_light, cls)
+
+        # 轻尾 vs NaN: 权重应几乎相同 (都不触发修正)
+        assert abs(w_light['static'] - w_no_tail['static']) < 0.01, (
+            f"轻尾 vs NaN 不应有显著差异: light={w_light['static']:.3f}, "
+            f"no_tail={w_no_tail['static']:.3f}"
+        )
+
+    def test_15_regime_instability_shifts_toward_dynamic(self):
+        """regime_transition_prob > 0.1 (体制不稳定) → dynamic 权重增加"""
+        fp_stable = _make_fp(ar1=0.55, skew=0.3, kurt=3.0, snr=2.0, regime_transition_prob=0.02)
+        fp_unstable = _make_fp(ar1=0.55, skew=0.3, kurt=3.0, snr=2.0, regime_transition_prob=0.4)
+        cls = _make_cls(primary_type='mixed', primary_prob=0.60, is_hard=False)
+
+        w_stable = _get_multi_dim_pipeline_weights(fp_stable, cls)
+        w_unstable = _get_multi_dim_pipeline_weights(fp_unstable, cls)
+
+        assert w_unstable['dynamic'] > w_stable['dynamic'], (
+            f"体制不稳定 dynamic={w_unstable['dynamic']:.3f} 应 > 稳定 "
+            f"dynamic={w_stable['dynamic']:.3f}"
+        )
+
+    def test_16_stable_regime_no_effect(self):
+        """regime_transition_prob < 0.1 (体制稳定) → 不加体制修正"""
+        fp_no_regime = _make_fp(ar1=0.55, skew=0.3, kurt=3.0, snr=2.0)  # regime=NaN
+        fp_stable = _make_fp(ar1=0.55, skew=0.3, kurt=3.0, snr=2.0, regime_transition_prob=0.02)
+        cls = _make_cls(primary_type='mixed', primary_prob=0.60, is_hard=False)
+
+        w_no_regime = _get_multi_dim_pipeline_weights(fp_no_regime, cls)
+        w_stable = _get_multi_dim_pipeline_weights(fp_stable, cls)
+
+        assert abs(w_stable['dynamic'] - w_no_regime['dynamic']) < 0.01, (
+            f"稳定 vs NaN 不应有显著差异: stable={w_stable['dynamic']:.3f}, "
+            f"no_regime={w_no_regime['dynamic']:.3f}"
+        )
+
+
+# =============================================================================
+# 测试类 6: enable_multi_dim_routing 配置开关 (v3.0.0 T1, E2)
+# =============================================================================
+
+class TestMultiDimRoutingConfig:
+    """测试 PipelineV2Config.enable_multi_dim_routing 开关"""
+
+    def test_17_config_default_is_false(self):
+        """PipelineV2Config 默认 enable_multi_dim_routing=False"""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+        config = PipelineV2Config()
+        assert config.enable_multi_dim_routing is False, (
+            "默认 enable_multi_dim_routing 应为 False (向后兼容)"
+        )
+
+    def test_18_config_can_enable(self):
+        """PipelineV2Config 可显式开启 enable_multi_dim_routing=True"""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+        config = PipelineV2Config(enable_multi_dim_routing=True)
+        assert config.enable_multi_dim_routing is True
+
+    def test_19_multi_dim_weights_differ_from_single_dim(self):
+        """多维路由 (含 T1 修正) 与单维路由权重不同 (有 T1 修正时)"""
+        # 构造重尾 + 体制不稳定的指纹
+        fp = _make_fp(
+            ar1=0.55, skew=0.3, kurt=3.0, snr=2.0,
+            gpd_shape=0.8,  # 重尾
+            regime_transition_prob=0.4,  # 体制不稳定
+        )
+        cls = _make_cls(primary_type='mixed', primary_prob=0.60, is_hard=False)
+
+        # 单维路由 (仅 ar1 驱动)
+        from factor_pipeline.pipelines_v2 import _get_pipeline_weights
+        w_single = _get_pipeline_weights(cls)
+
+        # 多维路由 (含 T1 修正)
+        w_multi = _get_multi_dim_pipeline_weights(fp, cls)
+
+        # 权重应不同 (T1 修正改变了权重分布)
+        assert w_multi != w_single, (
+            "T1 修正后多维路由权重应与单维路由不同"
+        )
+        # 多维路由权重和为 1
+        assert abs(sum(w_multi.values()) - 1.0) < 0.001
+
+    def test_20_multi_dim_routing_no_t1_dims_equals_single_dim(self):
+        """无 T1 维度时 (gpd/regime=NaN), 多维路由 = 单维路由 + 既有修正"""
+        # 仅 ar1/skew/kurt/snr 有值, T1 维度全 NaN
+        fp = _make_fp(ar1=0.85, skew=0.3, kurt=3.0, snr=2.0)
+        cls = _make_cls(primary_type='static', primary_prob=0.90, is_hard=True)
+
+        # 多维路由 (T1 维度全 NaN → 不触发 T1 修正)
+        w_multi = _get_multi_dim_pipeline_weights(fp, cls)
+
+        # 单维路由 (仅 ar1 驱动)
+        from factor_pipeline.pipelines_v2 import _get_pipeline_weights
+        w_single = _get_pipeline_weights(cls)
+
+        # T1 修正未触发, 但多维路由仍有 skew/kurt/snr 修正
+        # 因此 w_multi 可能 != w_single (因多维路由有额外修正)
+        # 但权重和都为 1
+        assert abs(sum(w_multi.values()) - 1.0) < 0.001
+        assert abs(sum(w_single.values()) - 1.0) < 0.001

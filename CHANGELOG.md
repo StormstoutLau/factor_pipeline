@@ -1,5 +1,62 @@
 # 开发日志 (Changelog)
 
+## v3.0.0 T1 — 指纹维度扩展至 21 维 (已实施, 2026-07-04)
+
+### 概览
+
+将 `FactorFingerprint` 从 13 维扩展至 21 维, 新增 8 维 (尾部依赖 4 + 体制转换 3 + 综合衍生 1), 并将孤儿函数 `_get_multi_dim_pipeline_weights` 接入 `transform()` 生产路径 (含 `enable_multi_dim_routing` 配置开关, 默认 False 向后兼容)。E1-E3 三阶段 TDD 全部完成, 974 passed + 6 skipped + 11 subtests passed (零回归, 比 v3.0.0 T4 的 934 多 40 个新测试)。
+
+**核心产出**:
+- [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md) §1 — T1 深度核查 (13 维现状 / 4 项关键事实 / T1.1-T1.4 方案)
+- [docs/EXECUTION_V3.0.0_T1.md](docs/EXECUTION_V3.0.0_T1.md) v1.1 — T1 执行方案 (E1-E3 三阶段, v1.1 含 1 CRITICAL + 3 MAJOR + 4 MINOR + 4 NIT 修订)
+- 1 项新 ADR: ADR-024 (指纹维度扩展至 21 维)
+- 全量回归: 974 passed + 6 skipped + 11 subtests passed (零回归, 比 v3.0.0 T4 的 934 多 40 个新测试)
+- 手工校验: verify_v3_0_0_t1_manual.py 8/8 通过 (E3 新增)
+
+### E1-E3 三阶段 TDD 实施详情
+
+| 阶段 | 任务 | 测试数 | 状态 | 关键变更 |
+|------|------|--------|------|---------|
+| **E1** | 指纹核心扩展 (Red→Green→Review) | 32 | ✅ | `FactorFingerprint` NamedTuple 13→21 维 (8 新字段默认 NaN), `FingerprintConfig` 8→14 字段, `to_dict` 13→21 键, `extract_fingerprint` 追加阶段 4-5-6, 8 新私有计算方法 (`_compute_tail_dependence_lower/upper`, `_estimate_gpd_shape` POT-MLE, `_hill_estimator`, `_compute_regime_transition_prob/persistence/ic_diff`, `_derive_tail_regime_score` M2 双分量加权), ADR-014 技术债清理 (statsmodels 顶部导入) |
+| **E2** | 路由层接入 + 测试更新 | 8 | ✅ | `PipelineV2Config` 新增 `enable_multi_dim_routing` (默认 False), `_get_multi_dim_pipeline_weights` 追加 Step 4 T1 修正 (tail_severity 阈值 0.3 → mixed +0.10; regime_instability 阈值 0.1 → dynamic +0.10), `transform()` 接入开关, `_make_fp` 重构为 **kwargs 模式支持 21 维, 新增 TestTailRegimeAdjustment (4) + TestMultiDimRoutingConfig (4) |
+| **E3** | 文档同步 + 全量回归 | 0 | ✅ | ADR-024 写入 DECISIONS.md, CHANGELOG/CODE_WIKI/README/README.en 同步, ANALYSIS_V3.0.0.md T1 状态改已实施, verify_v3_0_0_t1_manual.py 8/8 手工校验, 全量回归 974 passed + 6 skipped + 11 subtests |
+
+### 8 维新维度 (T1.1 + T1.2 + T1.3)
+
+| 子任务 | 维度数 | 字段 | 学术依据 | 默认开关 |
+|--------|--------|------|---------|---------|
+| **T1.1 尾部依赖** | 4 | `tail_dependence_lower` / `tail_dependence_upper` / `gpd_shape` / `hill_estimator` | Nelsen (2006) Copula; Pickands (1975, 实际用 POT-MLE `scipy.stats.genpareto.fit` 替代); Hill (1975) | `enable_tail_dependence=False` |
+| **T1.2 体制转换** | 3 | `regime_transition_prob` / `regime_persistence` / `regime_ic_diff` | Hamilton (1989) Markov 两状态, 不收敛降级为硬阈值 | `enable_regime_switching=False` (m1 修订) |
+| **T1.3 综合衍生** | 1 | `tail_regime_score` | M2 双分量加权: `w * tail_severity + (1-w) * regime_instability` | 依赖 T1.1/T1.2 任一开启 |
+
+### 关键设计决策
+
+1. **默认关闭尾部依赖与体制转换**: `enable_tail_dependence=False` (Copula O(N²) 成本), `enable_regime_switching=False` (m1 修订, 避免小样本日志噪音), 显式 opt-in
+2. **POT-MLE 替代 Pickands 估计量**: `_estimate_gpd_shape` 用 `scipy.stats.genpareto.fit` (POT-MLE), 比 Pickands 原始估计量对轻尾分布更稳健 (E1 Green 阶段修正, Pickands 对正态分布返回 2.356 不稳定)
+3. **regime_ic_diff 方案 C**: 一阶差分均值差 (bull Δfactor 均值 - bear Δfactor 均值), 不破坏 `extract_fingerprint` 签名 (无前向收益数据输入)
+4. **路由接入加 `enable_multi_dim_routing` 开关**: 默认 False (向后兼容), True 时 `transform` 使用 `_get_multi_dim_pipeline_weights` (含 T1 tail/regime 修正)
+5. **不扩展 `AdaptiveFactorClassifier.classify`**: 仍仅用 `ar1_median`, 新维度仅作用于 `_get_multi_dim_pipeline_weights` 修正层
+6. **`_derive_tail_regime_score` M2 双分量加权**: 简化公式避免嵌套权重可读性差
+7. **statsmodels 顶部导入**: ADR-014 技术债清理, 移除 `_test_volatility_clustering` 的 try/except ImportError
+8. **`_make_fp` 测试辅助重构为 `**kwargs` 模式**: 支持 21 维字段覆盖, 既有 12 测试向后兼容
+
+### 行为变化警示 (BREAKING-ISH)
+
+**默认行为不变** (所有新维度默认关闭, NamedTuple 8 新字段默认 NaN, `enable_multi_dim_routing` 默认 False)。仅当显式开启 `enable_tail_dependence=True` / `enable_regime_switching=True` / `enable_multi_dim_routing=True` 时, 行为才变化:
+
+- `extract_fingerprint` 返回的 NamedTuple 从 13 维扩展至 21 维 (8 新字段默认 NaN, 既有 13 维不变)
+- `to_dict` 返回 21 键 (既有 13 键不变)
+- `transform()` 在 `enable_multi_dim_routing=True` 时使用多维路由 (含 T1 tail/regime 修正), 否则走旧路径
+
+### 学术依据
+
+- Nelsen, R. B. (2006). *An Introduction to Copulas* (2nd ed.). Springer. — 尾部依赖 Copula 经验条件概率
+- Pickands, J. (1975). Statistical inference using extreme order statistics. *Annals of Statistics*, 3(1), 119-131. — GPD 极值理论 (实际用 POT-MLE 替代原始估计量)
+- Hill, B. M. (1975). A simple general approach to inference about the tail of a distribution. *The Annals of Statistics*, 3(5), 1163-1174. — Hill 重尾指数
+- Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. *Econometrica*, 57(2), 357-384. — Markov 体制转换
+
+---
+
 ## v3.0.0 T4 — KS 迁移检测 BH-FDR 替代 Bonferroni (已实施, 2026-07-04)
 
 ### 概览

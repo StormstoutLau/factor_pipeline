@@ -15,7 +15,7 @@ v3.0.0 包含 4 项远期任务, 深度核查后发现:
 
 | # | 任务 | 当前状态 | 改动量估算 | 优先级 | 关键发现 |
 |---|------|---------|-----------|--------|---------|
-| T1 | 指纹维度扩展至 20+ (尾部依赖、体制转换) | 13 维, 0/2 新维度类别实现 | ~600 行 (5 文件) | P1 | tail dependence 完全缺失; regime 仅 HealthMonitor 有弱相关实现, 不属 FactorFingerprint |
+| T1 | 指纹维度扩展至 21 维 (尾部依赖、体制转换) | **已实施** (2026-07-04, ADR-024, 974 passed) | ~600 行 (5 文件) | P1 | tail dependence 完全缺失; regime 仅 HealthMonitor 有弱相关实现, 不属 FactorFingerprint |
 | T2 | 流式处理支持 | 纯批量 (0/5 就绪度) | ~1500+ 行 (8+ 文件) | P2 | 全链路基于全量 DataFrame 假设; RollingOrthogonalizer 算法已就绪但 API 未暴露 partial_fit |
 | T3 | 在线迁移检测 (CUSUM) | KS 批处理 + EWMA 流式 (非 CUSUM) | ~400 行 (3 文件) | P1 | ThresholdDriftMonitor.update() 已是流式接口, 可扩展为 CUSUM; Page (1954) 未引用 |
 | T4 | Benjamini-Hochberg FDR 替代 Bonferroni | factor_significance.py 已默认 BH; KS 迁移路径仍用 Bonferroni | ~130 行 (8 文件) | P0 | 默认生效的 bonferroni 路径仅 1 函数 (~20 行); factor_significance.py 已完整支持 BH, E7 已用 BH |
