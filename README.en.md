@@ -13,6 +13,22 @@
 
 ---
 
+## Why I Built This Pipeline
+
+This pipeline is not "yet another factor library." It is a **factor lie detector**.
+
+It stems from a simple observation: the quantitative industry is awash with "confident performances"—polished backtest curves, elaborate model jargon, seemingly rigorous statistical tests—yet few address the most fundamental question: **Is this factor real? Under what conditions will this model fail? To what extent should I trust it?**
+
+Most factor processing frameworks assume "the factor is valid; let's process it." This pipeline inverts the premise: **diagnose first, then process, then monitor continuously**. The 21-dimensional factor fingerprint is not decoration; it's a health check for every factor. The BH-FDR correction in KS migration detection is not showing off; it's an honest treatment of multiple-comparison false-positive risk. The three differentiated pipelines are not feature bloat; they acknowledge that "static, dynamic, and mixed factors require different processing logic."
+
+In other words, this is not just code—it is an **epistemological stance**: distrust factors, distrust models, distrust your own judgment, then use statistical tools to precisely measure "to what extent can you believe."
+
+> **Further Reading** (author's blog):
+> - English: [Potemkin Village Notes](https://github.com/StormstoutLau/StormstoutLau.github.io/blob/main/posts/10-potemkin-village-notes.md)
+> - 中文: [草台班子观察笔记](https://github.com/StormstoutLau/StormstoutLau.github.io/blob/main/posts/10-%E8%8D%89%E5%8F%B0%E7%8F%AD%E5%AD%90%E8%A7%82%E5%AF%9F%E7%AC%94%E8%AE%B0.md)
+
+---
+
 > **Note**: This English version is auto-translated. The Chinese [README.md](README.md) is the authoritative source.
 
 ---
