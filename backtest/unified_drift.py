@@ -121,17 +121,26 @@ class UnifiedDriftReporter:
         - 不会因前后段过长而平均掉局部漂移信号
         - p 值过滤避免假阳性
 
+        T3.5 (v3.0.0): 多重检验校正
+        - 滑动窗口产生 ~504 次 KS 检验, 仅 p<0.05 过滤会有 ~25 个假阳性
+        - 默认使用 BH-FDR 校正 (Benjamini-Hochberg 1995)
+        - correction_method='none' 保留旧路径 (向后兼容)
+
         Args:
             ic_series: 完整 IC 序列
             window: 滚动窗口大小 (默认使用 config['rolling_window'])
 
         Returns:
-            最大漂移分数 [0, 100], 经 p 值过滤
+            最大漂移分数 [0, 100], 经 p 值/BH-FDR 过滤
         """
         if window is None:
             window = self.config.get('rolling_window', 126)
 
         p_threshold = self.config.get('rolling_pvalue', 0.05)
+        # T3.5: 多重检验校正方法 (默认 'benjamini_hochberg', 向后兼容 'none')
+        correction_method = self.config.get(
+            'rolling_correction_method', 'benjamini_hochberg'
+        )
 
         clean = ic_series[~np.isnan(ic_series)]
         n = len(clean)
@@ -143,14 +152,38 @@ class UnifiedDriftReporter:
             mid = n // 2
             return self._compute_structure_drift(clean[:mid], clean[mid:])
 
-        max_score = 0.0
+        # 收集所有 (position, ks_stat, p_value)
+        results = []
         for i in range(window, n - window + 1):
             early = clean[i - window:i]
             late = clean[i:i + window]
             ks_stat, p_value = ks_2samp(early, late)
-            # p 值过滤: 只有统计显著的才计入
-            if p_value < p_threshold:
-                score = float(ks_stat * 100)
+            results.append((i, float(ks_stat), float(p_value)))
+
+        if not results:
+            return 0.0
+
+        # T3.5: 多重检验校正
+        p_values = [r[2] for r in results]
+        if correction_method == 'none':
+            # 旧路径: 仅 p < threshold 过滤 (保留向后兼容)
+            is_significant = [p < p_threshold for p in p_values]
+        else:
+            # BH-FDR / Bonferroni 校正 (调用共享模块)
+            try:
+                from .multiple_testing import apply_correction
+                _, is_significant = apply_correction(
+                    p_values, method=correction_method, alpha=p_threshold
+                )
+            except ImportError:
+                # fallback: 旧路径
+                is_significant = [p < p_threshold for p in p_values]
+
+        # 取显著位置的最大漂移分数
+        max_score = 0.0
+        for (i, ks_stat, p_value), sig in zip(results, is_significant):
+            if sig:
+                score = ks_stat * 100
                 if score > max_score:
                     max_score = score
 

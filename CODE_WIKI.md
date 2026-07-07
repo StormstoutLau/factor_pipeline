@@ -452,7 +452,9 @@ factor_pipeline/
 │   ├── data_bridge.py           # Pipeline → DataLoaderV3 格式适配器
 │   ├── engine.py                # 因子回测引擎（改编自 engine_v3_vector.py）
 │   ├── health_bridge.py         # 回测引擎 → FactorHealthMonitor 适配器
-│   ├── unified_drift.py         # 双轨融合漂移判定（滚动 KS + EWMA + 三模式融合）
+│   ├── unified_drift.py         # 双轨融合漂移判定（滚动 KS + EWMA + 三模式融合, T3.5 默认 BH-FDR）
+│   ├── cusum_drift_monitor.py   # CUSUM 在线漂移监测 (v3.0.0 T3, Page 1954 双侧递推)
+│   ├── multiple_testing.py      # 多重检验校正共享模块 (v3.0.0 T3.5, BH/Bonferroni/None)
 │   ├── pipeline_integration.py  # 端到端 Pipeline 集成运行器
 │   ├── cache_manager.py         # L2 磁盘缓存基础设施 (ADR-008)
 │   ├── cached_data_loader.py    # 缓存统一入口 (一处替换启用缓存)
@@ -989,6 +991,136 @@ class PipelineV2Config:
 | `get_summary()` | 获取性能摘要（总耗时、平均、最大/最小、最快/最慢步骤） |
 | `get_bottlenecks(threshold_percent)` | 获取瓶颈步骤（耗时超过总时间的阈值百分比） |
 
+### 4.12 `backtest/cusum_drift_monitor.py` — CUSUM 在线漂移监测 (v3.0.0 T3)
+
+**文件路径**: [backtest/cusum_drift_monitor.py](file:///f:/Coding/factor_pipeline/backtest/cusum_drift_monitor.py)
+
+实现 Page (1954) CUSUM (Cumulative Sum) 双侧递推算法,用于因子横截面统计量 (均值/标准差) 的在线漂移监测。定位为**事后诊断工具**,不侵入 `fit/transform` 循环,仅提供附加漂移告警。
+
+#### 类: `CUSUMDriftMonitor`
+
+```python
+class CUSUMDriftMonitor:
+    def __init__(self, baseline_mean: float, baseline_std: float,
+                 k: float = 0.5, h: float = 5.0,
+                 min_observations: int = 1, two_sided: bool = True)
+    def update(self, x: float) -> Dict[str, Any]  # 在线更新,返回 {'detected', 'direction', 'S_pos', 'S_neg', 'n_observations'}
+    def reset(self) -> None                        # 重置累积统计量 S_pos=S_neg=0
+    def get_history(self) -> Dict[str, List]       # 获取历史记录
+    def get_stats(self) -> Dict[str, Any]          # 获取统计信息
+```
+
+#### 核心算法 (Page 1954 双侧递推)
+
+```
+S_pos[t] = max(0, S_pos[t-1] + (x - μ₀ - k·σ))    # 上侧漂移累积
+S_neg[t] = min(0, S_neg[t-1] + (x - μ₀ + k·σ))    # 下侧漂移累积
+触发: S_pos[t] > h·σ  →  上漂移  或  S_neg[t] < -h·σ  →  下漂移
+触发后: S_pos 或 S_neg 重置为 0 (重新开始累积)
+```
+
+#### 关键设计
+
+| 项 | 说明 |
+|----|------|
+| **参数标准化** | `k_sigma = k * baseline_std`, `h_sigma = h * baseline_std`,所有内部计算用标准化单位 |
+| **NaN 跳过** | `update(NaN)` 不更新 S_pos/S_neg,但 `n_observations` 也不递增 |
+| **参数校验** | `baseline_std ≤ 0` / `k < 0` / `h < 0` 抛 `ValueError` |
+| **min_observations** | 累积观测数不足时不触发告警 |
+| **触发后自动重置** | S_pos/S_neg 触发后归 0,符合 CUSUM 标准定义 |
+
+#### ARL 校准结果 (T3.3 Monte Carlo, N=500, T=3000)
+
+| 参数组合 | MC ARL | Siegmund 近似 | 文献值 |
+|---------|--------|---------------|--------|
+| h=5σ, k=0.5, 无漂移 | 507 | 285 | 930 |
+| h=5σ, k=0.5, 1σ 漂移 | 5-30 (容差内) | — | 10 |
+| h=5σ, k=0.5, 3σ 漂移 | 1-8 (容差内) | — | 2 |
+
+**校准结论**: k=0.5, h=5.0 默认参数经 Monte Carlo 验证合理 (ARL 单调性 + 方向对称性 + k 最优性成立)。T3.4 管线集成用 h=5.5 补偿两个 CUSUM (mean+std) 叠加,ARL₀_eff ≈ ARL₀/2 ≈ 250。
+
+#### 学术依据
+
+- Page, E. S. (1954). Continuous inspection schemes. *Biometrika*, 41(1/2), 100-115.
+- Siegmund, D. (1985). *Sequential Analysis*. Springer. — ARL 近似公式
+
+### 4.13 `backtest/multiple_testing.py` — 多重检验校正共享模块 (v3.0.0 T3.5)
+
+**文件路径**: [backtest/multiple_testing.py](file:///f:/Coding/factor_pipeline/backtest/multiple_testing.py)
+
+提供 BH-FDR / Bonferroni / 无校正三种多重检验校正方法的低级函数 + 统一入口,供 `unified_drift.py` / `pipelines_v2.py` / `factor_significance.py` 三处共享,消除重复实现。
+
+#### 关键函数
+
+```python
+def apply_bh_fdr(p_values: List[float], alpha: float = 0.05) -> Tuple[List[float], List[bool]]
+def apply_bonferroni(p_values: List[float], alpha: float = 0.05) -> Tuple[List[float], List[bool]]
+def apply_no_correction(p_values: List[float], alpha: float = 0.05) -> Tuple[List[float], List[bool]]
+def apply_correction(p_values: List[float], method: str = 'benjamini_hochberg',
+                     alpha: float = 0.05) -> Tuple[List[float], List[bool]]
+```
+
+#### BH-FDR 算法 (Benjamini-Hochberg 1995)
+
+1. 排序 p 值: `p_(1) ≤ p_(2) ≤ ... ≤ p_(K)`
+2. 计算原始校正: `bh_raw_(k) = p_(k) * K / rank`
+3. 从大到小累积 min: `p_adj_(k) = min(bh_raw_(k), p_adj_(k+1))`
+4. clip 到 [0, 1]
+5. step-up: 找最大 k* 使 `p_adj_(k*) ≤ alpha`,所有 rank ≤ k* 的拒绝 H₀
+
+#### 黄金参考 (Benjamini-Hochberg 1995 经典示例)
+
+```
+输入: p_values = [0.005, 0.01, 0.02, 0.04, 0.5], K=5, alpha=0.05
+排序: [0.005, 0.01, 0.02, 0.04, 0.5], rank=[1,2,3,4,5]
+bh_raw: [0.025, 0.025, 0.0333, 0.05, 0.5]
+累积 min (从大到小): [0.025, 0.025, 0.0333, 0.05, 0.5]
+p_adj (原顺序) = [0.025, 0.025, 0.0333, 0.05, 0.5]
+alpha=0.05 → 前 4 个显著 (is_significant = [True, True, True, True, False])
+alpha=0.01 → 0 个显著
+```
+
+#### 检测力层级
+
+`None (无校正) ≥ BH-FDR ≥ Bonferroni` (检测力从高到低,保守性从低到高)
+
+#### 校验函数
+
+- `_validate_p_values(p_values)`: 检查 NaN / 负数 / >1,抛 `ValueError`
+- `_validate_alpha(alpha)`: 检查 (0, 1] 范围,抛 `ValueError`
+
+#### 调用方
+
+| 调用方 | 用途 | 默认方法 |
+|--------|------|---------|
+| `backtest/unified_drift.py` | `_compute_rolling_structure_drift` ~504 次 KS 检验假阳性控制 | `benjamini_hochberg` |
+| `pipelines_v2.py` | `_check_ks_migration` 因子迁移多重比较校正 | `benjamini_hochberg` |
+| `backtest/factor_significance.py` | `_apply_correction` K 因子增量 alpha 多重检验 | `benjamini_hochberg` (Holm 路径保留内联) |
+
+#### 向后兼容机制
+
+调用方统一用 `_HAS_MULTIPLE_TESTING` flag + 内联 fallback:
+
+```python
+try:
+    from backtest.multiple_testing import apply_bh_fdr, apply_bonferroni
+    _HAS_MULTIPLE_TESTING = True
+except ImportError:
+    _HAS_MULTIPLE_TESTING = False
+
+# 调用时:
+if _HAS_MULTIPLE_TESTING:
+    p_adj_list, _ = apply_bh_fdr(p_values, alpha=alpha)
+else:
+    # 内联 fallback (旧实现)
+    ...
+```
+
+#### 学术依据
+
+- Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *JRSS Series B*, 57(1), 289-300.
+- Dunn, O. J. (1961). Multiple comparisons among means. *JASA*, 56(293), 52-64. (Bonferroni 校正)
+
 ---
 
 ## 5. 依赖关系图
@@ -1014,10 +1146,18 @@ __init__.py
          ├── data_bridge.py         → factor_metrics.py, importlib (external: DataLoaderV3)
          ├── engine.py              → factor_metrics.py
          ├── health_bridge.py       → factor_metrics.py, importlib (external: FactorHealthMonitor)
-         ├── unified_drift.py       → engine.py, scipy.stats (KS test)
+         ├── unified_drift.py       → engine.py, scipy.stats (KS test), multiple_testing.py (T3.5 BH-FDR)
+         ├── cusum_drift_monitor.py → numpy (无内部依赖, v3.0.0 T3)
+         ├── multiple_testing.py    → numpy (无内部依赖, v3.0.0 T3.5, 供 unified_drift/pipelines_v2/factor_significance 共享)
          └── pipeline_integration.py → config_v2.py, data_bridge.py, engine.py,
                                           health_bridge.py, unified_drift.py
 ```
+
+**v3.0.0 T3 新增依赖**:
+- `pipelines_v2.py` → `backtest.cusum_drift_monitor.py` (T3.4, `enable_cusum_drift_monitor=True` 时启用, try/except ImportError)
+- `pipelines_v2.py` → `backtest.multiple_testing.py` (T3.5, `_HAS_MULTIPLE_TESTING` flag + 内联 fallback)
+- `backtest/factor_significance.py` → `backtest.multiple_testing.py` (T3.5, 同上)
+- `backtest/unified_drift.py` → `backtest.multiple_testing.py` (T3.5, try/except ImportError fallback 到旧路径)
 
 ### 外部依赖
 

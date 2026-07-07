@@ -23,6 +23,14 @@ import logging
 
 from .pipeline import FactorProcessingPipeline, PipelineResult
 from .adapters import ImputerAdapter, ProcessingAdapter, NeutralizerAdapter, GarchWhiteningAdapter
+
+# T3.5 (v3.0.0): 共享多重检验校正模块
+try:
+    from .multiple_testing import apply_bh_fdr as _apply_bh_fdr_shared
+    from .multiple_testing import apply_bonferroni as _apply_bonferroni_shared
+    _HAS_MULTIPLE_TESTING = True
+except ImportError:
+    _HAS_MULTIPLE_TESTING = False
 from factor_pipeline.modules.factor_fingerprint import (
     FactorFingerprinter, FactorFingerprint, FactorType,
     FingerprintConfig,
@@ -393,20 +401,25 @@ def _ks_migration_significance(
 
     # ── 三路径分流 ──────────────────────────────────────────
     if correction_method == 'benjamini_hochberg':
-        # BH-FDR 校正 (T4 v3.0.0 默认)
+        # BH-FDR 校正 (T4 v3.0.0 默认, T3.5 重构为调用共享模块)
         # 学术依据: Benjamini-Hochberg (1995)
         # 公式: p_adj_(k) = p_(k) * K / rank, 从大到小累积 min, clip [0,1]
         K = n_tests
         p_arr = np.asarray(p_values, dtype=float)
-        order = np.argsort(p_arr)
-        p_adj = np.empty_like(p_arr)
-        prev = 1.0
-        for i in range(K - 1, -1, -1):
-            rank = i + 1
-            idx = order[i]
-            bh = p_arr[idx] * K / rank
-            prev = min(prev, bh)
-            p_adj[idx] = min(prev, 1.0)
+        # T3.5: 调用共享模块 (向后兼容, fallback 到内联)
+        if _HAS_MULTIPLE_TESTING:
+            p_adj_list, _ = _apply_bh_fdr_shared(p_arr.tolist(), alpha=alpha)
+            p_adj = np.array(p_adj_list)
+        else:
+            order = np.argsort(p_arr)
+            p_adj = np.empty_like(p_arr)
+            prev = 1.0
+            for i in range(K - 1, -1, -1):
+                rank = i + 1
+                idx = order[i]
+                bh = p_arr[idx] * K / rank
+                prev = min(prev, bh)
+                p_adj[idx] = min(prev, 1.0)
 
         min_p_value_adjusted = float(np.min(p_adj))
         is_significant = (min_p_value_adjusted < alpha)
@@ -709,6 +722,13 @@ class PipelineV2Config:
     # True: transform 使用 _get_multi_dim_pipeline_weights (含 T1 tail/regime 修正)
     # False: 走旧路径 _get_pipeline_weights (仅 ar1 驱动)
     enable_multi_dim_routing: bool = False
+
+    # v3.0.0 T3.4: CUSUM 在线漂移监测开关 (默认 False, 向后兼容)
+    # True: 启用 CUSUM 监测因子值矩阵的横截面统计量 (均值/标准差)
+    # 两个 CUSUM 独立监测 (序贯检验, 无需 BH-FDR), h=5.5σ 补偿误报率叠加
+    enable_cusum_drift_monitor: bool = False
+    cusum_k: float = 0.5       # slack (0.5σ, 检测半漂移, T3.3 校准验证)
+    cusum_h: float = 5.5       # trigger (5.5σ, 两个 CUSUM 叠加补偿)
 
     @classmethod
     def from_unified(cls, unified) -> 'PipelineV2Config':
@@ -1071,6 +1091,32 @@ class FactorProcessingPipelineV2:
             from factor_pipeline.adapters import OrthogonalizerAdapter
             self.post_transform_hooks.append(OrthogonalizerAdapter(ortho_config))
 
+        # v3.0.0 T3.4: CUSUM 在线漂移监测器 (事后诊断, 不侵入 fit/transform)
+        # 两个 CUSUM 独立监测: 'mean' (横截面均值) + 'std' (横截面标准差)
+        # 序贯检验无需 BH-FDR, h=5.5σ 补偿误报率叠加
+        self.cusum_monitors: Dict[str, Any] = {}
+        self.drift_alerts: Dict[str, Dict] = {}
+        if getattr(self.config, 'enable_cusum_drift_monitor', False):
+            try:
+                from backtest.cusum_drift_monitor import CUSUMDriftMonitor
+                # baseline 初始化为 0/1 (fit 时会重新估)
+                self.cusum_monitors['mean'] = CUSUMDriftMonitor(
+                    baseline_mean=0.0, baseline_std=1.0,
+                    k=self.config.cusum_k, h=self.config.cusum_h,
+                    two_sided=True,
+                )
+                self.cusum_monitors['std'] = CUSUMDriftMonitor(
+                    baseline_mean=1.0, baseline_std=0.5,
+                    k=self.config.cusum_k, h=self.config.cusum_h,
+                    two_sided=True,
+                )
+                logger.info(
+                    f"CUSUM 监测器已启用: k={self.config.cusum_k}, "
+                    f"h={self.config.cusum_h}"
+                )
+            except ImportError:
+                logger.warning("CUSUM 监测器启用失败: cusum_drift_monitor 模块不可用")
+
         logger.info("FactorProcessingPipelineV2 initialized")
 
     def fit(self,
@@ -1395,6 +1441,113 @@ class FactorProcessingPipelineV2:
             FactorType.DYNAMIC: self.dynamic_pipeline,
             FactorType.MIXED: self.mixed_pipeline,
         }.get(factor_type)
+
+    def monitor_cusum_drift(
+        self,
+        factor_data: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Dict]:
+        """v3.0.0 T3.4: CUSUM 事后漂移诊断
+
+        对因子值矩阵的横截面统计量 (均值/标准差) 做 CUSUM 监测.
+        事后诊断工具, 不侵入 fit/transform 循环, 不自动重训练.
+
+        监测对象 (非 IC, 因 IC 需 forward returns, 管线内部不计算):
+        - 'mean': 横截面均值时序 (检测 level shift)
+        - 'std': 横截面标准差时序 (检测 volatility regime change)
+
+        两个 CUSUM 独立监测 (序贯检验无需 BH-FDR), h=5.5σ 补偿误报率叠加.
+
+        Args:
+            factor_data: Dict[因子名, DataFrame(T×N)] — 因子值矩阵
+
+        Returns:
+            {'mean': {'detected': bool, 'direction': str, ...},
+             'std':  {'detected': bool, 'direction': str, ...}}
+            enable_cusum_drift_monitor=False 时返回 {}
+
+        Side effect:
+            触发时填充 self.drift_alerts['cusum_mean'/'cusum_std']
+        """
+        if not self.cusum_monitors:
+            return {}
+
+        if not factor_data:
+            return {}
+
+        # 合并所有因子的横截面统计量 (多因子平均)
+        import numpy as _np
+        mean_series_list = []
+        std_series_list = []
+        for fname, df in factor_data.items():
+            if df is None or df.empty:
+                continue
+            # 每期的横截面均值/标准差
+            cs_mean = df.mean(axis=1).dropna()
+            cs_std = df.std(axis=1).dropna()
+            mean_series_list.append(cs_mean)
+            std_series_list.append(cs_std)
+
+        if not mean_series_list:
+            return {}
+
+        # 多因子平均 (或单因子直接用)
+        mean_series = pd.concat(mean_series_list, axis=1).mean(axis=1).dropna()
+        std_series = pd.concat(std_series_list, axis=1).mean(axis=1).dropna()
+
+        # 重置监测器 (每次调用是独立诊断)
+        for monitor in self.cusum_monitors.values():
+            monitor.reset()
+
+        # 估算 baseline (用前 50% 数据或全部)
+        n_mean = len(mean_series)
+        n_std = len(std_series)
+        if n_mean < 10:
+            return {'mean': {'detected': False, 'reason': 'insufficient data'},
+                    'std': {'detected': False, 'reason': 'insufficient data'}}
+
+        split_mean = max(n_mean // 2, 10)
+        split_std = max(n_std // 2, 10)
+        baseline_mean_val = float(mean_series.iloc[:split_mean].mean())
+        baseline_mean_std = float(mean_series.iloc[:split_mean].std()) or 1e-6
+        baseline_std_val = float(std_series.iloc[:split_std].mean())
+        baseline_std_std = float(std_series.iloc[:split_std].std()) or 1e-6
+
+        # 更新 baseline
+        self.cusum_monitors['mean'].baseline_mean = baseline_mean_val
+        self.cusum_monitors['mean'].baseline_std = baseline_mean_std
+        self.cusum_monitors['std'].baseline_mean = baseline_std_val
+        self.cusum_monitors['std'].baseline_std = baseline_std_std
+
+        # 逐期更新 CUSUM
+        results = {}
+        for key, series, monitor in [
+            ('mean', mean_series, self.cusum_monitors['mean']),
+            ('std', std_series, self.cusum_monitors['std']),
+        ]:
+            last_result = {'detected': False, 'direction': None}
+            for x in series:
+                last_result = monitor.update(float(x))
+            results[key] = last_result
+
+            # 触发时填充 drift_alerts
+            if last_result['detected']:
+                alert_key = f'cusum_{key}'
+                self.drift_alerts[alert_key] = {
+                    'monitor': 'cusum',
+                    'stat': key,
+                    'direction': last_result['direction'],
+                    'S_pos': last_result.get('S_pos', 0.0),
+                    'S_neg': last_result.get('S_neg', 0.0),
+                    'baseline_mean': monitor.baseline_mean,
+                    'baseline_std': monitor.baseline_std,
+                }
+                logger.warning(
+                    f"CUSUM 漂移检测 ({key}): direction={last_result['direction']}, "
+                    f"baseline_mean={monitor.baseline_mean:.4f}, "
+                    f"baseline_std={monitor.baseline_std:.4f}"
+                )
+
+        return results
 
     def get_classification_summary(self) -> pd.DataFrame:
         """获取分类汇总表"""

@@ -38,6 +38,13 @@ try:
 except ImportError:
     _HAS_JOBLIB = False
 
+# T3.5 (v3.0.0): 共享多重检验校正模块
+try:
+    from backtest.multiple_testing import apply_bh_fdr, apply_bonferroni
+    _HAS_MULTIPLE_TESTING = True
+except ImportError:
+    _HAS_MULTIPLE_TESTING = False
+
 
 class FactorSignificanceTest:
     """因子增量显著性检验
@@ -428,19 +435,27 @@ class FactorSignificanceTest:
         K = len(p_values)
 
         if correction == 'bonferroni':
-            # 保守: p_adj = min(p * K, 1)
-            p_adj = np.minimum(p_values * K, 1.0)
+            # T3.5: 调用共享模块 (向后兼容, fallback 到内联)
+            if _HAS_MULTIPLE_TESTING:
+                p_adj_list, _ = apply_bonferroni(p_values.tolist(), alpha=self.alpha)
+                p_adj = np.array(p_adj_list)
+            else:
+                p_adj = np.minimum(p_values * K, 1.0)
         elif correction == 'benjamini_hochberg':
-            # BH: 排序后 p_(k) * K / rank, 取累积最小 (从大到小)
-            order = np.argsort(p_values)
-            p_adj = np.empty_like(p_values)
-            prev = 1.0
-            for i in range(K - 1, -1, -1):
-                rank = i + 1
-                idx = order[i]
-                bh = p_values[idx] * K / rank
-                prev = min(prev, bh)
-                p_adj[idx] = min(prev, 1.0)
+            # T3.5: 调用共享模块 (向后兼容, fallback 到内联)
+            if _HAS_MULTIPLE_TESTING:
+                p_adj_list, _ = apply_bh_fdr(p_values.tolist(), alpha=self.alpha)
+                p_adj = np.array(p_adj_list)
+            else:
+                order = np.argsort(p_values)
+                p_adj = np.empty_like(p_values)
+                prev = 1.0
+                for i in range(K - 1, -1, -1):
+                    rank = i + 1
+                    idx = order[i]
+                    bh = p_values[idx] * K / rank
+                    prev = min(prev, bh)
+                    p_adj[idx] = min(prev, 1.0)
         elif correction == 'holm':
             # Holm: 逐步 Bonferroni (从小到大, p * (K - i))
             order = np.argsort(p_values)

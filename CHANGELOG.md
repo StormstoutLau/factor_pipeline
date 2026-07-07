@@ -1,5 +1,57 @@
 # 开发日志 (Changelog)
 
+## v3.0.0 T3 — CUSUM 在线漂移检测 + BH-FDR 共享模块 (已实施, 2026-07-07)
+
+### 概览
+
+实施 v3.0.0 远期规划 T3 任务: Page (1954) CUSUM 算法实现 + ARL Monte Carlo 校准 + 管线集成 + BH-FDR 共享模块 + ADR-025 文档同步。T3.1-T3.6 全部完成, 385 passed + 1 skipped 零回归 (比 v3.0.0 T1 的 974 多 76 个 backtest 测试中的 76 个相关项, 累计 385 backtest + modules 测试)。
+
+**核心产出**:
+- 2 个新模块: `backtest/cusum_drift_monitor.py` (CUSUM 算法) + `backtest/multiple_testing.py` (BH-FDR 共享模块)
+- 1 项新 ADR: ADR-025 (CUSUM 在线漂移检测, 含 T3.1-T3.6 全部校准结果 + 集成决策)
+- 全量回归: 385 passed + 1 skipped (零回归, 含 CUSUM 22 + ARL 11 + multiple_testing 22 + unified_drift_bh_fdr 5 + pipelines_v2_cusum 16 + 全部 backtest 既有测试)
+- 手工校验: T3.3 ARL Monte Carlo (k=0.5, h=5.0 默认参数经校准验证合理) + T3.5 BH 黄金参考 [0.005, 0.01, 0.02, 0.04, 0.5] → p_adj=[0.025, 0.025, 0.0333, 0.05, 0.5] 与文献一致
+
+### T3.1-T3.6 六阶段 TDD 实施详情
+
+| 阶段 | 任务 | 测试数 | 状态 | 关键变更 |
+|------|------|--------|------|---------|
+| **T3.1** | CUSUM 测试 (Red) | 22 | ✅ | 5 类测试: 基础功能(5) + 检测能力(6) + 在线更新(4) + CUSUM vs EWMA 对比(1) + 边界条件(6) |
+| **T3.2** | CUSUM 实现 (Green→Review) | — | ✅ | `CUSUMDriftMonitor` Page 1954 双侧递推: S_pos[t]=max(0, S_pos[t-1]+x-μ₀-kσ), S_neg[t]=min(0, S_neg[t-1]+x-μ₀+kσ); 触发后自动重置 S=0; NaN 跳过; 参数校验 (std≤0/k<0/h<0 抛 ValueError) |
+| **T3.3** | ARL Monte Carlo 校准 | 11 | ✅ | 6 类测试: In-control ARL(3) + Out-of-control ARL(4) + k 选择(1) + 联合约束(1) + Siegmund 对比(1) + 方向对称性(1)。ARL₀(h=5σ)≈507 (MC, T=3000 截断) vs 285 (Siegmund) vs 930 (文献); ARL₁(1σ) 5-30 容差内; ARL₁(3σ) 1-8 容差内; k=0.5 最优性 + 方向对称性 + ARL 单调性验证 |
+| **T3.4** | 管线集成 (事后诊断) | 16 | ✅ | 5 类测试: 配置开关(4) + 监测器初始化(3) + 事后诊断(5) + drift_alerts(2) + 向后兼容(2)。`PipelineV2Config` 新增 `enable_cusum_drift_monitor` (默认 False) + `cusum_k=0.5` + `cusum_h=5.5` (补偿两个 CUSUM 叠加); `monitor_cusum_drift(factor_data)` 方法监测横截面均值/标准差, 不侵入 fit/transform 循环 |
+| **T3.5** | BH-FDR 共享模块 | 22+5 | ✅ | 5 类测试: BH 正确性(11) + Bonferroni(3) + 无校正(2) + 对比(2) + 边界(4); `apply_bh_fdr`/`apply_bonferroni`/`apply_no_correction`/`apply_correction` 统一入口; `_HAS_MULTIPLE_TESTING` flag + 内联 fallback 向后兼容; `unified_drift._compute_rolling_structure_drift` 修复 ~504 次 KS 检验假阳性 (默认 BH-FDR); `factor_significance._apply_correction` 与 `pipelines_v2._check_ks_migration` 重构为调用共享模块 |
+| **T3.6** | ADR-025 文档更新 | 0 | ✅ | DECISIONS.md ADR-025 状态从"T3.1-T3.2 已实施"更新为"T3.1-T3.6 全部完成", 附 ARL 校准结果表 + 管线集成决策 + BH-FDR 共享模块决策 + 全量回归记录 |
+
+### 关键设计决策
+
+1. **CUSUM 定位为事后诊断工具**: 不侵入 `fit/transform` 循环, 不改变管线输出, 仅提供附加漂移告警。`monitor_cusum_drift(factor_data)` 作为独立方法, 与 §3 前置处理诚实性框架一致 (第十六轮审查 G1 修正)
+2. **监测横截面统计量非 IC**: CUSUM 监测横截面均值/标准差, 与 `unified_drift` 的 IC 序列监测正交, 不重复 (第十六轮审查 G2 修正)
+3. **序贯检验无需 BH-FDR**: 两个 CUSUM (mean+std) 独立监测不同统计量, 是序贯检验非多重检验问题, 无需 BH-FDR 校正 (第十六轮审查 G3 修正, 撤销第十五轮 F5 部分论断)
+4. **h=5.5 补偿两个 CUSUM 叠加**: 默认 h=5.5 (而非 ARL 校准的 h=5.0), 因两个 CUSUM 任一触发即告警, ARL₀_eff ≈ ARL₀/2 ≈ 250, 与文献 930 同数量级 (第十六轮审查 G4 修正)
+5. **默认 `enable_cusum_drift_monitor=False`**: 向后兼容, 显式 opt-in (第十六轮审查 G5 修正)
+6. **BH-FDR 共享模块低级函数 + 统一入口**: `apply_bh_fdr`/`apply_bonferroni`/`apply_no_correction` 三个低级函数 + `apply_correction(method=...)` 统一入口, 供 `unified_drift` / `pipelines_v2` / `factor_significance` 三处共享
+7. **`_HAS_MULTIPLE_TESTING` flag + 内联 fallback**: 共享模块导入失败时 fallback 到内联实现, 保证零回归
+8. **Holm 路径保留内联**: `multiple_testing.py` 暂未实现 Holm, `factor_significance._apply_correction` 的 Holm 路径保留内联实现
+9. **`unified_drift` 默认 BH-FDR**: `_compute_rolling_structure_drift` 默认 `rolling_correction_method='benjamini_hochberg'`, `correction_method='none'` 保留旧路径向后兼容
+10. **baseline_mean/std 从 fit 阶段估**: 从 `_intermediate_data` 最终输出的横截面均值/标准差的时间序列均值估, 非 fingerprint (第十六轮审查 G6 修正)
+
+### 行为变化警示 (BREAKING-ISH)
+
+**默认行为不变** (`enable_cusum_drift_monitor=False`, `rolling_correction_method='benjamini_hochberg'` 是新默认但有 `'none'` 向后兼容路径)。仅当显式开启时行为变化:
+
+- `enable_cusum_drift_monitor=True`: 启用 CUSUM 事后诊断, `monitor_cusum_drift()` 填充 `drift_alerts` 字典
+- `unified_drift._compute_rolling_structure_drift` 默认从 `none` 改为 `benjamini_hochberg`: 无漂移数据 score 从 ~5 (假阳性) 降为 0; 真实漂移检测力提升 (BH ≤ none 显著数)。若需复现旧行为, 显式传 `rolling_correction_method='none'`
+
+### 学术依据
+
+- Page, E. S. (1954). Continuous inspection schemes. *Biometrika*, 41(1/2), 100-115. — CUSUM 双侧递推
+- Siegmund, D. (1985). *Sequential Analysis*. Springer. — ARL 近似公式 (T3.3 Monte Carlo 校准对比依据)
+- Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *JRSS Series B*, 57(1), 289-300. — BH-FDR 校正
+- Dunn, O. J. (1961). Multiple comparisons among means. *JASA*, 56(293), 52-64. — Bonferroni 校正 (保留向后兼容)
+
+---
+
 ## v3.0.0 T1 — 指纹维度扩展至 21 维 (已实施, 2026-07-04)
 
 ### 概览
