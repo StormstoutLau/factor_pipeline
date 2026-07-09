@@ -65,9 +65,9 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 ### 🟢 P2 — Demo Jupyter Notebook
 
 > **设计文档**: [docs/ANALYSIS_V3.0.0.md §9.2](docs/ANALYSIS_V3.0.0.md) (完整 10-cell 规格)
-> **预计耗时**: ~3h
+> **完成日期**: 2026-07-09
 
-- [ ] 阶段 1 MVP: 10-cell notebook — 指纹雷达图 / 分类决策树 / 分布直方图 / Spearman 排序 / IC 追溯 / W 热力图 / 迁移检测 / 输出对比 / 校验报告
+- [x] 阶段 1 MVP: 10-cell notebook — 指纹雷达图 / 分类决策树 / 分布直方图 / Spearman 排序 / IC 追溯 / W 热力图 / 迁移检测 / 输出对比 / 校验报告
 
 ---
 
