@@ -387,6 +387,59 @@ def run_all_tests():
     return result.wasSuccessful()
 
 
+# ============================================================
+# P2 测试盲区补强: 设计约束无测试 (B1)
+# ============================================================
+
+class TestPipelineV2ConfigFields:
+    """PipelineV2Config 字段存在性测试 (audit §5 B1).
+
+    RN-E7/E10 扩展字段在 P0-3/P0-5 修复后新增, 但无字段存在性测试守护.
+    本测试确保 Config 字段不被意外删除或改名.
+    """
+
+    def test_E7_state_attribution_config_fields_exist(self):
+        """RN-E7: PipelineV2Config 含状态归因 4 字段."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+        config = PipelineV2Config()
+        # E7 4 字段 (P0-3 修复新增)
+        assert hasattr(config, 'enable_state_attribution'), "缺 enable_state_attribution"
+        assert hasattr(config, 'state_data_source'), "缺 state_data_source"
+        assert hasattr(config, 'state_min_observations'), "缺 state_min_observations"
+        assert hasattr(config, 'regime_n_states'), "缺 regime_n_states"
+        # 默认值验证
+        assert config.enable_state_attribution is False  # opt-in 默认关闭
+        assert config.state_data_source == 'akshare'
+        assert config.state_min_observations == 252
+        assert config.regime_n_states == 2
+
+    def test_E10_decision_bridge_config_fields_exist(self):
+        """RN-E10: PipelineV2Config 含决策桥接 3 字段."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+        config = PipelineV2Config()
+        # E10 3 字段 (P0-5 修复新增)
+        assert hasattr(config, 'enable_decision_bridge'), "缺 enable_decision_bridge"
+        assert hasattr(config, 'bridge_learning_rate'), "缺 bridge_learning_rate"
+        assert hasattr(config, 'bridge_decision_freq'), "缺 bridge_decision_freq"
+        # 默认值验证
+        assert config.enable_decision_bridge is False  # opt-in 默认关闭
+        assert config.bridge_learning_rate == 0.1
+        assert config.bridge_decision_freq == 'M'
+
+    def test_E10_bridge_init_params_exist(self):
+        """RN-E10: StatisticalDecisionBridge.__init__ 含 lambda_softmax/oco_eta (P0-6 修复)."""
+        from factor_pipeline.backtest.statistical_decision_bridge import (
+            StatisticalDecisionBridge,
+        )
+        bridge = StatisticalDecisionBridge()
+        diag = bridge.get_diagnostics()
+        # P0-6/P0-8 修复: __init__ 参数 + get_diagnostics 字段
+        assert 'lambda_softmax' in diag, "get_diagnostics 缺 lambda_softmax"
+        assert 'oco_eta' in diag, "get_diagnostics 缺 oco_eta"
+        assert diag['lambda_softmax'] == 1.0  # 默认值
+        assert diag['oco_eta'] == 0.01  # 默认值
+
+
 if __name__ == '__main__':
     success = run_all_tests()
     sys.exit(0 if success else 1)

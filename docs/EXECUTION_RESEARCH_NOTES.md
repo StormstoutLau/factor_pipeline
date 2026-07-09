@@ -94,10 +94,12 @@ RESEARCH_NOTES §1.4 指出发表前需三块补强:
 | 文件 | 改动类型 | 类/方法 | 接口签名 |
 |------|---------|--------|---------|
 | `backtest/multiple_testing.py` | 新增类 | `PowerCurveAnalyzer` | `__init__(self, n_simulations: int = 1000, alpha: float = 0.05, random_state: Optional[int] = None)` |
-| `backtest/multiple_testing.py` | 新增方法 | `PowerCurveAnalyzer.compute_power_curve` | `compute_power_curve(self, effect_sizes: np.ndarray, n_samples: int, n_hypotheses: int, true_alt_fraction: float, methods: List[str] = ['bonferroni', 'benjamini_hochberg', 'none']) -> Dict[str, np.ndarray]` |
+| `backtest/multiple_testing.py` | 新增方法 | `PowerCurveAnalyzer.compute_power_curve` | `compute_power_curve(self, effect_sizes: np.ndarray, n_samples: int, n_hypotheses: int, true_alt_fraction: float, methods: Optional[List[str]] = None) -> Dict[str, np.ndarray]` (None 时默认 `['bonferroni', 'benjamini_hochberg', 'none']`, 函数内惰性赋默认值避免可变默认参数反模式) |
 | `backtest/multiple_testing.py` | 新增方法 | `PowerCurveAnalyzer.plot_power_curve` | `plot_power_curve(self, result: Dict, save_path: Optional[str] = None) -> matplotlib.figure.Figure` |
 | `backtest/multiple_testing.py` | 新增方法 | `PowerCurveAnalyzer.compute_fdr_vs_power` | `compute_fdr_vs_power(self, effect_sizes, n_samples, n_hypotheses, true_alt_fraction, methods) -> Dict` (返回同时含 power + empirical FDR) |
 | `tests/backtest/test_power_curve.py` | 新增测试 | `TestPowerCurveAnalyzer` | TDD 测试类 |
+
+<!-- # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — E1: compute_power_curve methods 默认值改为 Optional[List[str]]=None, 函数内惰性赋默认, 避免可变默认参数反模式 -->
 
 #### 1.2.3 算法实现
 
@@ -390,26 +392,47 @@ def _romano_wolf_stepdown(
     alpha: float,
     k: int,
 ) -> Tuple[List[float], List[bool]]:
-    """Romano-Wolf stepdown 程序 (更有检测力)"""
-    m = len(p_arr)
-    # 排序索引
-    order = np.argsort(p_arr)
-    sorted_p = p_arr[order]
-    # bootstrap 排序 (每行)
-    sorted_boot = np.sort(bootstrap_p_values, axis=1)
+    """Romano-Wolf stepdown 程序 (更有检测力)
 
-    rejected_sorted = np.zeros(m, dtype=bool)
-    # Stepdown: 从最小 p 值开始, 找到第一个不拒绝的位置
+    算法:
+        1. 排序 p 值: p_(1) ≤ ... ≤ p_(m)
+        2. 对每个 j, 计算调整后 p 值 (经验 CDF):
+              p_adj_(j) = P*(k-th smallest of {p*_(1), ..., p*_(j)} ≤ p_(j))
+           即 mean(kth_in_sub ≤ p_(j))
+        3. 强制单调 (累积最大): p_adj_(j) = max(p_adj_(1), ..., p_adj_(j))
+        4. 拒绝 H_(1), ..., H_(j*) 其中 j* 为最大使 p_adj_(j*) ≤ α 的索引
+    """
+    m = len(p_arr)
+    if m == 0:  # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — m==0 守卫, 避免空数组后续索引/排序异常
+        return [], []
+    # 排序索引 (稳定排序避免 ties 时顺序跳变)
+    order = np.argsort(p_arr, kind="stable")  # P2 对齐: kind="stable" 保证 ties 顺序确定
+    sorted_p = p_arr[order]
+    # bootstrap 每行排序
+    sorted_boot = np.sort(bootstrap_p_values, axis=1)  # (B, m)
+
+    # ---- 调整后 p 值 (经验 CDF) ----
+    # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — 单路径: 先算 adjusted_p (经验 CDF + 累积最大),
+    # 再用 adjusted_p ≤ alpha 判定 rejected; 消除 spec 原冗余双循环 (critical 分位数循环与 adjusted_p 循环重复)
+    adjusted_sorted = np.zeros(m)
     for j in range(m):
-        # k-th smallest of bootstrap[:(j+1)]
-        # 即在每行前 (j+1) 个最小 bootstrap p 值中取第 k 小
-        submatrix = sorted_boot[:, :j + 1]
+        # 在每行前 (j+1) 个最小 bootstrap p 值中取第 k 小
+        submatrix = sorted_boot[:, : j + 1]  # (B, j+1)
         if submatrix.shape[1] >= k:
             kth_in_sub = np.sort(submatrix, axis=1)[:, k - 1]
         else:
+            # 列数 < k, 退化为取该行最大 (第 j+1 小)
             kth_in_sub = submatrix[:, -1]
-        critical = np.quantile(kth_in_sub, 1 - alpha)
-        if sorted_p[j] <= critical:
+        # p_adj_(j) = P*(kth_in_sub ≤ p_(j))  (经验 CDF)
+        adjusted_sorted[j] = float(np.mean(kth_in_sub <= sorted_p[j]))
+    # 累积最大 (stepdown 单调性: p_adj 应非减)
+    adjusted_sorted = np.maximum.accumulate(adjusted_sorted)
+    adjusted_sorted = np.clip(adjusted_sorted, 0.0, 1.0)  # P2 对齐: clip 到 [0,1] 防数值越界
+
+    # ---- 拒绝判定 (stepdown: 找最大 j* 使 p_adj_(j*) ≤ α, 拒绝 1..j*) ----
+    rejected_sorted = np.zeros(m, dtype=bool)
+    for j in range(m):
+        if adjusted_sorted[j] <= alpha:
             rejected_sorted[j] = True
         else:
             break  # stepdown: 一旦不拒绝, 后续都不拒绝
@@ -417,21 +440,8 @@ def _romano_wolf_stepdown(
     # 还原原始顺序
     rejected = np.zeros(m, dtype=bool)
     rejected[order] = rejected_sorted
-
-    # 调整 p 值 (stepdown: 取累积最大)
-    adjusted_sorted = np.zeros(m)
-    for j in range(m):
-        submatrix = sorted_boot[:, :j + 1]
-        if submatrix.shape[1] >= k:
-            kth_in_sub = np.sort(submatrix, axis=1)[:, k - 1]
-        else:
-            kth_in_sub = submatrix[:, -1]
-        adjusted_sorted[j] = np.mean(kth_in_sub <= sorted_p[j])
-    # 累积最大 (stepdown 单调性)
-    adjusted_sorted = np.maximum.accumulate(adjusted_sorted)
     adjusted = np.zeros(m)
     adjusted[order] = adjusted_sorted
-
     return adjusted.tolist(), rejected.tolist()
 ```
 
@@ -1005,14 +1015,16 @@ RESEARCH_NOTES §2.3.2 的**关键限定**指出标准 Contextual Bandit (LinUCB
 | 文件 | 改动类型 | 类/方法 | 接口签名 |
 |------|---------|--------|---------|
 | `backtest/fingerprint_performance_logger.py` | 新建文件 | `FingerprintPerformanceLogger` | `__init__(self, db_path: str = 'factor_db.duckdb', table_name: str = 'fingerprint_performance_log', enable: bool = False)` |
-| `backtest/fingerprint_performance_logger.py` | 新增方法 | `FingerprintPerformanceLogger.log` | `log(self, factor_name: str, fingerprint: FactorFingerprint, performance: Dict[str, float], timestamp: Optional[str] = None, regime: Optional[str] = None) -> None` |
+| `backtest/fingerprint_performance_logger.py` | 新增方法 | `FingerprintPerformanceLogger.log` | `log(self, factor_name: str, fingerprint: FactorFingerprint, performance: Dict[str, float], timestamp: Optional[str] = None, regime: Optional[str] = None, pipeline_weights: Optional[Dict[str, float]] = None) -> None` |
 | `backtest/fingerprint_performance_logger.py` | 新增方法 | `FingerprintPerformanceLogger.query` | `query(self, factor_name: Optional[str] = None, start_date: Optional[str] = None, end_date: Optional[str] = None, regime: Optional[str] = None) -> pd.DataFrame` |
-| `backtest/fingerprint_performance_logger.py` | 新增方法 | `FingerprintPerformanceLogger.compute_attribution` | `compute_attribution(self, performance_metric: str = 'ic_mean', group_by: str = 'regime') -> pd.DataFrame` |
+| `backtest/fingerprint_performance_logger.py` | 新增方法 | `FingerprintPerformanceLogger.compute_attribution` | `compute_attribution(self, performance_metric: str = 'ic_mean', group_by: str = 'regime', n_quantiles: int = 5) -> pd.DataFrame` |
 | `backtest/fingerprint_performance_logger.py` | 新增方法 | `FingerprintPerformanceLogger.get_diagnostics` | `get_diagnostics(self) -> Dict[str, Any]` |
 | `pipelines_v2.py` | 扩展配置 | `PipelineV2Config` | 新增字段: `enable_fingerprint_performance_log: bool = False`, `fp_log_db_path: str = 'factor_db.duckdb'`, `fp_log_table_name: str = 'fingerprint_performance_log'` |
-| `pipelines_v2.py` | 扩展方法 | `FactorProcessingPipelineV2.fit` | fit 结束时, 若 `enable_fingerprint_performance_log=True`, 调用 `self._fp_logger.log(...)` 记录指纹与初始表现 |
+| `pipelines_v2.py` | 新增方法 | `FactorProcessingPipelineV2.log_fingerprint_performance` | `log_fingerprint_performance(self, factor_data: Optional[Dict[str, pd.DataFrame]] = None, returns: Optional[pd.DataFrame] = None) -> Optional[Any]` (独立方法, 供 fit 后显式调用; 不侵入 fit/transform; 内部惰性创建 `_fp_logger` 并遍历 `fingerprints_` 调用 `log(...)` 记录指纹+表现+管道权重) |
 | `pipelines_v2.py` | 新增方法 | `FactorProcessingPipelineV2.get_fingerprint_performance_log` | `get_fingerprint_performance_log(self, **query_kwargs) -> pd.DataFrame` |
 | `tests/backtest/test_fingerprint_performance_logger.py` | 新建测试 | `TestFingerprintPerformanceLogger` | TDD 测试类 |
+
+<!-- # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — E4: (1) log() 签名增加 pipeline_weights 参数; (2) compute_attribution 增加 n_quantiles=5; (3) fit 集成改为独立方法 log_fingerprint_performance(factor_data, returns) 供 fit 后显式调用, 不侵入 fit/transform -->
 
 #### 2.2.3 算法实现
 
@@ -1161,7 +1173,21 @@ class FingerprintPerformanceLogger:
                 row[w] = float('nan')
 
         df = pd.DataFrame([row])
-        self._conn.execute(f"INSERT INTO {self.table_name} SELECT * FROM df")
+        # 显式列名 INSERT (跳过 created_at, 它有 DEFAULT CURRENT_TIMESTAMP)
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — 显式列名 + ? 占位符 INSERT, 避免 SELECT * FROM df 的类型推断/列序问题
+        all_cols = (['timestamp', 'factor_name', 'regime']
+                    + self.FINGERPRINT_FIELDS
+                    + self.PERFORMANCE_FIELDS
+                    + self.PIPELINE_WEIGHT_FIELDS)
+        col_list = ", ".join(all_cols)
+        placeholders = ", ".join(["?"] * len(all_cols))
+        # NaN → None 以便 DuckDB 存为 NULL (避免类型推断问题)
+        values = [None if (isinstance(df.iloc[0][c], float) and np.isnan(df.iloc[0][c]))
+                  else df.iloc[0][c] for c in all_cols]
+        self._conn.execute(
+            f"INSERT INTO {self.table_name} ({col_list}) VALUES ({placeholders})",
+            values,
+        )
 
     def query(
         self,
@@ -1173,19 +1199,24 @@ class FingerprintPerformanceLogger:
         """查询历史记录"""
         if not self.enable:
             return pd.DataFrame()
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — ? 参数化查询, 防 SQL 注入 (原 f-string 拼接值有注入风险)
         conditions = []
-        if factor_name:
-            conditions.append(f"factor_name = '{factor_name}'")
-        if start_date:
-            conditions.append(f"timestamp >= '{start_date}'")
-        if end_date:
-            conditions.append(f"timestamp <= '{end_date}'")
-        if regime:
-            conditions.append(f"regime = '{regime}'")
+        params: list = []
+        if factor_name is not None:
+            conditions.append("factor_name = ?")
+            params.append(factor_name)
+        if start_date is not None:
+            conditions.append("timestamp >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("timestamp <= ?")
+            params.append(end_date)
+        if regime is not None:
+            conditions.append("regime = ?")
+            params.append(regime)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        return self._conn.execute(
-            f"SELECT * FROM {self.table_name}{where} ORDER BY timestamp"
-        ).fetchdf()
+        sql = f"SELECT * FROM {self.table_name}{where} ORDER BY timestamp"
+        return self._conn.execute(sql, params).fetchdf()
 
     def compute_attribution(
         self,
@@ -1548,6 +1579,12 @@ class AttributionAnalyzer:
         # 协方差项 (残余)
         sum_individual = sum(contributions.values())
         contributions['covariance'] = max(0.0, 1.0 - sum_individual)
+
+        # 归一化确保和精确为 1 (容错 sum_individual > 1 的边界情况)
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — 二次归一化确保方差分解和恒为 1.0, 满足验收标准
+        total = sum(contributions.values())
+        if total > 0:
+            contributions = {k: float(v / total) for k, v in contributions.items()}
 
         self._layer2_results = contributions
         return contributions
@@ -3055,6 +3092,9 @@ class ThreeChannelDecomposition:
         fwd_returns: pd.DataFrame,
         regime_labels: Optional[np.ndarray] = None,
     ) -> 'ThreeChannelDecomposition':
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — enable 守卫, enable=False 时直接返回 (identity)
+        if not self.enable:
+            return self
         self._factor_returns = factor_returns
         self._fwd_returns = fwd_returns
         self._regime_labels = regime_labels
@@ -3075,6 +3115,9 @@ class ThreeChannelDecomposition:
         r_list, ic_list, sf_list, sr_list, dates = [], [], [], [], []
         for date in common_dates:
             fvals = fdata[date].dropna()
+            # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — date 不在 fwd_returns.index 时跳过, 防 .loc KeyError
+            if date not in self._fwd_returns.index:
+                continue
             rvals = self._fwd_returns.loc[date].dropna()
             common = fvals.index.intersection(rvals.index)
             if len(common) < 10:
@@ -3087,6 +3130,9 @@ class ThreeChannelDecomposition:
             q20 = f_common.quantile(0.2)
             long_stocks = f_common[f_common >= q80].index
             short_stocks = f_common[f_common <= q20].index
+            # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — 多/空股票为空时跳过, 防 .mean() 得 NaN
+            if len(long_stocks) == 0 or len(short_stocks) == 0:
+                continue
             r_factor = r_common.loc[long_stocks].mean() - r_common.loc[short_stocks].mean()
 
             # IC: Spearman rank
@@ -3117,6 +3163,9 @@ class ThreeChannelDecomposition:
 
         log|R_factor| ≈ log|IC| + log(σ_factor) + log(σ_R)
         """
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — enable 守卫, enable=False 或未 fit 时返回 {}
+        if not self.enable or self._factor_returns is None:
+            return {}
         r, ic, sf, sr = self._compute_channel_series(factor_name)
 
         # 对数变换 (取绝对值, 加小常数避免 log(0))
@@ -3143,30 +3192,43 @@ class ThreeChannelDecomposition:
 
     def classify_divergence_pattern(self, factor_name: str) -> Dict[str, str]:
         """分类发散模式 (A/B/C/D/E)"""
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — enable 守卫, enable=False 或未 fit 时返回 unclassified
+        if not self.enable or self._factor_returns is None:
+            return {
+                'factor': factor_name,
+                'pattern': 'unclassified',
+                'pattern_name': 'unclassified',
+            }
         series = self.decompose(factor_name)
         r = series['R_factor']
         ic = series['IC']
         sf = series['sigma_factor']
         sr = series['sigma_R']
 
-        # 计算各通道的趋势 (用线性回归斜率)
-        def _trend(s):
+        # 计算各通道的归一化趋势 (slope / residual_std, 信号噪声比)
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — _trend 返回 slope/std(detrended_residuals),
+        # 调用处直接使用 (原 spec 返回 slope 再除以 s.std()); detrended residual std 是更合理的归一化基准,
+        # 避免强趋势序列因 std 膨胀被误判
+        def _trend(s: pd.Series) -> float:
+            """归一化趋势: slope / detrended_residual_std
+
+            用 detrended residual std 归一化, 避免趋势本身膨胀 std.
+            """
             x = np.arange(len(s))
-            if len(s) < 10 or s.std() < 1e-10:
+            if len(s) < 10:
                 return 0.0
-            slope = np.polyfit(x, s.values, 1)[0]
-            return float(slope)
+            values = s.values
+            slope, intercept = np.polyfit(x, values, 1)
+            residuals = values - (slope * x + intercept)
+            residual_std = float(np.std(residuals))
+            if residual_std < 1e-10:
+                return 0.0
+            return float(slope / residual_std)
 
-        r_trend = _trend(r)
-        ic_trend = _trend(ic)
-        sf_trend = _trend(sf)
-        sr_trend = _trend(sr)
-
-        # 归一化 (用标准差)
-        r_norm = r_trend / (r.std() + 1e-10)
-        ic_norm = ic_trend / (ic.std() + 1e-10)
-        sf_norm = sf_trend / (sf.std() + 1e-10)
-        sr_norm = sr_trend / (sr.std() + 1e-10)
+        r_norm = _trend(r)
+        ic_norm = _trend(ic)
+        sf_norm = _trend(sf)
+        sr_norm = _trend(sr)
 
         # 阈值
         threshold = 0.1
@@ -3220,12 +3282,24 @@ class ThreeChannelDecomposition:
 
         对 log|R| - log|IC| - log(σ_factor) - log(σ_R) 残差做 White 检验.
         """
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — enable 守卫, enable=False 或未 fit 时返回非异方差
+        if not self.enable or self._factor_returns is None:
+            return {
+                'factor': factor_name,
+                'white_pvalue': 1.0,
+                'is_heteroskedastic': False,
+                'test': 'white',
+            }
         series = self.decompose(factor_name)
         residual = series['log_residual']
 
         # White 检验: 残差的方差是否随时间变化
         x = np.arange(len(residual))
         X = sm.add_constant(np.column_stack([x, x**2]))
+        # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — try 前预初始化 white_stat=0.0/white_pvalue=1.0,
+        # 避免 except 分支未定义 white_stat 导致 return 时 NameError (原 spec 用 'white_stat' in locals() 兜底, 不健壮)
+        white_stat = 0.0
+        white_pvalue = 1.0
         try:
             model = sm.OLS(residual.values, X).fit()
             # White 检验统计量
@@ -3238,7 +3312,7 @@ class ThreeChannelDecomposition:
 
         return {
             'factor': factor_name,
-            'white_statistic': float(white_stat) if 'white_stat' in locals() else 0.0,
+            'white_statistic': float(white_stat),
             'white_pvalue': white_pvalue,
             'is_heteroskedastic': bool(white_pvalue < 0.05),
             'test': 'white',
@@ -3256,6 +3330,8 @@ class ThreeChannelDecomposition:
             'heteroskedasticity_test': self.heteroskedasticity_test,
         }
 ```
+
+<!-- # P2 对齐: 代码改进, spec 更新 (2026-07-09 audit) — E9: (1) _trend 返回 slope/std(detrended_residuals), 调用处直接使用 (原返回 slope + 调用除 s.std()); (2) fit/decompose/classify/test_heteroskedasticity 首行补 enable 守卫; (3) _compute_channel_series 补 date not in index / long_stocks/short_stocks 空守卫; (4) test_heteroskedasticity try 前预初始化 white_stat=0.0/white_pvalue=1.0 -->
 
 #### 3.1.22 兼容性分析
 

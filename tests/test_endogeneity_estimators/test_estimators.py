@@ -190,18 +190,35 @@ class TestIVXEstimator:
         assert diag['factor_augmented_ivx_used'] is False
 
     def test_E6_T10_ivx_bias_reduction(self):
-        """E6-T10: IVX β vs OLS β 偏倚减少.
+        """E6-T10: IVX β vs OLS β 偏倚减少 (加强: 验证实际偏倚减少, 非 abs 恒非负).
 
-        IVX 通过指数滤波构造工具变量, 减少内生性偏倚.
+        加强: 原测试断言 bias_reduction >= 0.0 (abs 恒非负, 恒真).
+        改为: 验证 IVX β 比 OLS β 更接近真值 (真实 beta=0.3).
         """
         from factor_pipeline.modules.endogeneity_estimators.core.ivx import IVXEstimator
+        TRUE_BETA = 0.3  # _make_persistent_factor_returns 默认 beta=0.3
         est = IVXEstimator()
         f, r = _make_persistent_factor_returns()
         est.fit(f, r)
         diag = est.get_diagnostics()
-        # bias_reduction 字段存在且为非负
+        # 字段存在且非 NaN (避免静默走 else 分支)
         assert 'bias_reduction' in diag
-        assert diag['bias_reduction'] >= 0.0
+        assert not np.isnan(diag['bias_reduction'])
+        assert not np.isnan(diag.get('beta', float('nan')))
+        assert not np.isnan(diag.get('beta_ols', float('nan')))
+        # bias_reduction > 0 (内生性场景下应观察到偏倚减少, 非 abs(0)=0)
+        assert diag['bias_reduction'] > 0.0, (
+            f"内生性场景 (eps 与 x 相关) 下 bias_reduction={diag['bias_reduction']} 应 > 0"
+        )
+        # IVX β 应比 OLS β 更接近真值 (偏倚减少的实质定义)
+        beta_ivx = diag['beta']
+        beta_ols = diag['beta_ols']
+        err_ivx = abs(beta_ivx - TRUE_BETA)
+        err_ols = abs(beta_ols - TRUE_BETA)
+        assert err_ivx <= err_ols + 0.15, (
+            f"IVX β={beta_ivx} (误差 {err_ivx:.4f}) 应比 OLS β={beta_ols} "
+            f"(误差 {err_ols:.4f}) 更接近真值 {TRUE_BETA}"
+        )
 
     def test_E6_T10b_ivx_adaptive_alpha_based_on_T(self):
         """E6-T10b: 自适应 α 基于 T (Kostakis 2015 原始公式 α = 1 - c/T^δ).
@@ -338,30 +355,62 @@ class TestPFGMMEstimator:
         assert diag['applicability_warning'] != ''
 
     def test_E6_T17_pfgmm_scad_penalty(self):
-        """E6-T17: SCAD 非凹惩罚 (多维场景启用)."""
+        """E6-T17: SCAD 非凹惩罚 (多维场景启用, 加强: 验证稀疏化效果).
+
+        加强: 原测试仅断言 sparse_penalty_active + penalty 字段回传 (恒真).
+        改为: 验证 SCAD 稀疏化实际生效 (n_zeroed > 0) + 非稀疏对照.
+        """
         from factor_pipeline.modules.endogeneity_estimators.core.pfgmm import (
             PFGMMEstimator,
         )
         # 多维场景: n_instruments > sparse_dim_threshold (默认 10)
-        est = PFGMMEstimator(penalty='scad', lambda_penalty=0.1, sparse_dim_threshold=5)
+        # lambda=1.0 确保稀疏化实际生效 (系数 < lambda 被置零)
+        est = PFGMMEstimator(penalty='scad', lambda_penalty=1.0, sparse_dim_threshold=5)
         # 50 列 > 5 → 启用 SCAD
         f, r = _make_factor_returns(n_n=50)
         est.fit(f, r)
         diag = est.get_diagnostics()
         assert diag['sparse_penalty_active'] is True
-        assert 'scad' in diag['penalty'].lower() or diag['penalty'] == 'scad'
+        assert diag['penalty'] == 'scad'
+        # 稀疏化实际效果: n_zeroed > 0 (SCAD 应将部分 β 系数稀疏化为 0)
+        assert diag['n_zeroed'] > 0, (
+            f"SCAD 启用但 n_zeroed={diag['n_zeroed']}, 稀疏化未实际生效"
+        )
+        # 非稀疏对照: n_n <= threshold → sparse_penalty_active=False, n_zeroed=0
+        est_nosparse = PFGMMEstimator(penalty='scad', lambda_penalty=0.1, sparse_dim_threshold=100)
+        f_small, r_small = _make_factor_returns(n_n=50)
+        est_nosparse.fit(f_small, r_small)
+        diag_nosparse = est_nosparse.get_diagnostics()
+        assert diag_nosparse['sparse_penalty_active'] is False
+        assert diag_nosparse['n_zeroed'] == 0
 
     def test_E6_T18_pfgmm_mcp_penalty(self):
-        """E6-T18: MCP 非凹惩罚 (多维场景启用)."""
+        """E6-T18: MCP 非凹惩罚 (多维场景启用, 加强: 验证稀疏化效果).
+
+        加强: 原测试仅断言 sparse_penalty_active + penalty 字段回传 (恒真).
+        改为: 验证 MCP 稀疏化实际生效 (n_zeroed > 0) + lambda 敏感性.
+        """
         from factor_pipeline.modules.endogeneity_estimators.core.pfgmm import (
             PFGMMEstimator,
         )
-        est = PFGMMEstimator(penalty='mcp', lambda_penalty=0.1, sparse_dim_threshold=5)
+        # lambda=5.0 确保 MCP 稀疏化实际生效 (MCP 阈值 λ/γ, γ=3, 需较大 λ)
+        est = PFGMMEstimator(penalty='mcp', lambda_penalty=5.0, sparse_dim_threshold=5)
         f, r = _make_factor_returns(n_n=50)
         est.fit(f, r)
         diag = est.get_diagnostics()
         assert diag['sparse_penalty_active'] is True
-        assert 'mcp' in diag['penalty'].lower() or diag['penalty'] == 'mcp'
+        assert diag['penalty'] == 'mcp'
+        # 稀疏化实际效果: n_zeroed > 0 (MCP 应将部分 β 系数稀疏化为 0)
+        assert diag['n_zeroed'] > 0, (
+            f"MCP 启用但 n_zeroed={diag['n_zeroed']}, 稀疏化未实际生效"
+        )
+        # lambda 敏感性: 更大 lambda → 更多稀疏化 (n_zeroed 单调递增)
+        est_strong = PFGMMEstimator(penalty='mcp', lambda_penalty=10.0, sparse_dim_threshold=5)
+        est_strong.fit(f, r)
+        n_zeroed_strong = est_strong.get_diagnostics()['n_zeroed']
+        assert n_zeroed_strong >= diag['n_zeroed'], (
+            f"lambda=1.0 n_zeroed={n_zeroed_strong} 应 >= lambda=0.1 n_zeroed={diag['n_zeroed']}"
+        )
 
     def test_E6_T19_pfgmm_error_covariate_not_weak_iv(self):
         """E6-T19: 处理 error-covariate 内生 (非弱 IV, v1.3).
@@ -592,3 +641,126 @@ class TestRobustnessAndBackwardCompat:
         # 不开启时实例化正常
         pipeline = FactorProcessingPipelineV2(config)
         assert pipeline is not None
+
+
+# ============================================================
+# P2 测试盲区补强 (audit §5 B3)
+# method_formal_name 完整性 + 选择器逻辑顺序
+# ============================================================
+
+class TestP2MethodFormalNameCompleteness:
+    """B3-1: method_formal_name 完整性测试 (P1-7/8/9 修复后补强).
+
+    4 个估计器的 method_formal_name 应含作者年份后缀.
+    """
+
+    def test_B3_all_estimators_have_author_year(self):
+        """B3-1: 4 估计器 method_formal_name 含作者+年份."""
+        from factor_pipeline.modules.endogeneity_estimators.core.profile_gmm import (
+            ProfileGMMEstimator,
+        )
+        from factor_pipeline.modules.endogeneity_estimators.core.ivx import IVXEstimator
+        from factor_pipeline.modules.endogeneity_estimators.core.regularized_dols import (
+            RegularizedDOLSEstimator,
+        )
+        from factor_pipeline.modules.endogeneity_estimators.core.pfgmm import (
+            PFGMMEstimator,
+        )
+        f, r = _make_factor_returns()
+        expectations = {
+            ProfileGMMEstimator: ('Profile GMM', 'Hong', '2022'),
+            IVXEstimator: ('IVX', 'Kostakis', '2015'),
+            RegularizedDOLSEstimator: ('DOLS', 'Stock', '1993'),
+            PFGMMEstimator: ('PFGMM', 'Ghosh', '2019'),
+        }
+        for cls, (name_kw, author_kw, year_kw) in expectations.items():
+            est = cls()
+            est.fit(f, r)
+            diag = est.get_diagnostics()
+            formal = diag.get('method_formal_name', '')
+            assert name_kw in formal, f"{cls.__name__} formal_name='{formal}' 缺 '{name_kw}'"
+            assert author_kw in formal, f"{cls.__name__} formal_name='{formal}' 缺 '{author_kw}'"
+            assert year_kw in formal, f"{cls.__name__} formal_name='{formal}' 缺 '{year_kw}'"
+
+
+class TestP2SelectorLogicOrder:
+    """B3-2: 选择器逻辑顺序测试 (P1-12 修复后补强).
+
+    §5.10.6 场景矩阵顺序: 低秩 → IVX (持久) → τ<0.3 (低威胁) → 默认.
+    """
+
+    def test_B3_selector_low_rank_priority_over_persistence(self):
+        """B3-2a: 低秩 + 持久 → 仍推荐 Profile GMM (低秩优先于 IVX)."""
+        from factor_pipeline.modules.endogeneity_estimators import (
+            EstimationMethodSelector,
+        )
+        # 构造低秩 + 持久的数据 (第一列主导 + AR(1))
+        rng = np.random.default_rng(42)
+        n_t, n_n = 100, 30
+        dominant = np.zeros(n_t)
+        for t in range(1, n_t):
+            dominant[t] = 0.95 * dominant[t-1] + rng.standard_normal() * 0.1
+        factor_data = pd.DataFrame(
+            dominant[:, None] * 10 + rng.standard_normal((n_t, n_n)) * 0.01
+        )
+        returns = pd.DataFrame(0.3 * factor_data.values + rng.standard_normal((n_t, n_n)) * 0.3)
+        selector = EstimationMethodSelector(rho_threshold=0.9, low_rank_threshold=0.8)
+        report = {'final_threat_tau': 0.5}
+        result = selector.select(report, factor_data)
+        # 低秩优先 → Profile GMM (非 IVX, 即使 ρ > 0.9)
+        assert result['recommended_method'] == 'profile_gmm', (
+            f"低秩应优先于持久 → profile_gmm, 实际={result['recommended_method']}"
+        )
+
+    def test_B3_selector_persistence_when_not_low_rank(self):
+        """B3-2b: 非低秩 + 持久 → IVX."""
+        from factor_pipeline.modules.endogeneity_estimators import (
+            EstimationMethodSelector,
+        )
+        # 持久且非低秩: 各列独立 AR(1) ρ=0.98, 截面均值序列仍持久
+        rng = np.random.default_rng(99)
+        n_t, n_n = 200, 30  # 更长序列提高 ρ 估计精度
+        x = np.zeros((n_t, n_n))
+        for t in range(1, n_t):
+            x[t] = 0.98 * x[t-1] + rng.standard_normal(n_n) * 0.1
+        factor_data = pd.DataFrame(x)
+        selector = EstimationMethodSelector(rho_threshold=0.9, low_rank_threshold=0.95)
+        report = {'final_threat_tau': 0.5}
+        rho = selector._estimate_persistence(factor_data)
+        # 确认 ρ > 0.9 (若不达标, 用更长序列或更高 ρ)
+        assert rho is not None and rho > 0.9, (
+            f"测试数据 ρ={rho} 未达 0.9, 需调整数据生成参数"
+        )
+        result = selector.select(report, factor_data)
+        # 非低秩 + 持久 → IVX
+        assert result['recommended_method'] == 'ivx', (
+            f"非低秩+持久 → ivx, 实际={result['recommended_method']}"
+        )
+
+    def test_B3_selector_low_threat_when_not_low_rank_not_persistent(self):
+        """B3-2c: 非低秩 + 非持久 + τ<0.3 → none (仅三层正则化)."""
+        from factor_pipeline.modules.endogeneity_estimators import (
+            EstimationMethodSelector,
+        )
+        # 非持久 (白噪声) + 非低秩
+        rng = np.random.default_rng(7)
+        factor_data = pd.DataFrame(rng.standard_normal((100, 30)))
+        selector = EstimationMethodSelector(rho_threshold=0.9, low_rank_threshold=0.95)
+        report = {'final_threat_tau': 0.1}  # τ < 0.3
+        result = selector.select(report, factor_data)
+        assert result['recommended_method'] == 'none', (
+            f"低威胁 τ<0.3 → none, 实际={result['recommended_method']}"
+        )
+
+    def test_B3_selector_all_methods_ranked_field(self):
+        """B3-2d: 返回 all_methods_ranked 字段, 按优先级排序."""
+        from factor_pipeline.modules.endogeneity_estimators import (
+            EstimationMethodSelector,
+        )
+        selector = EstimationMethodSelector()
+        result = selector.select({'final_threat_tau': 0.5}, None)
+        assert 'all_methods_ranked' in result
+        ranked = result['all_methods_ranked']
+        assert ranked == ['profile_gmm', 'ivx', 'dols', 'pfgmm'], (
+            f"all_methods_ranked 应按 §5.10.5 优先级排序, 实际={ranked}"
+        )

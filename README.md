@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v2.5.0 的"多因子正交化三层架构 + 860 测试零回归"，并正在推进 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR)。核心能力涵盖**因子指纹前置诊断层 (21 维, v3.0.0 T1)**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.1.0 的"audit-driven code quality remediation (31 项修复 + 22 非平凡测试)"，并正在推进 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR)。核心能力涵盖**因子指纹前置诊断层 (21 维, v3.0.0 T1)**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -44,6 +44,57 @@
 ---
 
 ## 版本更新摘要
+
+### v3.1.0 Audit-Driven Code Quality Remediation (2026.07, 已实施)
+
+> **状态**: 已实施, audit P0×8 + P1×8 + P2+×15 全部修复, 子集回归 754 passed + 1 skipped (零回归)
+> **文档**: [docs/audit/2026-07-08-research-notes-v3.1.0-code-quality-audit.md](docs/audit/2026-07-08-research-notes-v3.1.0-code-quality-audit.md)
+> **基线**: 974 passed + 6 skipped (v3.0.0 T1) → audit 后子集 754 passed + 1 skipped (E1-E10 + V3.1.0 E1-E6 范围)
+
+**audit-driven-development 4 阶段流程**:
+1. Phase 1: Spec Inventory (规格清单盘点)
+2. Phase 2: Multi-Dimensional Audit (多维审计 — 严重度 P0/P1/P2 分级)
+3. Phase 3: Fix Priority Matrix (修复优先级矩阵)
+4. Phase 4: Fix Baseline + Tracking (修复基线 + 持续追踪)
+
+**修复范围** (31 项):
+
+| 类别 | 数量 | 说明 |
+|------|------|------|
+| **P0 阻断性问题** | 8 | 接口签名/字段缺失/逻辑错误 |
+| **P1 高优先级** | 8 | 关键路径/数值正确性 |
+| **P2+ 断言恒真式** | 5 | RN-E2/E3-T21/E6-T10/T17/T18 测试重写 (非平凡断言) |
+| **P2+ 设计约束测试** | 10 | RN-E7/E10 Config 字段 + E3 配置生效 + E6 method_formal_name + 选择器逻辑 |
+| **P2+ 跨文件端到端** | 2 | E3 check_endogeneity S1→S2→S4 全链路 |
+| **P2+ E5 测试补强** | 5 | 已知关系识别/β 范围/零权重/BH 单调性/显著交互 |
+| **P2+ spec 对齐** | 11 | 11 项"代码改进→更新 spec" (E1/E2/E4/E5/E9 16 处对齐标记) |
+
+**5 项断言恒真式修复 (A1-A4)**:
+- **RN-E2** Romano-Wolf 可复现性: 纯函数确定性 → 相同 random_state 重新生成 bootstrap 一致 + 不同 random_state 产生差异
+- **E3-T21** S4→S3 critical_alert: 构造参数回传 → 20 seed 循环至少一组触发 critical_alert
+- **E6-T10** IVX bias reduction: abs() ≥ 0 数学公理 → IVX β 比 OLS β 更接近真值 0.3
+- **E6-T17/T18** SCAD/MCP 稀疏化: n_zeroed 字段存在 → λ=1.0/5.0 时 n_zeroed > 0 + λ 敏感性对照
+
+**关键设计决策**:
+1. r_max 是 OsterDeltaChecker 计算值 `min(1, multiplier × R̃)`,非配置的 multiplier
+2. check_endogeneity 签名 `(raw_factor_with_missing, imputed_factor, neutralized_factor, decoupled_factor, returns, controls)` — returns 是第 5 参数,需用关键字参数调用
+3. SCAD/MCP 近端算子阈值: SCAD `|x|≤λ`, MCP `|x|≤λ/γ` (γ=3),需足够大 λ 才有稀疏化效果
+4. 选择器持久性检测: 单列 AR(1) ρ=0.95 截面均值序列 ρ 仅 0.70,需长序列(n=200) + 高 ρ(0.98) 才达 0.9 阈值
+5. BH-FDR 单调性: `p_adj = p × K / rank ≥ p` (K/rank ≥ 1),累积 min 后仍 ≥ p
+
+**11 项 spec 反向对齐 (代码优于 spec, 更新文档)**:
+- E1 签名 `Optional[List[str]]=None` (避免可变默认参数反模式)
+- E2 stepdown 单路径 + m==0 守卫 + kind="stable" + np.clip
+- E4 log 签名加 pipeline_weights + compute_attribution 加 n_quantiles + fit 改独立方法 + SQL 参数化
+- E5 Layer2 末尾归一化 (容错 sum_individual > 1)
+- E9 _trend 用 detrended residual std + enable 守卫 + 边界处理
+
+**测试补强策略** (非平凡断言):
+- 已知关系: 构造 `ic_mean = 0.05 + 0.3 * gpd_shape + noise`,验证 Layer 1 识别 gpd_shape 在 top 3
+- 标准化范围: |β_std| ≤ 1 (相关系数有界性)
+- 零权重零贡献: weight=0 → 贡献 ≈ 0
+- BH 单调性: p_adjusted ≥ p_value (校正只会使 p 增大)
+- 显著交互: 构造 `ic_mean = 2.0 * gpd × w_static` (bull regime),验证 Layer 3 识别显著
 
 ### v3.0.0 T1 指纹维度扩展至 21 维 (2026.07, 已实施)
 
@@ -975,13 +1026,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.0.0 T1 (已实施, 974 passed + 6 skipped + 11 subtests)
+- **Pipeline 版本**: v3.1.0 (audit-driven remediation, 已实施)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 974 passed, 6 skipped, 0 failed
+- **测试基线**: 974 passed + 6 skipped (v3.0.0 T1 全量) → audit 后子集 754 passed + 1 skipped (v3.1.0 E1-E10 + V3.1.0 E1-E6 范围)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.07.04
-- **状态**: STABLE (v3.0.0 T1)
+- **构建日期**: 2026.07.09
+- **状态**: STABLE (v3.1.0 audit-driven remediation)
 
 ### 版本历史
 
@@ -999,6 +1050,7 @@ factor_pipeline/
 | v2.6.0 | 2026.07.04 | 优化器与漂移检测增强 (ADR-021/022/023, E1-E9 全部完成): 目标函数对齐 ADR-004 (6 项 IC-vol-cov-ks-health-redundancy) + 正交化参数搜索空间 + Layer 3 显著性验证 (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA 衰减检测), 918 passed + 6 skipped + 11 subtests |
 | v3.0.0 T4 | 2026.07.04 | KS 迁移检测 BH-FDR 替代 Bonferroni (ADR-002a, E1-E3 全部完成): `_ks_migration_significance` 三路径分流 (BH/Bonferroni/none, 默认 BH) + 字段隔离 + 向后兼容 + 黄金参考校验, Benjamini-Hochberg (1995) FDR 控制, 934 passed + 6 skipped + 11 subtests |
 | v3.0.0 T1 | 2026.07.04 | 指纹维度扩展至 21 维 (ADR-024, E1-E3 全部完成): `FactorFingerprint` NamedTuple 13→21 维 (尾部依赖 4 + 体制转换 3 + 综合衍生 1) + `FingerprintConfig` 8→14 字段 + 8 新计算方法 (POT-MLE/Hill/Markov) + `_get_multi_dim_pipeline_weights` 接入 transform + `enable_multi_dim_routing` 开关 (默认 False) + ADR-014 技术债清理, Nelsen/Pickands/Hill/Hamilton 学术依据, 974 passed + 6 skipped + 11 subtests |
+| v3.1.0 | 2026.07.09 | Audit-Driven Code Quality Remediation: P0×8 + P1×8 + P2+×15 (断言恒真式 5 + 设计约束 10 + 端到端 2 + E5 测试补强 5) + spec 反向对齐 11 项, 子集回归 754 passed + 1 skipped (零回归), 5 项断言恒真式重写为非平凡验证 (IVX β 真值对照 / SCAD-MCP λ 敏感性 / r_max 计算值断言 / BH 单调性 / 显著交互识别) |
 
 ---
 

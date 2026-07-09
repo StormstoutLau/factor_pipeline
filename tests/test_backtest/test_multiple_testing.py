@@ -374,16 +374,30 @@ class TestRomanoWolf:
         assert np.all(boot_p >= 0.0) and np.all(boot_p <= 1.0)
 
     def test_romano_wolf_reproducibility(self):
-        """相同输入下 apply_romano_wolf 可复现 (确定性算法)"""
+        """相同 random_state 重新生成 bootstrap → 结果一致 (非纯函数恒真).
+
+        加强: 原测试对相同输入调用两次确定性函数, 断言一致 (恒真).
+        改为: 用相同 random_state 重新生成 bootstrap 矩阵, 验证随机种子可复现性.
+        同时验证 k 参数确实影响结果 (非平凡).
+        """
         rng = np.random.default_rng(55)
         m = 25
         B = 200
         p_vals = rng.uniform(0.0, 1.0, size=m).tolist()
-        boot_p = rng.uniform(0.0, 1.0, size=(B, m))
-        adj1, rej1 = apply_romano_wolf(p_vals, boot_p, alpha=0.05, k=1)
-        adj2, rej2 = apply_romano_wolf(p_vals, boot_p, alpha=0.05, k=1)
+        # 用相同 random_state 生成两次 bootstrap (验证种子可复现, 非函数确定性)
+        boot_p1 = self._generate_null_bootstrap(m, B, seed=123)
+        boot_p2 = self._generate_null_bootstrap(m, B, seed=123)
+        adj1, rej1 = apply_romano_wolf(p_vals, boot_p1, alpha=0.05, k=1)
+        adj2, rej2 = apply_romano_wolf(p_vals, boot_p2, alpha=0.05, k=1)
         np.testing.assert_allclose(adj1, adj2)
         assert rej1 == rej2
+        # 非平凡: 不同 random_state 应产生不同 bootstrap (极大概率)
+        boot_p_diff = self._generate_null_bootstrap(m, B, seed=999)
+        adj_diff, _ = apply_romano_wolf(p_vals, boot_p_diff, alpha=0.05, k=1)
+        # 不同 bootstrap 矩阵应产生不同调整 p 值 (验证测试非恒真)
+        assert not np.allclose(adj1, adj_diff), (
+            "不同 random_state 的 bootstrap 应产生不同结果, 否则测试恒真"
+        )
 
     def test_romano_wolf_k3_more_permissive_than_k1(self):
         """k=3 比 k=1 更宽松 (允许更多假拒绝, 因此拒绝数 >= k=1)"""
