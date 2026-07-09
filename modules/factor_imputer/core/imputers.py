@@ -193,10 +193,10 @@ class TimeSeriesImputer(BaseImputer):
         X_imputed = X.copy()
 
         if self.method == "ffill":
-            # 前向填充
             X_imputed = X_imputed.ffill()
-            # 如果还有缺失，用后向填充
-            X_imputed = X_imputed.bfill()
+            # P0-2 audit fix: bfill leaks future data, use ffill+0 instead
+            # Any remaining NaN (start of series with no prior) fills with 0
+            X_imputed = X_imputed.fillna(0)
         elif self.method == "rolling_mean":
             # 滚动均值填充
             for asset in X.columns:
@@ -522,7 +522,7 @@ class FactorSpecificImputer(BaseImputer):
         # 使用简单的前向填充
         for asset in X.columns:
             if not asset.endswith("_missing"):
-                X[asset] = X[asset].ffill().bfill()
+                X[asset] = X[asset].ffill().fillna(0)
 
         return X
 

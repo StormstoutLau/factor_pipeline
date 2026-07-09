@@ -1278,8 +1278,16 @@ class AblationRunner:
             p_sharpe_boot = float('nan')
             sharpe_ci_low, sharpe_ci_high = float('nan'), float('nan')
 
-        # 综合判定: HAC + bootstrap 双侧 p < alpha
-        is_significant = (p_value_hac < self.alpha) and (p_value_boot < self.alpha)
+        # 综合判定: 双侧 p < alpha (P0-1 audit fix: HAC NaN 时仅用 bootstrap)
+        # 原逻辑: is_significant = (p_hac < α) AND (p_boot < α)
+        # 问题: p_hac=NaN 时 NaN<α=False → 否决 → 全 false
+        # 修复: p_hac NaN → 仅用 bootstrap; 两侧都 NaN → False
+        hac_ok = (not np.isnan(p_value_hac)) and (p_value_hac < self.alpha)
+        boot_ok = (not np.isnan(p_value_boot)) and (p_value_boot < self.alpha)
+        if np.isnan(p_value_hac):
+            is_significant = boot_ok
+        else:
+            is_significant = hac_ok and boot_ok
 
         return AblationComparison(
             experiment=experiment.config.name,
