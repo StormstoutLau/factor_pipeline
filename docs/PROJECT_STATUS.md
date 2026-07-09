@@ -68,6 +68,23 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 > **完成日期**: 2026-07-09
 
 - [x] 阶段 1 MVP: 10-cell notebook — 指纹雷达图 / 分类决策树 / 分布直方图 / Spearman 排序 / IC 追溯 / W 热力图 / 迁移检测 / 输出对比 / 校验报告
+- [x] Cell 11 消融实验贡献度: ablation_results.json 加载 + 水平条形图 (IC/Sharpe 双向), 13 tests
+
+---
+
+### v3.1.0 消融实验
+
+> **完成日期**: 2026-07-09
+> **脚本**: [scripts/run_ablation.py](file:///f:/Coding/factor_pipeline/scripts/run_ablation.py)
+> **结果**: [notebooks/ablation_results.json](file:///f:/Coding/factor_pipeline/notebooks/ablation_results.json)
+
+- [x] 消融实验自动运行 (B0-B3 + L1 5 模块消融 + 贡献度排名)
+- [x] 模块贡献度：
+  - neutralizer: ΔIC +47.6%, ΔSharpe -83.7% (行业中性化移除噪声共变)
+  - scaler: ΔIC +28.1%, ΔSharpe +174.6% (标准化对 Sharpe 计算关键)
+  - winsorizer: ΔIC +5.2% (合成数据无极端值, 预期低)
+  - imputer/orthogonalizer: 0% (合成数据无缺失/正交化默认关闭)
+- [x] 所有 6 组对比 p > 0.05 (合成数据无真实信号, Type-I 控制正确)
 
 ---
 
@@ -76,9 +93,15 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 ### v3.0.0 T2 — 流式处理支持
 
 > **位置**: [DECISIONS.md:L1896](file:///f:/Coding/factor_pipeline/DECISIONS.md#L1896)
-> 唯一未完成的 v3.0.0 远期任务。
+> **状态**: 📋 下一轮执行 (5 sub-tasks: T2.1-T2.5, ~1500+ 行)
 
-- [ ] T2 流式处理支持 (待设计方案)
+- [ ] T2.1: `CachedDataLoader.iter_periods()` 生成器 (数据加载层流式化)
+- [ ] T2.2: 6 Imputer + Neutralizer + EnhancedRankPreservingScaler + SmartAdaptiveWinsorizer `partial_fit()` (模块层流式)
+- [ ] T2.3: RollingOrthogonalizerAdapter 流式激活 `hook.update(X_t)`
+- [ ] T2.4: `FactorProcessingPipelineV2.transform_streaming(period_data)` 主入口
+- [ ] T2.5: CUSUM 流式协同 (逐期 update)
+
+> **难度评估**: 高 (全链路改造, 8+ 文件, 流式 vs 批量等价性测试)
 
 ---
 
