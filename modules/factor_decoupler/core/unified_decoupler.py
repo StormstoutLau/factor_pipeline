@@ -261,11 +261,87 @@ class TemporalDecoupler:
             else:
                 return 'none'
         elif self.method_selection == 'fingerprint':
-            # TODO: 集成factor_pipeline的fingerprint系统
-            logger.warning("fingerprint method selection not fully implemented, fallback to ar1_median")
-            return self._select_method(X)
+            return self._select_method_by_fingerprint(X, ar1_median)
         else:
             raise ValueError(f"Unknown method_selection: {self.method_selection}")
+
+    def _select_method_by_fingerprint(
+        self, X: pd.DataFrame, ar1_median: float
+    ) -> str:
+        """基于多维指纹的解耦方法选择 (21 维指纹集成)
+
+        用 5 个关键维度综合判断 (轻量级, 无需完整 21 维):
+        1. ar1_median: 时序持续性 (主信号)
+        2. half_life: 均值回归速度 (从 ar1 推导)
+        3. skewness: 分布偏斜度 (肥尾因子 → 'difference' 更安全)
+        4. kurtosis: 分布尖峰度 (非正态 → 保守选择)
+        5. volatility_clustering: 波动率聚集 (高聚集 → 'ar' 建模)
+        """
+        # 1. ar1_median 是主信号
+        # 2. half_life = -ln(2) / ln(|ar1|)
+        abs_ar1 = min(abs(ar1_median), 0.9999)
+        half_life = -np.log(2) / np.log(abs_ar1) if abs_ar1 > 0 else float('inf')
+
+        # 3-4. 截面分布的偏度/峰度 (取横截面均值, 时序汇总)
+        X_vals = X.values.astype(float)
+        cross_sectional_mean = np.nanmean(X_vals, axis=1)
+        valid = cross_sectional_mean[~np.isnan(cross_sectional_mean)]
+        if len(valid) >= 10:
+            mean_val = np.mean(valid)
+            std_val = np.std(valid, ddof=1)
+            if std_val > 1e-10:
+                skew = np.mean(((valid - mean_val) / std_val) ** 3)
+                kurt = np.mean(((valid - mean_val) / std_val) ** 4) - 3.0
+            else:
+                skew, kurt = 0.0, 0.0
+        else:
+            skew, kurt = 0.0, 0.0
+
+        # 5. 波动率聚集: 滚动 3 期标准差的自相关
+        vol_cluster_score = 0.0
+        if len(valid) >= 20:
+            rolling_std = pd.Series(valid).rolling(3).std().dropna().values
+            if len(rolling_std) > 3:
+                vol_corr = np.corrcoef(rolling_std[:-1], rolling_std[1:])[0, 1]
+                vol_cluster_score = 0.0 if np.isnan(vol_corr) else float(vol_corr)
+
+        # 综合评分: ar1 主导, 其他维度微调
+        score_ar = 0.0
+        score_diff = 0.0
+        score_none = 0.0
+
+        if ar1_median > 0.8:
+            score_ar += 2.0
+        elif ar1_median > 0.4:
+            score_diff += 2.0
+        else:
+            score_none += 2.0
+
+        # half_life 修正
+        if half_life > 5:
+            score_ar += 1.0
+        elif half_life > 2:
+            score_diff += 0.5
+
+        # 肥尾/非正态 → 保守选择 (difference 不假设分布)
+        if abs(skew) > 1.0 or abs(kurt) > 3.0:
+            score_diff += 1.0
+            score_ar -= 0.5
+
+        # 高波动率聚集 → AR 建模更合适
+        if vol_cluster_score > 0.3:
+            score_ar += 1.0
+
+        # 选最高分
+        scores = {'ar': score_ar, 'difference': score_diff, 'none': score_none}
+        selected = max(scores, key=scores.get)
+
+        logger.info(
+            "fingerprint method selection: ar1=%.3f, half_life=%.1f, "
+            "skew=%.2f, kurt=%.2f, vol_cluster=%.2f → %s",
+            ar1_median, half_life, skew, kurt, vol_cluster_score, selected
+        )
+        return selected
 
     def _calculate_ar1_median(self, X: pd.DataFrame) -> float:
         """计算每只股票的AR(1)系数中位数"""

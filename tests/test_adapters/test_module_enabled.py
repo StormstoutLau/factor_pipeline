@@ -94,6 +94,32 @@ class TestProcessingAdapterEnabled:
         adapter.fit(df)
         assert adapter._processor is None
 
+    def test_enabled_false_processor_class_is_none(self):
+        """enabled=False → _processor_class 为 None (P3-1)"""
+        adapter = ProcessingAdapter(process_type='outlier', method='auto', enabled=False)
+        assert adapter._processor_class is None, (
+            "enabled=False 时 _processor_class 应为 None (跳过外部依赖导入)"
+        )
+
+    def test_transformation_enabled_ignored_in_processing(self):
+        """transformation enabled=False → 实际处理时仍启用 (P3-2)
+
+        transformation 不参与消融 — 即使传 enabled=False, 也强制 enabled=True,
+        并在实际 transform 中生效 (不会被跳过).
+        """
+        df = pd.DataFrame({'A': [1.0, 2.0, 3.0], 'B': [4.0, 5.0, 6.0]})
+        adapter = ProcessingAdapter(process_type='transformation', method='auto', enabled=False)
+        # P3-2: enabled 被强制设为 True (transformation 不可消融)
+        assert adapter.enabled is True
+        # 且 _processor_class 不为 None (确实初始化了内部处理器)
+        assert adapter._processor_class is not None
+        # fit 应初始化 _processor
+        adapter.fit(df)
+        assert adapter._processor is not None, (
+            "transformation 即使传 enabled=False 也实际启用, "
+            "fit 应创建 _processor"
+        )
+
 
 # =============================================================================
 # E1-T3: NeutralizerAdapter enabled 开关

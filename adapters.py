@@ -123,9 +123,10 @@ def _import_external_class(
 class PipelineStep(ABC):
     """流水线步骤抽象基类"""
     
-    def __init__(self, name: str, step_type: str, **params):
+    def __init__(self, name: str, step_type: str, enabled: bool = True, **params):
         self.name = name
         self.step_type = step_type
+        self.enabled = enabled
         self.params = params
         self.is_fitted = False
         self.fitted_params = {}
@@ -167,6 +168,7 @@ class ImputerAdapter(PipelineStep):
         super().__init__(
             name="FactorImputer",
             step_type="imputation",
+            enabled=enabled,
             strategy=strategy,
             **params
         )
@@ -284,6 +286,7 @@ class ProcessingAdapter(PipelineStep):
         super().__init__(
             name=f"FactorProcessing_{process_type}",
             step_type=process_type,
+            enabled=(enabled if enabled is not None and process_type != 'transformation' else True),
             method=method,
             **params
         )
@@ -463,6 +466,7 @@ class NeutralizerAdapter(PipelineStep):
         super().__init__(
             name="FactorNeutralizer",
             step_type="neutralization",
+            enabled=enabled,
             neutralization_type=neutralization_type,
             industry_method=industry_method,
             **params

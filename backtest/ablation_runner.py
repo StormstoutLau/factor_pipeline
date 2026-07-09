@@ -196,6 +196,12 @@ def circular_block_bootstrap(
     固定块长 circular block bootstrap, 保留时序依赖.
     块大小默认 max(1, int(T**(1/3))) (简化版 Politis & White 2004).
 
+    双侧 p 值 (中心化版本, Hall & Wilson 1991):
+        p = fraction(|Δ* - mean(Δ*)| ≥ |Δ_obs|)
+    其中 Δ* 为 bootstrap 重采样差值分布, Δ_obs 为观测差值.
+    中心化版本比 naive p = fraction(|Δ*| ≥ |Δ_obs|) 更稳健:
+    bootstrap 分布中心可能偏离 0, 中心化消除此偏倚.
+
     Args:
         series_a: 策略 a 的 IC/收益序列 (T,)
         series_b: 策略 b 的 IC/收益序列 (T,)
@@ -375,6 +381,9 @@ class AblationComparison:
     bootstrap_ci_high: float
     p_value_bootstrap: float
     is_significant: bool
+    sharpe_bootstrap_ci_low: float = float('nan')
+    sharpe_bootstrap_ci_high: float = float('nan')
+    p_value_bootstrap_sharpe: float = float('nan')
     # M5 修正: trivial 标记从 experiment config 传播而来, 不参与 BH-FDR
     _is_trivial: bool = False
 
@@ -1207,10 +1216,11 @@ class AblationRunner:
         experiment: AblationResult,
         reference: AblationResult,
     ) -> AblationComparison:
-        """Ledoit-Wolf HAC + bootstrap 显著性比较
+        """Ledoit-Wolf HAC + bootstrap 双侧显著性比较
 
-        对 LS 收益序列做 Sharpe 差 HAC 检验, 对 IC 序列做 bootstrap.
-        综合判定: 两侧 p 均显著 → is_significant=True
+        Sharpe 差: HAC 检验 (主路径) + bootstrap 验证 (辅助).
+        IC 差: bootstrap 检验 (主路径).
+        综合判定: HAC 显著 AND bootstrap(IC) 显著 → is_significant=True
         """
         # ΔIC 和 ΔSharpe
         delta_ic = (
@@ -1250,6 +1260,24 @@ class AblationRunner:
             p_value_boot = 1.0
             ci_low, ci_high = float('nan'), float('nan')
 
+        # Circular block bootstrap: Sharpe 序列差 (P2-2 补全)
+        if len(exp_ls) > 0 and len(ref_ls) > 0:
+            p_sharpe_boot, sharpe_boot_stats = circular_block_bootstrap(
+                exp_ls, ref_ls,
+                statistic='sharpe',
+                n_bootstrap=self.n_bootstrap,
+                block_size=self.block_size,
+                seed=self.random_seed,
+            )
+            if len(sharpe_boot_stats) > 0:
+                sharpe_ci_low = float(np.percentile(sharpe_boot_stats, 2.5))
+                sharpe_ci_high = float(np.percentile(sharpe_boot_stats, 97.5))
+            else:
+                sharpe_ci_low, sharpe_ci_high = float('nan'), float('nan')
+        else:
+            p_sharpe_boot = float('nan')
+            sharpe_ci_low, sharpe_ci_high = float('nan'), float('nan')
+
         # 综合判定: HAC + bootstrap 双侧 p < alpha
         is_significant = (p_value_hac < self.alpha) and (p_value_boot < self.alpha)
 
@@ -1263,6 +1291,9 @@ class AblationRunner:
             bootstrap_ci_low=ci_low,
             bootstrap_ci_high=ci_high,
             p_value_bootstrap=p_value_boot,
+            sharpe_bootstrap_ci_low=sharpe_ci_low,
+            sharpe_bootstrap_ci_high=sharpe_ci_high,
+            p_value_bootstrap_sharpe=p_sharpe_boot,
             is_significant=is_significant,
             # M5 修正: 从 experiment config 传播 trivial 标记
             _is_trivial=getattr(experiment.config, '_is_trivial', False),
