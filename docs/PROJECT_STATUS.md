@@ -47,20 +47,20 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 ### 🟡 P1 — 消融 Tier 3 收尾 (5 项)
 
 > **审计文档**: [audit/2026-07-08-ablation-code-quality-audit.md](audit/2026-07-08-ablation-code-quality-audit.md)
-> **预计耗时**: ~1h
+> **完成日期**: 2026-07-09
 
-- [ ] **P2-1**: Neutralizer/Imputer 未传 `enabled` 给 `super().__init__()`
-- [ ] **P2-2**: bootstrap CI 仅对 IC 差，未对 Sharpe 差计算
-- [ ] **P2-3**: bootstrap p 值公式文字描述不一致
-- [ ] **P3-1**: `_processor_class is None` 未在测试中验证
-- [ ] **P3-2**: transformation ignores `enabled` 行为未验证
+- [x] **P2-1**: Neutralizer/Imputer 未传 `enabled` 给 `super().__init__()` — PipelineStep 加 enabled 参数, 3 个 Adapter 透传
+- [x] **P2-2**: bootstrap CI 仅对 IC 差，未对 Sharpe 差计算 — compare() 新增 Sharpe bootstrap CI + p_value_bootstrap_sharpe
+- [x] **P2-3**: bootstrap p 值公式文字描述不一致 — circular_block_bootstrap docstring 加中心化公式 (Hall & Wilson 1991)
+- [x] **P3-1**: `_processor_class is None` 未在测试中验证 — 新增 test_enabled_false_processor_class_is_none
+- [x] **P3-2**: transformation ignores `enabled` 行为未验证 — 新增 test_transformation_enabled_ignored_in_processing
 
 ### 🟡 P1 — 源码 TODO
 
 > **位置**: [modules/factor_decoupler/core/unified_decoupler.py:L264](file:///f:/Coding/factor_pipeline/modules/factor_decoupler/core/unified_decoupler.py#L264)
-> **预计耗时**: ~30min
+> **完成日期**: 2026-07-09
 
-- [ ] `method_selection='fingerprint'` 分支回退到 `ar1_median`，需集成 21 维指纹
+- [x] `method_selection='fingerprint'` 分支回退到 `ar1_median` — _select_method_by_fingerprint 用 5 维指纹 (ar1/half_life/skew/kurt/vol_cluster) 综合评分选择
 
 ### 🟢 P2 — Demo Jupyter Notebook
 
@@ -136,6 +136,8 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-07-09 | afb6fea | fix(v3.1.0): 消融 Tier 3 收尾 (5项) + unified_decoupler fingerprint 集成 |
+| 2026-07-09 | b9066dc | docs: 文档残留学债修复 + 创建 PROJECT_STATUS.md 统一待办视图 |
 | 2026-07-09 | 7993a93 | docs(v3.1.0): 项目文档同步 — CHANGELOG/DECISIONS/CODE_WIKI/README.en |
 | 2026-07-09 | 6192edb | test(v3.1.0): audit P2+ 修复 — 22 非平凡测试 + 11 spec 反向对齐 |
 | 2026-07-09 | 9ae1047 | feat(v3.1.0): RESEARCH_NOTES E1-E10 + V3.1.0 E1-E6 实施 + audit P0/P1 修复 |
