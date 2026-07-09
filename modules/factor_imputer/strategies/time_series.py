@@ -70,9 +70,9 @@ class TimeSeriesStrategy(BaseImputer):
                 if self.method == "linear":
                     series = self._linear_interpolation(series)
                 elif self.method == "forward_fill":
-                    series = series.fillna(method="ffill")
+                    series = series.ffill()
                 elif self.method == "backward_fill":
-                    series = series.fillna(method="bfill")
+                    series = series.bfill()
                 elif self.method == "rolling":
                     series = self._rolling_imputation(series)
 

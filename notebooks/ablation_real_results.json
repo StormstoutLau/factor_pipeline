@@ -1,0 +1,85 @@
+{
+  "data_info": {
+    "n_periods": 231,
+    "n_stocks": 94,
+    "n_factors": 3,
+    "factor_names": [
+      "momentum_1m",
+      "volatility_1m",
+      "turnover"
+    ],
+    "has_industry": true
+  },
+  "b3_baseline": {
+    "ic_mean": -0.009312485404317054,
+    "ic_std": 0.0755221003036763,
+    "icir": -0.12330808289058848,
+    "sharpe_ls": 0.03363371709952013,
+    "max_drawdown": -6.104461111111113,
+    "hit_rate": 0.48034934497816595
+  },
+  "l1_contributions": [
+    {
+      "module": "B3_baseline",
+      "delta_ic": 0.0,
+      "delta_sharpe": 0.0,
+      "ic_impact_pct": 0.0,
+      "sharpe_impact_pct": 0.0,
+      "p_value_hac": NaN,
+      "p_value_bootstrap": 1.0,
+      "is_significant": false
+    },
+    {
+      "module": "imputer",
+      "delta_ic": 0.0013230986341355583,
+      "delta_sharpe": 0.009114385855360917,
+      "ic_impact_pct": 14.2,
+      "sharpe_impact_pct": 27.1,
+      "p_value_hac": NaN,
+      "p_value_bootstrap": 0.044,
+      "is_significant": false
+    },
+    {
+      "module": "winsorizer",
+      "delta_ic": 0.0016378989528876443,
+      "delta_sharpe": 0.011272429752724203,
+      "ic_impact_pct": 17.6,
+      "sharpe_impact_pct": 33.5,
+      "p_value_hac": NaN,
+      "p_value_bootstrap": 0.532,
+      "is_significant": false
+    },
+    {
+      "module": "scaler",
+      "delta_ic": 0.016297514251370146,
+      "delta_sharpe": 0.12564902398450606,
+      "ic_impact_pct": 175.0,
+      "sharpe_impact_pct": 373.6,
+      "p_value_hac": NaN,
+      "p_value_bootstrap": 0.0,
+      "is_significant": false
+    },
+    {
+      "module": "neutralizer",
+      "delta_ic": -0.003014117170319441,
+      "delta_sharpe": -0.05490837596461892,
+      "ic_impact_pct": -32.4,
+      "sharpe_impact_pct": -163.3,
+      "p_value_hac": NaN,
+      "p_value_bootstrap": 0.638,
+      "is_significant": false
+    },
+    {
+      "module": "orthogonalizer",
+      "delta_ic": 0.0,
+      "delta_sharpe": 0.0,
+      "ic_impact_pct": 0.0,
+      "sharpe_impact_pct": 0.0,
+      "p_value_hac": NaN,
+      "p_value_bootstrap": 1.0,
+      "is_significant": false
+    }
+  ],
+  "l1_n_significant": 0,
+  "l2_n_comparisons": 0
+}

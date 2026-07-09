@@ -194,9 +194,9 @@ class TimeSeriesImputer(BaseImputer):
 
         if self.method == "ffill":
             # 前向填充
-            X_imputed = X_imputed.fillna(method="ffill")
+            X_imputed = X_imputed.ffill()
             # 如果还有缺失，用后向填充
-            X_imputed = X_imputed.fillna(method="bfill")
+            X_imputed = X_imputed.bfill()
         elif self.method == "rolling_mean":
             # 滚动均值填充
             for asset in X.columns:
@@ -285,7 +285,7 @@ class MLAdvancedImputer(BaseImputer):
             if len(asset_data) > self.n_neighbors:
                 # 使用其他资产作为特征
                 other_assets = [col for col in X.columns if col != asset]
-                features = X[other_assets].loc[asset_data.index].fillna(method="ffill").fillna(method="bfill")
+                features = X[other_assets].loc[asset_data.index].ffill().bfill()
 
                 if not features.empty:
                     self.scalers[asset] = StandardScaler()
@@ -302,7 +302,7 @@ class MLAdvancedImputer(BaseImputer):
                 if missing_mask.any():
                     # 获取缺失位置的特征
                     other_assets = [col for col in X.columns if col != asset]
-                    features = X[other_assets].fillna(method="ffill").fillna(method="bfill")
+                    features = X[other_assets].ffill().bfill()
                     missing_features = features.loc[missing_mask]
 
                     if not missing_features.empty:
@@ -326,7 +326,7 @@ class MLAdvancedImputer(BaseImputer):
             if len(asset_data) > 10:
                 # 使用其他资产和时间特征作为特征
                 other_assets = [col for col in X.columns if col != asset]
-                features = X[other_assets].loc[asset_data.index].fillna(method="ffill").fillna(method="bfill")
+                features = X[other_assets].loc[asset_data.index].ffill().bfill()
 
                 if not features.empty:
                     # 添加时间特征
@@ -356,7 +356,7 @@ class MLAdvancedImputer(BaseImputer):
                 if missing_mask.any():
                     # 获取缺失位置的特征
                     other_assets = [col for col in X.columns if col != asset]
-                    features = X[other_assets].fillna(method="ffill").fillna(method="bfill")
+                    features = X[other_assets].ffill().bfill()
                     missing_features = features.loc[missing_mask]
 
                     if not missing_features.empty:
@@ -456,7 +456,7 @@ class FactorSpecificImputer(BaseImputer):
 
             if len(other_assets) > 0:
                 # 使用其他因子作为特征
-                features = X[other_assets].fillna(method="ffill").fillna(method="bfill")
+                features = X[other_assets].ffill().bfill()
                 target = X[asset].dropna()
 
                 if len(target) > 10 and not features.empty:
@@ -490,7 +490,7 @@ class FactorSpecificImputer(BaseImputer):
             missing_mask = X[asset].isnull()
             if missing_mask.any():
                 other_assets = [col for col in X.columns if col != asset and not col.endswith("_missing")]
-                features = X[other_assets].fillna(method="ffill").fillna(method="bfill")
+                features = X[other_assets].ffill().bfill()
                 missing_features = features.loc[missing_mask]
 
                 if not missing_features.empty:
@@ -504,7 +504,7 @@ class FactorSpecificImputer(BaseImputer):
         # 使用前向填充和滚动均值
         for asset in X.columns:
             if not asset.endswith("_missing"):
-                X[asset] = X[asset].fillna(method="ffill").fillna(X[asset].rolling(window=5, min_periods=1).mean())
+                X[asset] = X[asset].ffill().fillna(X[asset].rolling(window=5, min_periods=1).mean())
 
         return X
 
@@ -513,7 +513,7 @@ class FactorSpecificImputer(BaseImputer):
         # 使用指数平滑
         for asset in X.columns:
             if not asset.endswith("_missing"):
-                X[asset] = X[asset].fillna(method="ffill").fillna(X[asset].ewm(span=10).mean())
+                X[asset] = X[asset].ffill().fillna(X[asset].ewm(span=10).mean())
 
         return X
 
@@ -522,7 +522,7 @@ class FactorSpecificImputer(BaseImputer):
         # 使用简单的前向填充
         for asset in X.columns:
             if not asset.endswith("_missing"):
-                X[asset] = X[asset].fillna(method="ffill").fillna(method="bfill")
+                X[asset] = X[asset].ffill().bfill()
 
         return X
 

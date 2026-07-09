@@ -542,7 +542,7 @@ class FactorTypeAwareImputer(LookaheadFreeIntegratedImputer):
             return np.nan
 
     def _forward_fill_impute(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X.fillna(method="ffill")
+        return X.ffill()
 
     def _rolling_window_impute(self, X: pd.DataFrame) -> pd.DataFrame:
         X_imputed = X.copy()
