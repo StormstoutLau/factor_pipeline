@@ -97,11 +97,13 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 #### Phase 2 — P2（串行，~8h）
 
-- [ ] **R4 FingerprintPerformanceLogger** (依赖 T1 ✅): 21维指纹+6表现+3管道权重 DB 存储, ≥14 测试
-- [ ] **R5 AttributionAnalyzer** (依赖 R4): 三层归因 (L1指纹/L2方差/L3交互+BH-FDR), ≥11 测试
-- [ ] **R7 StateDataLoader + RegimeIdentifier**: 12个A股状态变量 + Markov 两状态, ≥15 测试
-- [ ] **R8 StateConditionedPerformanceMatrix** (依赖 R7): 因子×体制性能 + Ferson 双轨回归+HAC, ≥12 测试
-- [ ] **R9 ThreeChannelDecomposition** (依赖 R8): 四通道序列 + 5种发散模式, ≥12 测试
+> **完成日期**: 2026-07-09
+
+- [x] **R4 FingerprintPerformanceLogger** (依赖 T1 ✅): 21维指纹+6表现+3管道权重 DB 存储, ≥14 测试
+- [x] **R5 AttributionAnalyzer** (依赖 R4): 三层归因 (L1指纹/L2方差/L3交互+BH-FDR), ≥11 测试
+- [x] **R7 StateDataLoader + RegimeIdentifier**: 12个A股状态变量 + Markov 两状态, ≥15 测试
+- [x] **R8 StateConditionedPerformanceMatrix** (依赖 R7): 因子×体制性能 + Ferson 双轨回归+HAC, ≥12 测试
+- [x] **R9 ThreeChannelDecomposition** (依赖 R8): 四通道序列 + 5种发散模式, ≥12 测试
 
 #### Phase 3 — P3（条件触发，~4h）
 
