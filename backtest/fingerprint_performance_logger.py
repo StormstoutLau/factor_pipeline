@@ -162,8 +162,20 @@ class FingerprintPerformanceLogger:
         col_list = ", ".join(all_cols)
         placeholders = ", ".join(["?"] * len(all_cols))
         # NaN → None 以便 DuckDB 存为 NULL (避免类型推断问题)
-        values = [None if (isinstance(df.iloc[0][c], float) and np.isnan(df.iloc[0][c]))
-                  else df.iloc[0][c] for c in all_cols]
+        # numpy scalar → Python native (DuckDB 不接受 numpy int64/float64)
+        values = []
+        for c in all_cols:
+            v = df.iloc[0][c]
+            if isinstance(v, float) and np.isnan(v):
+                values.append(None)
+            elif isinstance(v, (np.integer,)):
+                values.append(int(v))
+            elif isinstance(v, (np.floating,)):
+                values.append(float(v))
+            elif isinstance(v, (np.bool_,)):
+                values.append(bool(v))
+            else:
+                values.append(v)
         self._conn.execute(
             f"INSERT INTO {self.table_name} ({col_list}) VALUES ({placeholders})",
             values,
