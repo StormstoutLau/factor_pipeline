@@ -627,5 +627,80 @@ if __name__ == '__main__':
         print(f"  {key}: {val}")
 
     print(f"\n{'='*60}")
-    print(f"All 10 cells completed successfully.")
+    print(f"All 11 cells completed successfully.")
     print(f"{'='*60}")
+
+
+# =============================================================================
+# Cell 11: 消融实验贡献度汇总 (v3.1.0)
+# =============================================================================
+
+def cell_11_ablation_summary(data=None, json_path=None, show_plot=False):
+    import json, os
+
+    if json_path is None:
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 'ablation_results.json')
+
+    if not os.path.exists(json_path):
+        return {
+            'b3_ic_mean': float('nan'),
+            'b3_sharpe': float('nan'),
+            'l1_modules': [],
+            'top_contributors': [],
+            'note': 'ablation_results.json not found. Run scripts/run_ablation.py first.',
+        }
+
+    with open(json_path, 'r') as f:
+        abl = json.load(f)
+
+    b3 = abl['b3_baseline']
+    l1 = abl['l1_contributions']
+
+    modules = []
+    for row in l1:
+        if row['config'] == 'B3_baseline':
+            continue
+        modules.append({
+            'module': row['config'].replace('L1_', '').replace('_off', ''),
+            'delta_ic': row['delta_ic'],
+            'delta_sharpe': row['delta_sharpe'],
+            'ic_impact_pct': row['ic_impact_pct'],
+            'sharpe_impact_pct': row['sharpe_impact_pct'],
+            'significant': row['significant'],
+        })
+
+    top = sorted(modules, key=lambda m: abs(m['delta_ic']), reverse=True)[:3]
+
+    if show_plot:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+        _plot_ablation_bars(axes[0], modules, 'ic_impact_pct', 'IC Impact %')
+        _plot_ablation_bars(axes[1], modules, 'sharpe_impact_pct', 'Sharpe Impact %')
+        plt.tight_layout()
+        plt.close(fig)
+
+    return {
+        'b3_ic_mean': b3['ic_mean'],
+        'b3_sharpe': b3['sharpe_ls'],
+        'l1_modules': modules,
+        'top_contributors': top,
+    }
+
+
+def _plot_ablation_bars(ax, modules, key, ylabel):
+    import numpy as np
+    names = [m['module'] for m in modules]
+    values = [m[key] for m in modules]
+    colors = ['#dc2626' if v > 0 else '#2563eb' for v in values]
+    bars = ax.barh(names, values, color=colors, alpha=0.7)
+    ax.axvline(0, color='gray', linestyle='--', alpha=0.5)
+    ax.set_xlabel(ylabel)
+    ax.set_title(f'Module Contribution: {ylabel}')
+    for bar, val in zip(bars, values):
+        sign = '+' if val >= 0 else ''
+        ax.text(bar.get_width() + (0.5 if val >= 0 else -0.5), bar.get_y() + bar.get_height()/2,
+                f'{sign}{val:.1f}%', va='center', ha='left' if val >= 0 else 'right', size=8)

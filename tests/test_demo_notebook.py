@@ -233,6 +233,27 @@ def test_cell_10_validation_report():
 
 
 # =============================================================================
+# Cell 11: 消融实验汇总
+# =============================================================================
+
+def test_cell_11_ablation_summary():
+    """Cell 11: 加载 ablation_results.json, 返回 dict 含 3 键"""
+    import json, os
+    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             'notebooks', 'ablation_results.json')
+    if not os.path.exists(json_path):
+        pytest.skip("ablation_results.json 未生成, 先运行 scripts/run_ablation.py")
+    from notebooks.demo_v3_1_0 import cell_11_ablation_summary
+    result = cell_11_ablation_summary(json_path=json_path)
+    assert isinstance(result, dict), "Cell 11 应返回 dict"
+    assert 'b3_ic_mean' in result
+    assert 'l1_modules' in result
+    assert 'top_contributors' in result
+    l1_modules = result['l1_modules']
+    assert len(l1_modules) >= 4, f"至少 4 个模块, 实际 {len(l1_modules)}"
+
+
+# =============================================================================
 # 端到端验收: 全流程不抛异常
 # =============================================================================
 
@@ -249,6 +270,7 @@ def test_demo_full_pipeline_no_errors():
         cell_8_migration,
         cell_9_output_vs_raw,
         cell_10_validation_report,
+        cell_11_ablation_summary,
     )
 
     data = cell_1_load_data()
@@ -260,5 +282,5 @@ def test_demo_full_pipeline_no_errors():
     assert cell_7_ortho_diagnostics(data)
     assert cell_8_migration(data)
     assert cell_9_output_vs_raw(data)
-    report = cell_10_validation_report(data)
-    assert isinstance(report, dict)
+    cell_10_validation_report(data)
+    cell_11_ablation_summary()
