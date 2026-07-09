@@ -66,7 +66,7 @@ In other words, this is not just code—it is an **epistemological stance**: dis
 > **Status**: Implemented, 974 passed + 6 skipped + 11 subtests passed (zero regression, 40 new tests vs v3.0.0 T4's 934)
 > **Docs**: [docs/EXECUTION_V3.0.0_T1.md](docs/EXECUTION_V3.0.0_T1.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
 > **Baseline**: 934 passed + 6 skipped (v3.0.0 T4) → 974 passed + 6 skipped (v3.0.0 T1, with 11 subtests)
-> **Scope**: T1 (P1) of v3.0.0 long-term 4 tasks (T1-T4) completed; T2 (streaming) / T3 (CUSUM) pending
+> **Scope**: T1 (P1) of v3.0.0 long-term 4 tasks (T1-T4) completed
 
 **3-Stage Execution (E1-E3)**:
 
@@ -100,7 +100,7 @@ In other words, this is not just code—it is an **epistemological stance**: dis
 > **Status**: Implemented, 934 passed + 6 skipped + 11 subtests passed (zero regression, 16 new tests vs v2.6.0's 918)
 > **Docs**: [docs/EXECUTION_V3.0.0_T4.md](docs/EXECUTION_V3.0.0_T4.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
 > **Baseline**: 918 passed + 6 skipped (v2.6.0) → 934 passed + 6 skipped (v3.0.0 T4, with 11 subtests)
-> **Scope**: T4 (P0) of v3.0.0 long-term 4 tasks (T1-T4) completed; T1 (fingerprint expansion) / T2 (streaming) / T3 (CUSUM) pending
+> **Scope**: T4 (P0) of v3.0.0 long-term 4 tasks (T1-T4) completed
 
 **3-Stage Execution (E1-E3)**:
 

@@ -101,7 +101,7 @@
 > **状态**: 已实施, 974 passed + 6 skipped + 11 subtests passed (零回归, 比 v3.0.0 T4 的 934 多 40 个新测试)
 > **文档**: [docs/EXECUTION_V3.0.0_T1.md](docs/EXECUTION_V3.0.0_T1.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
 > **基线**: 934 passed + 6 skipped (v3.0.0 T4) → 974 passed + 6 skipped (v3.0.0 T1, 含 11 subtests)
-> **关系**: v3.0.0 远期 4 项任务 (T1-T4) 中 T1 (P1) + T4 (P0) 已完成; T2 (流式) / T3 (CUSUM) 待启动
+> **关系**: v3.0.0 远期 4 项任务 (T1-T4) 中 T1 (P1) + T3 (P2) + T4 (P0) 已完成; T2 (流式) 待启动
 
 **3 阶段执行方案 (E1-E3)**:
 
@@ -135,7 +135,7 @@
 > **状态**: 已实施, 934 passed + 6 skipped + 11 subtests passed (零回归, 比 v2.6.0 的 918 多 16 个新测试)
 > **文档**: [docs/EXECUTION_V3.0.0_T4.md](docs/EXECUTION_V3.0.0_T4.md) | [docs/ANALYSIS_V3.0.0.md](docs/ANALYSIS_V3.0.0.md)
 > **基线**: 918 passed + 6 skipped (v2.6.0) → 934 passed + 6 skipped (v3.0.0 T4, 含 11 subtests)
-> **关系**: v3.0.0 远期 4 项任务 (T1-T4) 中 T4 (P0) 已完成; T1 (指纹扩展) / T2 (流式) / T3 (CUSUM) 待启动
+> **关系**: v3.0.0 远期 4 项任务 (T1-T4) 中 T1 (P1) + T3 (P2) + T4 (P0) 已完成; T2 (流式) 待启动
 
 **3 阶段执行方案 (E1-E3)**:
 
