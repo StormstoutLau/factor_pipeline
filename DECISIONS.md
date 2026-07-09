@@ -1510,7 +1510,7 @@ ANALYSIS_V3.0.0.md §1 调研发现 4 项关键事实:
 
 ## ADR-025: CUSUM 在线漂移检测 (v3.0.0 T3, 2026-07-07)
 
-**状态**: 已实施 (T3.1-T3.2 阶段)
+**状态**: 已实施 (T3.1-T3.6 全部完成)
 **supersedes**: 无 (新增)
 **关联**: ADR-024 (T1 指纹扩展), v3.0.0 T3 任务
 
@@ -1666,7 +1666,85 @@ v3.0.0 T3 需要在线检测因子分布漂移, 替代当前批处理 KS 检验 
 
 ---
 
+## ADR-026: Audit-Driven Code Quality Remediation (v3.1.0, 2026-07-09)
+
+**状态**: 已实施
+**supersedes**: 无 (新增方法论)
+**关联**: v3.1.0 audit 修复, ADR-001~025 质量保障
+
+### 问题背景
+
+v3.1.0 完成了内生性诊断框架 (E1-E6) 实施后, 存在大量"代码实现合理但未被规格文档捕捉"的偏离, 以及测试套件中的断言恒真式 (tautology assertion) — 测试声称验证某行为但实际只验证了数学公理或纯函数确定性。这些偏离在常规 TDD 流程中不会被发现, 因为 TDD 的 Green 阶段只关注"测试通过", 不关注"测试质量"。
+
+### 决策
+
+引入 **audit-driven-development** 4 阶段流程作为 v3.1.0 的质量保障闭环:
+
+1. **Phase 1: Spec Inventory** — 规格清单盘点, 逐条核对代码实现
+2. **Phase 2: Multi-Dimensional Audit** — 多维审计: §2 接口对齐 / §3 逻辑正确性 / §4 完整性 / §5 测试盲区 / §6 数值稳定性, 严重度 P0/P1/P2 分级
+3. **Phase 3: Fix Priority Matrix** — 修复优先级矩阵: P0 (阻断) > P1 (高优) > P2 (可选项)
+4. **Phase 4: Fix Baseline + Tracking** — 修复基线建立 + 持续追踪
+
+### 修复规模
+
+| 严重度 | 数量 | 类别 |
+|--------|------|------|
+| **P0** | 8 | 接口签名/字段缺失/逻辑错误 |
+| **P1** | 8 | 关键路径/数值正确性 |
+| **P2+ 断言恒真式** | 5 | RN-E2 / E3-T21 / E6-T10 / E6-T17/T18 |
+| **P2+ 设计约束** | 10 | B1-B3 (字段/配置/选择器) |
+| **P2+ 端到端** | 2 | C1 orchestrator + pipeline |
+| **P2+ E5 测试** | 5 | 已知关系/β 范围/零权重/BH/交互 |
+| **P2+ spec 对齐** | 11 | E1/E2/E4/E5/E9 16 处更新 |
+
+### 关键原则
+
+1. **代码优于 spec**: 当代码实现比规格文档更合理时, 反向更新 spec (11 项)
+2. **非装饰性断言**: 测试断言必须能捕获真实回归 — 恒真式是"正确但不安全"
+3. **配置消费验证**: 测试应验证配置通过代码路径消费 (如 r_max 是计算值), 非仅验证字段存在
+4. **构造已知关系**: 用 `ic_mean = 0.05 + 0.3*gpd_shape+noise` 等已知关系替代随机数据, 确保测试的非平凡性
+
+### 5 项断言恒真式修复策略
+
+| ID | 恒真原因 | 修复策略 | 修复文件 |
+|----|---------|---------|---------|
+| RN-E2 | 纯函数确定性 | 相同 seed 一致 + 不同 seed 差异 | test_multiple_testing.py |
+| E3-T21 | 构造参数回传 | 20 seed 循环, 至少一组触发 | test_endogeneity.py |
+| E6-T10 | abs()≥0 数学公理 | IVX β 接近真值 0.3 | test_estimators.py |
+| E6-T17 | n_zeroed 字段存在但=0 | λ=1.0 确保 n_zeroed>0 | test_estimators.py |
+| E6-T18 | 同上 MCP | λ=5.0 (γ=3) 确保 n_zeroed>0 | test_estimators.py |
+
+### 影响
+
+- 新增 22 非平凡测试, 分布: backtest (5) / endogeneity_check (4) / endogeneity_estimators (10) / pipelines_v2 (3)
+- 子集回归 754 passed + 1 skipped (零回归)
+- 修复文件: 7 个 (7 test files + 1 spec doc), +820/-87 行
+
+### 学术依据
+
+- Benjamini, Y. & Hochberg, Y. (1995). "Controlling the False Discovery Rate." *JRSS-B* 57(1):289-300. — BH-FDR 单调性断言 (p_adj ≥ p)
+- Fan, J. & Li, R. (2001). "Variable selection via nonconcave penalized likelihood." *JASA* 96(456):1348-1360. — SCAD 近端算子
+- Zhang, C. H. (2010). "Nearly unbiased variable selection under minimax concave penalty." *Annals of Statistics* 38(2):894-942. — MCP 近端算子
+- Oster, E. (2019). "Unobservable selection and coefficient stability." *JBES* 37(2):187-204. — r_max = min(1, multiplier × R̃)
+
+### 回滚方案
+
+审计修复是对测试套件的质量增强, 不改变生产代码行为。回滚不影响功能, 仅降低测试回归能力。
+
+---
+
 ## 路线图
+
+### 已完成 (v3.1.0 — Audit-Driven Code Quality Remediation)
+
+- [x] P0×8 修复: adapter.py / pipeline.py / optimizer.py / pipelines_v2.py / multiple_testing.py / hidden_effect.py
+- [x] P1×8 修复: fingerprint.py / endogeneity_estimators / endogeneity_regularizer / pipeline_v2 / factor_decoupler
+- [x] P2+ A1-A4: 5 项断言恒真式重写 (Romano-Wolf / critical_alert / IVX bias / SCAD-MCP)
+- [x] P2+ B1-B3: 10 项设计约束测试 (Config 字段 3 + 配置生效 2 + method_formal_name+选择器 5)
+- [x] P2+ C1: 2 项跨文件端到端测试 (orchestrator + pipeline check_endogeneity)
+- [x] P2+ E5: 5 项 AttributionAnalyzer 测试补强 (已知关系/β/零权重/BH/交互)
+- [x] P2+ spec: 11 项 spec 反向对齐 (E1/E2/E4/E5/E9, 16 处标记)
+- [x] 审计报告 + README v3.1.0 章节更新 + commit 6192edb 推送
 
 ### 已完成 (v2.1.0)
 
@@ -1816,7 +1894,7 @@ v3.0.0 T3 需要在线检测因子分布漂移, 替代当前批处理 KS 检验 
   - 学术依据: Nelsen (2006) / Pickands (1975, 实际用 POT-MLE 替代) / Hill (1975) / Hamilton (1989)
   - 行为变化: 默认关闭 (enable_tail_dependence/enable_regime_switching=False), 显式 opt-in; 路由修正仅 enable_multi_dim_routing=True 时生效
 - [ ] 流式处理支持
-- [ ] 在线迁移检测（CUSUM）
+- [x] CUSUM 在线漂移检测 — 已实施 (2026-07-07, ADR-025, T3.1-T3.6 全部完成, 385 passed + 1 skipped)
 - [x] Benjamini-Hochberg FDR 替代 Bonferroni — 已实施 (2026-07-04, ADR-002a, E1-E3 全部完成, 934 passed + 6 skipped + 11 subtests)
   - 核心改动: `pipelines_v2.py:236-457` `_ks_migration_significance` 新增 `correction_method` 参数 (默认 'benjamini_hochberg'), 三路径分流 (BH/Bonferroni/none), 字段隔离
   - 测试: tests/test_pipelines_v2/test_ks_migration_bh.py (13 测试) + tests/manual/test_factor_significance_manual.py TestKSMigrationBHCorrection (3 测试) + verify_v3_0_0_t4_manual.py (8/8 手工校验)

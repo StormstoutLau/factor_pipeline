@@ -6,7 +6,7 @@
 
 ## Unified Factor Processing Pipeline
 
-**Factor Processing Pipeline** is a unified factor processing orchestration system for quantitative investment. The system has evolved from v1.0's "fixed pipeline" to v2.5.0's "multi-factor orthogonalization three-layer architecture", and is advancing v3.0.0's **fingerprint dimension expansion and migration detection enhancement** (ADR-024 fingerprint 21-dim + ADR-002a KS BH-FDR). Core capabilities include **factor fingerprint diagnostic layer (21-dim, v3.0.0 T1)**, **semantic-statistical fusion classification**, **three differentiated processing pipelines**, **optional GARCH whitening**, **continuous migration monitoring**, **backtest engine integration**, **L2 disk cache layer**, **multi-factor cross-sectional orthogonalization (5 algorithms)**, and **dual-track drift fusion judgment**.
+**Factor Processing Pipeline** is a unified factor processing orchestration system for quantitative investment. The system has evolved from v1.0's "fixed pipeline" to v3.1.0's "audit-driven code quality remediation (31 fixes + 22 non-trivial tests)", and is advancing v3.0.0's **fingerprint dimension expansion and migration detection enhancement** (ADR-024 fingerprint 21-dim + ADR-002a KS BH-FDR). Core capabilities include **factor fingerprint diagnostic layer (21-dim, v3.0.0 T1)**, **semantic-statistical fusion classification**, **three differentiated processing pipelines**, **optional GARCH whitening**, **continuous migration monitoring**, **backtest engine integration**, **L2 disk cache layer**, **multi-factor cross-sectional orthogonalization (5 algorithms)**, and **dual-track drift fusion judgment**.
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **Author**: Scott Peng Liu
@@ -34,6 +34,32 @@ In other words, this is not just code—it is an **epistemological stance**: dis
 ---
 
 ## Version Update Summary
+
+### v3.1.0 Audit-Driven Code Quality Remediation (2026.07, Implemented)
+
+> **Status**: Implemented, audit P0×8 + P1×8 + P2+×15 all fixed, subset regression 754 passed + 1 skipped (zero regression)
+> **Docs**: [docs/audit/2026-07-08-research-notes-v3.1.0-code-quality-audit.md](docs/audit/2026-07-08-research-notes-v3.1.0-code-quality-audit.md)
+> **Baseline**: 974 passed + 6 skipped (v3.0.0 T1) → audit subset 754 passed + 1 skipped (E1-E10 + V3.1.0 E1-E6 scope)
+
+**audit-driven-development 4-phase workflow**: Spec Inventory → Multi-Dimensional Audit (P0/P1/P2 severity) → Fix Priority Matrix → Fix Baseline + Tracking.
+
+**Fix scope** (31 items):
+- P0 blocking × 8 + P1 high-priority × 8
+- P2+ tautology rewrites × 5 (Romano-Wolf / critical_alert / IVX bias / SCAD-MCP)
+- P2+ design constraint tests × 10 (Config fields / config effectiveness / method_formal_name / selector logic)
+- P2+ cross-file end-to-end × 2 (orchestrator + pipeline)
+- P2+ E5 test strengthening × 5 (known relation / β range / zero weight / BH monotonicity / significant interaction)
+- P2+ spec alignment × 11 (E1/E2/E4/E5/E9, 16 alignment markers)
+
+**Key design decisions**:
+1. r_max is computed value `min(1, multiplier × R̃)`, not configured multiplier
+2. check_endogeneity signature: returns is 5th positional argument, must use keyword args
+3. SCAD threshold `|x|≤λ`, MCP threshold `|x|≤λ/γ` (γ=3), need sufficiently large λ for sparsity
+4. Selector persistence: single-column AR(1) ρ=0.95 has cross-sectional mean ρ only 0.70, need n=200 + ρ=0.98
+5. BH-FDR monotonicity: `p_adj = p × K / rank ≥ p` (K/rank ≥ 1)
+
+**Test regression**: subset 754 passed + 1 skipped (zero regression, 653s)
+**commit**: 6192edb (7 files, +820/-87)
 
 ### v3.0.0 T1 Fingerprint Dimension Expansion to 21-dim (2026.07, Implemented)
 
@@ -891,13 +917,13 @@ factor_pipeline/
 
 ## Version Information
 
-- **Pipeline Version**: v3.0.0 T4 (implemented, 934 passed + 6 skipped + 11 subtests)
+- **Pipeline Version**: v3.1.0 (audit-driven remediation, implemented)
 - **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **External Data Boundary**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **Test Baseline**: 934 passed, 6 skipped, 0 failed
+- **Test Baseline**: 974 passed + 6 skipped (v3.0.0 T1 full) → audit subset 754 passed + 1 skipped (v3.1.0 E1-E10 + V3.1.0 E1-E6 scope)
 - **CI Matrix**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **Build Date**: 2026.07.04
-- **Status**: STABLE (v3.0.0 T4)
+- **Build Date**: 2026.07.09
+- **Status**: STABLE (v3.1.0 audit-driven remediation)
 
 ### Version History
 
@@ -914,6 +940,8 @@ factor_pipeline/
 | v2.5.0 | 2026.07.03 | Multi-factor orthogonalization three-layer architecture (ADR-020, O1-O6 all completed): Layer 2 cross-sectional orthogonalization (5 algorithms) + Layer 3 double Lasso testing + rolling/grouping/triple-set, 860 passed + 5 skipped |
 | v2.6.0 | 2026.07.04 | Optimizer and drift detection enhancement (ADR-021/022/023, E1-E9 all completed): objective function aligned with ADR-004 (6 items IC-vol-cov-ks-health-redundancy) + orthogonalization param search space + Layer 3 significance test (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA decay detection), 918 passed + 6 skipped + 11 subtests |
 | v3.0.0 T4 | 2026.07.04 | KS migration detection BH-FDR replaces Bonferroni (ADR-002a, E1-E3 all completed): `_ks_migration_significance` three-path dispatch (BH/Bonferroni/none, default BH) + field isolation + backward compat + golden reference verification, Benjamini-Hochberg (1995) FDR control, 934 passed + 6 skipped + 11 subtests |
+| v3.0.0 T1 | 2026.07.04 | Fingerprint dimension expansion to 21-dim (ADR-024, E1-E3 all completed), 974 passed + 6 skipped + 11 subtests |
+| v3.1.0 | 2026.07.09 | Audit-Driven Code Quality Remediation (ADR-026): P0+P1×16 + P2+×15 + spec alignment×11, subset regression 754 passed+1 skipped |
 
 ---
 

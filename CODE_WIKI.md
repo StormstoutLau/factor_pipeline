@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v2.5.0-orthogonalizer | **构建日期**: 2026-07-04 | **状态**: STABLE (v2.5.0) / PLANNING (v2.6.0)
+> **版本**: v3.1.0-audit-remediation | **构建日期**: 2026-07-09 | **状态**: STABLE (v3.1.0)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -2163,3 +2163,4 @@ class ThresholdDriftMonitor:
 | v2.4.0 | 2026-07-03 | 外部模块内化 (ADR-019): 5 个处理模块 (Fingerprint/Decoupler/AdaptiveWinsor/Imputer/Neutralizer) 内化到 modules/, 632 passed 零回归 |
 | v2.5.0 | 2026-07-03 | 多因子正交化三层架构 (ADR-020): Layer 1/2/3 分离 + 5 种正交化算法 + VRR/κ/VIF 诊断 + 双重 Lasso (Belloni 2014 PDS) + Rolling + Grouped + TripleChain, 860 passed + 5 skipped |
 | v2.6.0 | 2026-07-04 | 优化器与漂移检测增强 (已实施, ADR-021/022/023, E1-E9 全部完成): 6 项目标函数 (IC-vol-cov-ks-health-redundancy) + 正交化参数搜索空间 (8→11 维) + Layer 3 显著性最终验证 (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA 衰减检测), 918 passed + 6 skipped + 11 subtests |
+| v3.1.0 | 2026-07-09 | Audit-Driven Code Quality Remediation (ADR-026): P0×8+P1×8+P2+×15 (断言恒真式重写 5 + 设计约束 10 + 端到端 2 + E5 测试 5) + spec 反向对齐 11 项, audit-driven-development 4 阶段流程 (Spec Inventory→Multi-Dimensional Audit→Fix Priority Matrix→Fix Baseline+Tracking), 子集回归 754 passed+1 skipped |

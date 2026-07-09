@@ -1,5 +1,28 @@
 # 开发日志 (Changelog)
 
+## v3.1.0 — Audit-Driven Code Quality Remediation (已实施, 2026-07-09)
+
+执行 audit-driven-development 4 阶段流程: P0×8 + P1×8 + P2+×15 (断言恒真式重写 5 + 设计约束测试 10 + 端到端 2 + E5 测试补强 5) + spec 反向对齐 11 项。子集回归 754 passed + 1 skipped (零回归, E1-E10 + V3.1.0 E1-E6 范围)。
+
+**断言恒真式重写 (A1-A4, 5 测试)**:
+- RN-E2 Romano-Wolf: 相同 random_state bootstrap 一致 + 不同 random_state 差异
+- E3-T21 critical_alert: 20 seed 循环非平凡触发
+- E6-T10 IVX bias: IVX β 比 OLS β 更接近真值 0.3
+- E6-T17/T18 SCAD/MCP: λ=1.0/5.0 时 n_zeroed>0 + λ 敏感性对照
+
+**设计约束测试 (B1-B3, 10 测试)**:
+- B1 Config 字段存在性 (3) / B2 配置生效 oster_r_max_multiplier+alert_threshold (2) / B3 method_formal_name+选择器逻辑 (5)
+
+**E5 测试补强 (5 测试)**:
+- 已知关系识别 (gpd_shape→ic_mean, β=0.3) / β 范围 (|β|≤1) / 零权重零贡献 / BH 单调性 (p_adj≥p) / 显著交互 (构造 β=2.0)
+
+**spec 反向对齐 (11 项)**: E1 签名 / E2 stepdown / E4 log+SQL / E5 Layer2 / E9 _trend
+
+**审计报告**: [docs/audit/2026-07-08-research-notes-v3.1.0-code-quality-audit.md](docs/audit/2026-07-08-research-notes-v3.1.0-code-quality-audit.md)
+**commit**: 6192edb (7 files, +820/-87)
+
+---
+
 ## v3.0.0 T3 — CUSUM 在线漂移检测 + BH-FDR 共享模块 (已实施, 2026-07-07)
 
 ### 概览
