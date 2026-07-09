@@ -1334,13 +1334,18 @@ class AblationRunner:
 
         # 更新 is_significant: HAC 显著 AND BH-FDR 校正后 bootstrap 显著
         # trivial 比较的 is_significant 强制为 False (与 baseline 相同, 无显著差异)
+        # P0-1ext audit fix: HAC NaN 时仅用 bootstrap (compare_all 同步修复)
         for i, c in enumerate(comparisons):
             if getattr(c, '_is_trivial', False):
                 c.is_significant = False
             else:
                 nt_idx = non_trivial_indices.index(i)
                 sig_bh = is_sig_bh_non_trivial[nt_idx]
-                c.is_significant = (c.p_value_hac < self.alpha) and sig_bh
+                hac_ok = (not np.isnan(c.p_value_hac)) and (c.p_value_hac < self.alpha)
+                if np.isnan(c.p_value_hac):
+                    c.is_significant = sig_bh
+                else:
+                    c.is_significant = hac_ok and sig_bh
 
         return comparisons
 

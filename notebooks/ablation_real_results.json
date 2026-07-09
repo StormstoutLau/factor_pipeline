@@ -11,12 +11,12 @@
     "has_industry": true
   },
   "b3_baseline": {
-    "ic_mean": -0.009312485404317054,
-    "ic_std": 0.0755221003036763,
-    "icir": -0.12330808289058848,
-    "sharpe_ls": 0.03363371709952013,
-    "max_drawdown": -6.104461111111113,
-    "hit_rate": 0.48034934497816595
+    "ic_mean": -0.006900898645004486,
+    "ic_std": 0.0755982739612393,
+    "icir": -0.09128381222754782,
+    "sharpe_ls": 0.034422925057874226,
+    "max_drawdown": -5.057366666666666,
+    "hit_rate": 0.4759825327510917
   },
   "l1_contributions": [
     {
@@ -31,42 +31,42 @@
     },
     {
       "module": "imputer",
-      "delta_ic": 0.0013230986341355583,
-      "delta_sharpe": 0.009114385855360917,
-      "ic_impact_pct": 14.2,
-      "sharpe_impact_pct": 27.1,
+      "delta_ic": -0.00013844040416826926,
+      "delta_sharpe": -0.0415690609989059,
+      "ic_impact_pct": -2.0,
+      "sharpe_impact_pct": -120.8,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.044,
+      "p_value_bootstrap": 0.936,
       "is_significant": false
     },
     {
       "module": "winsorizer",
-      "delta_ic": 0.0016378989528876443,
-      "delta_sharpe": 0.011272429752724203,
-      "ic_impact_pct": 17.6,
-      "sharpe_impact_pct": 33.5,
+      "delta_ic": -0.0015315681330102856,
+      "delta_sharpe": -0.019644187949165757,
+      "ic_impact_pct": -22.2,
+      "sharpe_impact_pct": -57.1,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.532,
+      "p_value_bootstrap": 0.246,
       "is_significant": false
     },
     {
       "module": "scaler",
-      "delta_ic": 0.016297514251370146,
-      "delta_sharpe": 0.12564902398450606,
-      "ic_impact_pct": 175.0,
-      "sharpe_impact_pct": 373.6,
+      "delta_ic": 0.013885927492057578,
+      "delta_sharpe": 0.12485981602615195,
+      "ic_impact_pct": 201.2,
+      "sharpe_impact_pct": 362.7,
       "p_value_hac": NaN,
       "p_value_bootstrap": 0.0,
       "is_significant": false
     },
     {
       "module": "neutralizer",
-      "delta_ic": -0.003014117170319441,
-      "delta_sharpe": -0.05490837596461892,
-      "ic_impact_pct": -32.4,
-      "sharpe_impact_pct": -163.3,
+      "delta_ic": -0.001091247989505082,
+      "delta_sharpe": -0.04621238502501162,
+      "ic_impact_pct": -15.8,
+      "sharpe_impact_pct": -134.2,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.638,
+      "p_value_bootstrap": 0.866,
       "is_significant": false
     },
     {
