@@ -57,7 +57,7 @@
       "sharpe_impact_pct": 362.7,
       "p_value_hac": NaN,
       "p_value_bootstrap": 0.0,
-      "is_significant": false
+      "is_significant": true
     },
     {
       "module": "neutralizer",
@@ -80,6 +80,6 @@
       "is_significant": false
     }
   ],
-  "l1_n_significant": 0,
+  "l1_n_significant": 1,
   "l2_n_comparisons": 0
 }
