@@ -71,6 +71,7 @@ class MissingTypeDiagnoser(BaseDiagnoser):
         result.cross_sectional_structure = cross_sectional_analysis
         result.recommendations = recommendations
         result.overall_quality_score = quality_assessment["overall_score"]
+        result.mechanism_analysis = mechanism_analysis  # v3.1.0 E3 S1: 暴露 mcar_test p_value
 
         # 保存诊断历史
         self.diagnosis_history.append(result.to_dict())

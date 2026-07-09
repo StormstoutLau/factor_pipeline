@@ -25,7 +25,7 @@ O4.9 工程深化 (v1.1):
 from __future__ import annotations
 
 import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -528,3 +528,121 @@ class FactorSignificanceTest:
         y_stacked = fwd_returns.loc[common_dates, common_stocks].values.flatten()
 
         return F_stacked, y_stacked, common_dates, common_stocks
+
+    # ── v3.1.0 E5 L2: 威胁分层显著性 (opt-in, 不替换 double_lasso) ──
+
+    def threat_layered_alpha(
+        self,
+        threat_taus: Dict[str, float],
+        alpha_base: float = 0.05,
+        gamma: float = 0.5,
+    ) -> Dict[str, float]:
+        """分层显著性阈值 (v3.1.0 E5 L2).
+
+        数学: α_i = α_base × (1 - γ × τ_i)
+
+        与 BH-FDR 协同:
+        1. 先按内生性威胁分层 (高/中/低)
+        2. 每层内独立做 BH-FDR 校正
+        3. 跨层合并, 高威胁层 q-value 乘以惩罚因子
+
+        Args:
+            threat_taus: 各因子的内生性威胁等级 {factor_name: τ ∈ [0,1]}
+            alpha_base: 基础显著性水平 (默认 0.05)
+            gamma: 正则化强度 (默认 0.5)
+
+        Returns:
+            {factor_name: adjusted_alpha}
+        """
+        result = {}
+        for factor_name, tau in threat_taus.items():
+            alpha_i = alpha_base * (1.0 - gamma * tau)
+            result[factor_name] = float(max(alpha_i, 0.001))  # 下限保护
+        return result
+
+    def threat_layered_bh_fdr(
+        self,
+        p_values: Dict[str, float],
+        threat_taus: Dict[str, float],
+        alpha_base: float = 0.05,
+        gamma: float = 0.5,
+    ) -> Dict[str, Dict[str, Any]]:
+        """分层 BH-FDR (L2 + L3 协同, v3.1.0 E5).
+
+        1. 按 τ 分层 (低 < 0.3, 中 0.3-0.7, 高 ≥ 0.7)
+        2. 每层内做 BH-FDR
+        3. 高威胁层 q-value 乘以惩罚因子 (1 - γ × τ_mean)
+
+        统计性质说明 (分层 BH-FDR):
+        - 分层 BH-FDR 在每层内独立控制 FDR (层内 FDR ≤ alpha_base).
+        - 全局 FDR 控制需要额外条件: 若层间检验独立, 全局 FDR ≤ alpha_base;
+          若层间不独立, 全局 FDR 可能超过 alpha_base, 需加权补偿 (此处用
+          penalty_factor = 1 - γ × τ_mean 对高威胁层额外收紧以补偿层间相关性).
+        - 跨层惩罚 (L3) 同时起到缓解层间相关性导致的全局 FDR 膨胀的作用.
+        """
+        # 分层
+        layers: Dict[str, Dict[str, float]] = {'low': {}, 'medium': {}, 'high': {}}
+        for factor, tau in threat_taus.items():
+            if tau < 0.3:
+                layers['low'][factor] = p_values.get(factor, 1.0)
+            elif tau < 0.7:
+                layers['medium'][factor] = p_values.get(factor, 1.0)
+            else:
+                layers['high'][factor] = p_values.get(factor, 1.0)
+
+        # 层内 BH-FDR + 跨层惩罚
+        result: Dict[str, Dict[str, Any]] = {}
+        for layer_name, layer_pvals in layers.items():
+            if not layer_pvals:
+                continue
+            factors = list(layer_pvals.keys())
+            p_list = [layer_pvals[f] for f in factors]
+
+            # apply_bh_fdr 返回 Tuple[List[float], List[bool]] = (p_adj, is_significant)
+            if _HAS_MULTIPLE_TESTING:
+                p_adj, is_significant = apply_bh_fdr(p_list, alpha=alpha_base)
+            else:
+                # 内联 BH-FDR (fallback)
+                p_adj, is_significant = self._inline_bh_fdr(p_list, alpha_base)
+
+            # 跨层惩罚: 高威胁层 q-value 乘以 (1 - γ × τ_mean)
+            taus_layer = [threat_taus[f] for f in factors]
+            tau_mean = sum(taus_layer) / len(taus_layer) if taus_layer else 0.0
+            penalty_factor = 1.0 - gamma * tau_mean
+
+            for i, factor in enumerate(factors):
+                adjusted_p_penalized = p_adj[i] * penalty_factor
+                result[factor] = {
+                    'adjusted_p': float(adjusted_p_penalized),
+                    'rejected': bool(
+                        is_significant[i]
+                        and (adjusted_p_penalized < alpha_base)
+                    ),
+                    'layer': layer_name,
+                    'tau': float(threat_taus[factor]),
+                    'penalty_factor': float(penalty_factor),
+                }
+        return result
+
+    @staticmethod
+    def _inline_bh_fdr(
+        p_values: List[float],
+        alpha: float = 0.05,
+    ) -> Tuple[List[float], List[bool]]:
+        """内联 BH-FDR (fallback, 当 multiple_testing 模块不可用时)."""
+        K = len(p_values)
+        if K == 0:
+            return [], []
+        p_arr = np.asarray(p_values, dtype=float)
+        order = np.argsort(p_arr)
+        p_adj = np.empty_like(p_arr)
+        prev = 1.0
+        for i in range(K - 1, -1, -1):
+            rank = i + 1
+            idx = order[i]
+            bh = p_arr[idx] * K / rank
+            prev = min(prev, bh)
+            p_adj[idx] = min(prev, 1.0)
+        # 判定: 找到最大 k* 使 p_adj_(k*) <= alpha
+        is_sig = [bool(pa <= alpha) for pa in p_adj]
+        return p_adj.tolist(), is_sig

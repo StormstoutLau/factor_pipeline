@@ -730,6 +730,89 @@ class PipelineV2Config:
     cusum_k: float = 0.5       # slack (0.5σ, 检测半漂移, T3.3 校准验证)
     cusum_h: float = 5.5       # trigger (5.5σ, 两个 CUSUM 叠加补偿)
 
+    # ABLATION E1: 模块级 enabled 开关 (默认 None = 全启用, 向后兼容)
+    # 格式: {'imputer': False, 'winsorizer': False, 'scaler': False, 'neutralizer': False}
+    # E2 AblationRunner 通过此字段控制 L1 组件消融
+    module_enabled: Optional[Dict[str, bool]] = None
+
+    # v3.1.0 E1 (§2): 隐藏效应诊断 (默认关闭, opt-in, ADR-024)
+    # True: FactorProcessingPipelineV2.diagnose_hidden_effects 委托到 decoupler
+    # False: 管线行为与 v3.0.0 完全一致 (零回归)
+    enable_hidden_effect_diagnosis: bool = False
+
+    # v3.1.0 E2 (§3): P-hacking 防御 (默认关闭, opt-in, ADR-024)
+    # L2 事中记录: SpecificationLogger (append-only JSONL)
+    enable_specification_logger: bool = False
+    spec_log_dir: str = "logs/specifications/"
+    # L1 test set 一次性原则: 禁止对同一 test set 多次评估
+    enforce_test_set_once: bool = False
+
+    # v3.1.0 E3 (§1): 内生性检验 (四阶段 S1-S4)
+    # 独立新模块 modules/endogeneity_check/, 事后诊断不侵入 fit/transform
+    # v1.3 术语: Oster δ (非 ITCV), R_max=min(1, 1.3×R̃), IFE lambda_i'*F_t, Lewbel (Z-Z̄)×ê²
+    enable_endogeneity_check: bool = False             # 四阶段检验总开关
+    endogeneity_methods: List[str] = field(default_factory=lambda: ['oster_delta', 'aet'])
+    enable_ife_endogeneity_check: bool = False         # IFE 高级方法, 按需 opt-in
+    enable_lewbel_endogeneity_check: bool = False      # Lewbel 高级方法, 按需 opt-in
+    enable_missingness_diagnosis: bool = False         # S1 缺失机制诊断 (插补前)
+    enable_s3_neutralization_check: bool = False       # S3 中性化后检验 (高 stakes 场景)
+    endogeneity_ife_max_dim: int = 5
+    endogeneity_alert_threshold: float = 0.1
+    oster_r_max_multiplier: float = 1.3                # v1.3: 1.3 (非 2.75)
+    oster_threat_threshold: float = 0.1
+
+    # v3.1.0 E4 (§4): 格兰杰检验 (Toda-Yamamoto 1995)
+    # 独立新模块 backtest/granger_attribution/, 事后诊断
+    enable_granger_attribution: bool = False
+    granger_max_lag: int = 12
+    granger_use_toda_yamamoto: bool = True     # 默认 Toda-Yamamoto
+    granger_use_bootstrap: bool = False
+
+    # RESEARCH_NOTES E4: 指纹性能日志 (FingerprintPerformanceLogger)
+    # DuckDB 持久化 21 维指纹 + 表现 + 管道权重, 供 E5 AttributionAnalyzer 使用
+    enable_fingerprint_performance_log: bool = False
+    fp_log_db_path: str = 'factor_db.duckdb'
+    fp_log_table_name: str = 'fingerprint_performance_log'
+
+    # v3.1.0 E5 (§5): 三层决策正则化 (硬依赖 E3, opt-in)
+    # L1 预处理层: 调整 DualNeutralizer 中性化强度
+    # L2 检验层:   调整 factor_significance 显著性阈值 α
+    # L3 组合层:   调整 optimizer 因子权重惩罚
+    enable_endogeneity_regularization: bool = False       # 硬依赖 E3, 默认关闭
+    regularizer_gamma: float = 0.5                        # L2 α 调整系数 γ (spec: endogeneity_reg_gamma)
+    regularizer_rho: float = 0.3                          # L3 权重惩罚系数 ρ (spec: endogeneity_reg_strength)
+    endogeneity_skip_stage2_threshold: float = 0.3        # L1 跳过 Stage 2 阈值
+    endogeneity_extra_check_threshold: float = 0.7        # L1 额外 β' 检查阈值
+    lambda_endogeneity: float = 0.0                       # optimizer 内生性惩罚 (默认 0, 向后兼容)
+
+    # v3.1.0 E6 (§5.10): 估计层方法 (opt-in, 与 E5 互补)
+    # 四种内生性缓解估计器 + 方法选择器, 全部默认关闭
+    enable_endogeneity_estimators: bool = False           # 估计层总开关
+    estimator_method: str = 'auto'                        # 'auto'/'profile_gmm'/'ivx'/'dols'/'pfgmm'
+    enable_profile_gmm: bool = False                      # Profile GMM (Hong-Su-Jiang 2022)
+    profile_gmm_nuclear_lambda: float = 0.1               # 核范数正则化强度 λ
+    enable_ivx: bool = False                              # IVX (Kostakis 2015)
+    ivx_alpha: Optional[float] = None                     # 指数衰减速率 (None=自适应)
+    enable_regularized_dols: bool = False                 # 正则化 DOLS (Stock-Watson 1993)
+    dols_lag_order: int = 3
+    dols_lambda_l1: float = 0.0
+    dols_lambda_l2: float = 0.0
+    enable_pfgmm: bool = False                            # PFGMM (Ghosh-Thoresen 2019, 仅理论)
+    pfgmm_penalty: str = 'scad'
+    pfgmm_lambda: float = 0.1
+    enable_method_selector: bool = False                  # 自动方法选择 (基于 E3 诊断)
+
+    # RESEARCH_NOTES E7 (§2B): 状态归因 (opt-in, 默认关闭)
+    enable_state_attribution: bool = False                 # 状态归因总开关
+    state_data_source: str = 'akshare'                     # 数据源 ('akshare'/'synthetic')
+    state_min_observations: int = 252                      # 最小观测数
+    regime_n_states: int = 2                               # Markov 体制数 (默认 2: bull/bear)
+
+    # RESEARCH_NOTES E10 (§4): 统计→决策桥接 (opt-in, 默认关闭)
+    enable_decision_bridge: bool = False                   # 决策桥接总开关
+    bridge_learning_rate: float = 0.1                      # Q2 soft-update 学习率
+    bridge_decision_freq: str = 'M'                        # 决策频率 ('D'/'W'/'M'/'Q')
+
     @classmethod
     def from_unified(cls, unified) -> 'PipelineV2Config':
         """从 PipelineV2ConfigUnified (Pydantic) 构造 dataclass — 桥接层 (Fix 2)
@@ -792,11 +875,14 @@ class StaticFactorPipeline(_BaseFactorPipeline):
     def __init__(self,
                  neutralizer_params: Optional[Dict] = None,
                  enable_garch: bool = False,
-                 garch_params: Optional[Dict] = None):
+                 garch_params: Optional[Dict] = None,
+                 module_enabled: Optional[Dict[str, bool]] = None):
         super().__init__()
+        me = module_enabled or {}
         self.steps = [
-            ('imputer', ImputerAdapter(strategy='auto')),
-            ('outlier', ProcessingAdapter(process_type='outlier', method='auto')),
+            ('imputer', ImputerAdapter(strategy='auto', enabled=me.get('imputer', True))),
+            ('outlier', ProcessingAdapter(process_type='outlier', method='auto',
+                                          enabled=me.get('winsorizer', True))),
             ('transform', ProcessingAdapter(process_type='transformation', method='auto')),
         ]
 
@@ -806,8 +892,10 @@ class StaticFactorPipeline(_BaseFactorPipeline):
             self.steps.append(('garch_whiten', GarchWhiteningAdapter(**garch_kwargs)))
 
         self.steps.extend([
-            ('neutralize', NeutralizerAdapter(**(neutralizer_params or {}))),
-            ('standardize', ProcessingAdapter(process_type='standardization', method='auto')),
+            ('neutralize', NeutralizerAdapter(enabled=me.get('neutralizer', True),
+                                              **(neutralizer_params or {}))),
+            ('standardize', ProcessingAdapter(process_type='standardization', method='auto',
+                                              enabled=me.get('scaler', True))),
         ])
 
     def fit(self, X: pd.DataFrame, **kwargs) -> 'StaticFactorPipeline':
@@ -849,12 +937,19 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
                  decorrelation_strength: float = 1.0,
                  max_ar_order: int = 5,
                  ar_criterion: str = 'aic',
-                 neutralizer_params: Optional[Dict] = None):
+                 neutralizer_params: Optional[Dict] = None,
+                 module_enabled: Optional[Dict[str, bool]] = None):
         super().__init__()
         self.decorrelation_strength = decorrelation_strength
         self.max_ar_order = max_ar_order
         self.ar_criterion = ar_criterion
         self.neutralizer_params = neutralizer_params or {}
+
+        # ABLATION E1: 模块级 enabled 开关 (默认全 True, 向后兼容)
+        me = module_enabled or {}
+        self._imputer_enabled = me.get('imputer', True)
+        self._neutralizer_enabled = me.get('neutralizer', True)
+        self._scaler_enabled = me.get('scaler', True)
 
         # 提取行业和市值数据用于解耦器
         self.industry_data = self.neutralizer_params.get('industry_data', None)
@@ -871,29 +966,36 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
 
         # Step 1: 插补
         logger.info("[DynamicPipeline] Step 1: 缺失值插补")
-        self._imputer = ImputerAdapter(strategy='auto')
+        self._imputer = ImputerAdapter(strategy='auto', enabled=self._imputer_enabled)
         self._imputer.fit(X, **kwargs)
         X_imputed = self._imputer.transform(X, **kwargs)
         self._intermediate_data['imputation'] = X_imputed.copy()
-        
+
         # Step 2: 初始化并拟合组合解耦器（三重中性化核心）
-        logger.info("[DynamicPipeline] Step 2: 拟合三重中性化解耦器")
-        self._decoupler = CompositeDecoupler(
-            industry_data=self.industry_data,
-            market_cap_data=self.market_cap_data,
-            max_ar_order=self.max_ar_order,
-            ar_criterion=self.ar_criterion,
-            decorrelation_strength=self.decorrelation_strength
-        )
-        self._decoupler.fit(X_imputed, **kwargs)
-        
+        # ABLATION E1: neutralizer 关闭时跳过解耦 (identity)
+        if self._neutralizer_enabled:
+            logger.info("[DynamicPipeline] Step 2: 拟合三重中性化解耦器")
+            self._decoupler = CompositeDecoupler(
+                industry_data=self.industry_data,
+                market_cap_data=self.market_cap_data,
+                max_ar_order=self.max_ar_order,
+                ar_criterion=self.ar_criterion,
+                decorrelation_strength=self.decorrelation_strength
+            )
+            self._decoupler.fit(X_imputed, **kwargs)
+            X_decoupled = self._decoupler.transform(X_imputed, **kwargs)
+        else:
+            logger.info("[DynamicPipeline] Step 2: neutralizer disabled, 跳过解耦 (identity)")
+            self._decoupler = None
+            X_decoupled = X_imputed
+        self._intermediate_data['decoupling'] = X_decoupled.copy()
+
         # Step 3: 应用解耦得到残差，用于拟合标准化器
         logger.info("[DynamicPipeline] Step 3: 拟合标准化器")
-        X_decoupled = self._decoupler.transform(X_imputed, **kwargs)
-        self._intermediate_data['decoupling'] = X_decoupled.copy()
-        self._standardizer = ProcessingAdapter(process_type='standardization', method='z_score')
+        self._standardizer = ProcessingAdapter(process_type='standardization', method='z_score',
+                                               enabled=self._scaler_enabled)
         self._standardizer.fit(X_decoupled, **kwargs)
-        
+
         self.is_fitted = True
         logger.info("[DynamicPipeline] Fit complete")
         return self
@@ -908,8 +1010,10 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
         X = self._imputer.transform(X, **kwargs)
 
         # Step 2: 三重中性化解耦（原始值中性化 → AR建模 → AR残差中性化）
-        logger.info("[DynamicPipeline] Step 2: 三重中性化解耦")
-        X = self._decoupler.transform(X, **kwargs)
+        # ABLATION E1: neutralizer 关闭时跳过 (identity)
+        if self._decoupler is not None:
+            logger.info("[DynamicPipeline] Step 2: 三重中性化解耦")
+            X = self._decoupler.transform(X, **kwargs)
 
         # Step 3: 标准化
         logger.info("[DynamicPipeline] Step 3: 标准化")
@@ -946,7 +1050,8 @@ class MixedFactorPipeline(_BaseFactorPipeline):
                  skew_threshold: float = 2.0,
                  kurt_threshold: float = 5.0,
                  mixed_winsor_sigma: float = 3.0,
-                 neutralizer_params: Optional[Dict] = None):
+                 neutralizer_params: Optional[Dict] = None,
+                 module_enabled: Optional[Dict[str, bool]] = None):
         super().__init__()
         self.conditional_transform = conditional_transform
         self.skew_threshold = skew_threshold
@@ -956,20 +1061,33 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         self._needs_transform = False  # 是否需要进行非线性变换
         self._transformer = None  # 显式初始化，避免状态不一致
 
+        # ABLATION E1: 模块级 enabled 开关 (默认全 True, 向后兼容)
+        me = module_enabled or {}
+        self._imputer_enabled = me.get('imputer', True)
+        self._winsorizer_enabled = me.get('winsorizer', True)
+        self._neutralizer_enabled = me.get('neutralizer', True)
+        self._scaler_enabled = me.get('scaler', True)
+
     def fit(self, X: pd.DataFrame, **kwargs) -> 'MixedFactorPipeline':
         self._intermediate_data = {}
 
         # Step 1: 插补
         logger.info("[MixedPipeline] Fitting imputer...")
-        self._imputer = ImputerAdapter(strategy='auto')
+        self._imputer = ImputerAdapter(strategy='auto', enabled=self._imputer_enabled)
         self._imputer.fit(X, **kwargs)
         X = self._imputer.transform(X, **kwargs)
         self._intermediate_data['imputation'] = X.copy()
 
         # Step 2: 温和去极值（3σ缩尾）
-        logger.info("[MixedPipeline] Applying gentle winsorization...")
-        self._winsorize_params = self._compute_winsorize_params(X)
-        X_winsor = self._apply_winsorize(X)
+        # ABLATION E1: winsorizer 关闭时跳过 (identity)
+        if self._winsorizer_enabled:
+            logger.info("[MixedPipeline] Applying gentle winsorization...")
+            self._winsorize_params = self._compute_winsorize_params(X)
+            X_winsor = self._apply_winsorize(X)
+        else:
+            logger.info("[MixedPipeline] winsorizer disabled, 跳过去极值 (identity)")
+            self._winsorize_params = None
+            X_winsor = X
         self._intermediate_data['outlier'] = X_winsor.copy()
 
         # Step 3: 诊断是否需要非线性变换
@@ -986,12 +1104,14 @@ class MixedFactorPipeline(_BaseFactorPipeline):
 
         # Step 4: 中性化
         logger.info("[MixedPipeline] Fitting neutralizer...")
-        self._neutralizer = NeutralizerAdapter(**self.neutralizer_params)
+        self._neutralizer = NeutralizerAdapter(enabled=self._neutralizer_enabled,
+                                               **self.neutralizer_params)
         self._neutralizer.fit(X, **kwargs)
 
         # Step 5: 标准化
         logger.info("[MixedPipeline] Fitting standardizer...")
-        self._standardizer = ProcessingAdapter(process_type='standardization', method='z_score')
+        self._standardizer = ProcessingAdapter(process_type='standardization', method='z_score',
+                                               enabled=self._scaler_enabled)
         X_neutral = self._neutralizer.transform(X, **kwargs)
         self._standardizer.fit(X_neutral, **kwargs)
 
@@ -1005,7 +1125,9 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         X = self._imputer.transform(X, **kwargs)
 
         # Step 2: 温和缩尾
-        X = self._apply_winsorize(X)
+        # ABLATION E1: winsorizer 关闭时跳过 (identity)
+        if self._winsorizer_enabled:
+            X = self._apply_winsorize(X)
 
         # Step 3: 条件性变换
         if self._needs_transform:
@@ -1082,6 +1204,29 @@ class FactorProcessingPipelineV2:
         self.factor_classifications: Dict[str, ClassificationResult] = {}
         self.factor_pipelines: Dict[str, Any] = {}
         self.is_fitted = False
+
+        # v3.1.0 E1 (§2): 隐藏效应诊断 — 当前激活的解耦器引用 (fit 后填充)
+        # 由 diagnose_hidden_effects 委托调用; 未 fit 时为 None.
+        # 测试可直接注入已拟合的解耦器以聚焦委托逻辑 (见 E1-T15).
+        self.decoupler: Optional[Any] = None
+        self._hidden_effect_report: Optional[Dict[str, Any]] = None
+
+        # v3.1.0 E2 (§3): P-hacking 防御 — SpecificationLogger 引用 (懒初始化)
+        # 由 log_specification 委托调用; enable_specification_logger=False 时不创建.
+        self._spec_logger: Optional[Any] = None
+
+        # v3.1.0 E3 (§1): 内生性检验 — 编排器引用 (懒初始化, 按需创建)
+        # 由 check_endogeneity 委托调用; enable_endogeneity_check=False 时不创建.
+        self._endogeneity_orchestrator: Optional[Any] = None
+        self._endogeneity_report: Optional[Dict[str, Any]] = None
+
+        # v3.1.0 E4 (§4): 格兰杰检验 — 测试器引用 (懒初始化)
+        # 由 check_granger_causality 委托调用; enable_granger_attribution=False 时不创建.
+        self._granger_report: Optional[Dict[str, Any]] = None
+
+        # RESEARCH_NOTES E4: 指纹性能日志 — Logger 引用 (懒初始化)
+        # 由 log_fingerprint_performance 委托调用; enable_fingerprint_performance_log=False 时不创建.
+        self._fp_logger: Optional[Any] = None
 
         # v2.5.0: post_transform_hooks (Layer 2 正交化等, 半侵入式)
         # O2.8.4: enabled=False 时 hooks 为空列表 (零循环开销)
@@ -1200,7 +1345,8 @@ class FactorProcessingPipelineV2:
             primary_type = classification.primary_type.value.lower()
 
             # 创建并拟合主类型管道
-            factor_pipes[primary_type] = self._create_pipeline(primary_type, neutralizer_params)
+            factor_pipes[primary_type] = self._create_pipeline(
+                primary_type, neutralizer_params, self.config.module_enabled)
             logger.info(f"Fitting {name} → {primary_type} pipeline")
             factor_pipes[primary_type].fit(factor_data[name], **kwargs)
 
@@ -1212,7 +1358,7 @@ class FactorProcessingPipelineV2:
                 secondary_type = classification.secondary_type.value.lower()
                 if secondary_type != primary_type:
                     factor_pipes[secondary_type] = self._create_pipeline(
-                        secondary_type, neutralizer_params)
+                        secondary_type, neutralizer_params, self.config.module_enabled)
                     logger.info(f"Fitting {name} → {secondary_type} pipeline (soft routing)")
                     factor_pipes[secondary_type].fit(factor_data[name], **kwargs)
 
@@ -1398,12 +1544,14 @@ class FactorProcessingPipelineV2:
         """拟合并变换"""
         return self.fit(factor_data, industry_data=industry_data, **kwargs).transform(factor_data, **kwargs)
 
-    def _create_pipeline(self, pipe_type: str, neutralizer_params: dict):
+    def _create_pipeline(self, pipe_type: str, neutralizer_params: dict,
+                         module_enabled: Optional[Dict[str, bool]] = None):
         """创建指定类型的管道实例 (P4'.3 per-factor 方案).
 
         Args:
             pipe_type: 'static' | 'dynamic' | 'mixed'
             neutralizer_params: 中性化参数 (含 industry_data)
+            module_enabled: ABLATION E1 模块级 enabled 开关 (None = 全启用)
         """
         if pipe_type == 'static':
             return StaticFactorPipeline(
@@ -1414,14 +1562,16 @@ class FactorProcessingPipelineV2:
                     'q': self.config.static_garch_q,
                     'vol': self.config.static_garch_vol,
                     'min_obs': self.config.static_garch_min_obs,
-                } if self.config.static_enable_garch else None
+                } if self.config.static_enable_garch else None,
+                module_enabled=module_enabled,
             )
         elif pipe_type == 'dynamic':
             return DynamicFactorPipeline(
                 decorrelation_strength=self.config.dynamic_decorrelation_strength,
                 max_ar_order=self.config.dynamic_max_ar_order,
                 ar_criterion=self.config.dynamic_ar_criterion,
-                neutralizer_params=neutralizer_params
+                neutralizer_params=neutralizer_params,
+                module_enabled=module_enabled,
             )
         elif pipe_type == 'mixed':
             return MixedFactorPipeline(
@@ -1429,7 +1579,8 @@ class FactorProcessingPipelineV2:
                 skew_threshold=self.config.mixed_skew_threshold,
                 kurt_threshold=self.config.mixed_kurt_threshold,
                 mixed_winsor_sigma=self.config.mixed_winsor_sigma,
-                neutralizer_params=neutralizer_params
+                neutralizer_params=neutralizer_params,
+                module_enabled=module_enabled,
             )
         else:
             raise ValueError(f"Unknown pipeline type: {pipe_type}")
@@ -1548,6 +1699,491 @@ class FactorProcessingPipelineV2:
                 )
 
         return results
+
+    def diagnose_hidden_effects(
+        self,
+        factor_data: pd.DataFrame,
+        controls: Optional[pd.DataFrame] = None,
+        returns: Optional[pd.DataFrame] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """v3.1.0 E1 (§2): 事后隐藏效应诊断
+
+        委托到 self.decoupler.diagnose_hidden_effects (CompositeDecoupler /
+        ARDecoupler 通过 HiddenEffectDiagnosticMixin 提供). 不侵入 fit/transform,
+        与 monitor_cusum_drift 模式一致.
+
+        Args:
+            factor_data: 原始因子数据 (T, N)
+            controls: 行业/市值控制变量 (T, N, K), 用于增量内生性检验
+            returns: 未来收益 (T, N), 用于 IC 衰减对比
+
+        Returns:
+            4 键诊断 dict, 或 None (功能关闭 / 无可用解耦器).
+            enable_hidden_effect_diagnosis=False 时返回 None.
+        """
+        if not getattr(self.config, 'enable_hidden_effect_diagnosis', False):
+            return None
+        decoupler = getattr(self, 'decoupler', None)
+        if decoupler is None or not hasattr(decoupler, 'diagnose_hidden_effects'):
+            return None
+        self._hidden_effect_report = decoupler.diagnose_hidden_effects(
+            factor_data, controls, returns
+        )
+        return self._hidden_effect_report
+
+    def log_specification(
+        self,
+        config: Dict[str, Any],
+        result: Dict[str, Any],
+        run_type: str = 'exploratory',
+        factor_name: Optional[str] = None,
+    ) -> Optional[str]:
+        """v3.1.0 E2 (§3 L2): 记录运行规格 (P-hacking 防御)
+
+        委托到 SpecificationLogger.log_run (append-only JSONL).
+        enable_specification_logger=False 时返回 None.
+
+        Args:
+            config: 运行配置 (滞后阶数、中性化变量、样本期等)
+            result: 运行结果 (IC、p_value、显著数等)
+            run_type: 'exploratory' / 'validation' / 'final'
+            factor_name: 因子名 (可选, 用于按因子查询)
+
+        Returns:
+            commit_hash (8 字符 SHA1 前缀), 或 None (功能关闭).
+        """
+        if not getattr(self.config, 'enable_specification_logger', False):
+            return None
+        if self._spec_logger is None:
+            from backtest.specification_logger import SpecificationLogger
+            self._spec_logger = SpecificationLogger(
+                log_dir=getattr(self.config, 'spec_log_dir', 'logs/specifications/'),
+            )
+        return self._spec_logger.log_run(
+            config, result, run_type=run_type, factor_name=factor_name,
+        )
+
+    def check_endogeneity(
+        self,
+        raw_factor_with_missing: Optional[pd.DataFrame] = None,
+        imputed_factor: Optional[pd.DataFrame] = None,
+        neutralized_factor: Optional[pd.DataFrame] = None,
+        decoupled_factor: Optional[pd.DataFrame] = None,
+        returns: Optional[pd.DataFrame] = None,
+        controls: Optional[pd.DataFrame] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """v3.1.0 E3 (§1): 事后内生性四阶段诊断 (S1-S4).
+
+        委托到 EndogeneityDiagnosticOrchestrator. 不侵入 fit/transform,
+        与 monitor_cusum_drift / diagnose_hidden_effects 模式一致.
+
+        四阶段 (v1.3 修正):
+        - S1 插补前缺失机制 (MCAR/MAR/MNAR): 分类标签 + mnar_risk_prior
+        - S2 插补后基线: 连续 τ ∈ [0,1]
+        - S3 中性化后残留 (可选): 连续 τ
+        - S4 解耦后最终: 连续 τ_i
+        - S1→S2 上下文衔接 (逻辑衔接, 非数值乘法/非数值差分)
+        - S3-S2, S4-S3, S4-S2 是数值差分
+
+        Args:
+            raw_factor_with_missing: 原始含缺失因子 (T, N), 用于 S1
+            imputed_factor: 插补后因子 (T, N), 用于 S2
+            neutralized_factor: 中性化后因子 (T, N), 用于 S3 (可选)
+            decoupled_factor: 解耦后因子 (T, N), 用于 S4
+            returns: 未来收益 (T, N)
+            controls: 控制变量 (T, N, K), 可选
+
+        Returns:
+            诊断 dict (含 s1/s2/s4 报告与 final_threat_tau), 或 None (功能关闭).
+            enable_endogeneity_check=False 时返回 None.
+        """
+        if not getattr(self.config, 'enable_endogeneity_check', False):
+            return None
+
+        from factor_pipeline.modules.endogeneity_check import (
+            EndogeneityDiagnosticOrchestrator,
+        )
+
+        methods = list(getattr(self.config, 'endogeneity_methods', ['oster_delta', 'aet']))
+        enable_ife = getattr(self.config, 'enable_ife_endogeneity_check', False)
+        enable_lewbel = getattr(self.config, 'enable_lewbel_endogeneity_check', False)
+        enable_s3 = getattr(self.config, 'enable_s3_neutralization_check', False)
+        threat_threshold = getattr(self.config, 'oster_threat_threshold', 0.1)
+        r_max_multiplier = getattr(self.config, 'oster_r_max_multiplier', 1.3)
+        ife_max_dim = getattr(self.config, 'endogeneity_ife_max_dim', 5)
+        if enable_ife and 'ife' not in methods:
+            methods.append('ife')
+        if enable_lewbel and 'lewbel' not in methods:
+            methods.append('lewbel')
+
+        orch = EndogeneityDiagnosticOrchestrator(
+            methods=methods,
+            threat_threshold=threat_threshold,
+            enable_s3=enable_s3,
+            enable_ife=enable_ife,
+            enable_lewbel=enable_lewbel,
+            r_max_multiplier=r_max_multiplier,
+            ife_max_dim=ife_max_dim,
+        )
+
+        report: Dict[str, Any] = {}
+        # S1: 缺失机制诊断 (插补前)
+        if raw_factor_with_missing is not None and getattr(
+            self.config, 'enable_missingness_diagnosis', False
+        ):
+            report['s1'] = orch.diagnose_s1_pre_imputation(
+                raw_factor_with_missing, returns
+            )
+        else:
+            report['s1'] = None
+
+        # S2: 插补后基线
+        s2_data = imputed_factor if imputed_factor is not None else raw_factor_with_missing
+        if s2_data is not None and returns is not None:
+            try:
+                report['s2'] = orch.diagnose_s2_post_imputation(s2_data, returns, controls)
+            except Exception as e:
+                logger.warning(f"S2 内生性诊断失败: {e}")
+                report['s2'] = None
+        else:
+            report['s2'] = None
+
+        # S3: 中性化后残留 (可选)
+        if neutralized_factor is not None and returns is not None:
+            try:
+                report['s3'] = orch.diagnose_s3_post_neutralization(
+                    neutralized_factor, returns, controls
+                )
+            except Exception as e:
+                logger.warning(f"S3 内生性诊断失败: {e}")
+                report['s3'] = None
+        else:
+            report['s3'] = None
+
+        # S4: 解耦后最终
+        s4_data = decoupled_factor if decoupled_factor is not None else imputed_factor
+        if s4_data is not None and returns is not None:
+            try:
+                report['s4'] = orch.diagnose_s4_post_decoupling(s4_data, returns, controls)
+            except Exception as e:
+                logger.warning(f"S4 内生性诊断失败: {e}")
+                report['s4'] = None
+        else:
+            report['s4'] = None
+
+        report['final_assessment'] = orch.get_final_threat_assessment()
+        self._endogeneity_orchestrator = orch
+        self._endogeneity_report = report
+        return report
+
+    def check_granger_causality(
+        self,
+        factor_series: pd.Series,
+        return_series: pd.Series,
+    ) -> Optional[Dict[str, Any]]:
+        """v3.1.0 E4 (§4): 事后格兰杰因果检验 (Toda-Yamamoto 1995).
+
+        委托到 TodaYamamotoGrangerTester. 不侵入 fit/transform.
+        ADF → VAR(p+d) → Wald 完整流程; contemporaneous_causality='unidentified'.
+
+        Args:
+            factor_series: 因子时序 (T,)
+            return_series: 收益时序 (T,)
+
+        Returns:
+            诊断 dict (含 wald_factor_to_return / wald_return_to_factor /
+            f_granger_cause_r / contemporaneous_causality 等), 或 None (功能关闭).
+            enable_granger_attribution=False 时返回 None.
+        """
+        if not getattr(self.config, 'enable_granger_attribution', False):
+            return None
+
+        from factor_pipeline.backtest.granger_attribution import (
+            TodaYamamotoGrangerTester,
+        )
+
+        tester = TodaYamamotoGrangerTester(
+            max_lag=getattr(self.config, 'granger_max_lag', 12),
+            use_bootstrap=getattr(self.config, 'granger_use_bootstrap', False),
+        )
+        try:
+            tester.fit(factor_series, return_series)
+            report = tester.get_diagnostics()
+        except Exception as e:
+            logger.warning(f"格兰杰因果检验失败: {e}")
+            report = {
+                'integration_order': 0,
+                'selected_lag': 1,
+                'wald_factor_to_return': {},
+                'wald_return_to_factor': {},
+                'f_granger_cause_r': False,
+                'r_granger_cause_f': False,
+                'contemporaneous_causality': 'unidentified',
+                'bootstrap_result': None,
+                'interpretation': f'检验失败: {e}',
+                'warning': '格兰杰因果 ≠ 结构因果 — 仅为伪回归初筛',
+            }
+        self._granger_report = report
+        return report
+
+    def log_fingerprint_performance(
+        self,
+        factor_data: Optional[Dict[str, pd.DataFrame]] = None,
+        returns: Optional[pd.DataFrame] = None,
+    ) -> Optional[Any]:
+        """RESEARCH_NOTES E4: 记录指纹性能日志 (事后诊断, 不侵入 fit/transform).
+
+        将当前 self.fingerprints_ 的 21 维指纹 + 因子表现 + 管道权重
+        持久化到 DuckDB, 供 E5 AttributionAnalyzer 使用.
+
+        Args:
+            factor_data: 因子数据字典 (可选, 默认用 self.processed_data_)
+            returns: 未来收益 (可选, 用于计算因子表现)
+
+        Returns:
+            FingerprintPerformanceLogger 实例 (enable=False 时返回 None)
+        """
+        if not getattr(self.config, 'enable_fingerprint_performance_log', False):
+            return None
+
+        from factor_pipeline.backtest.fingerprint_performance_logger import (
+            FingerprintPerformanceLogger,
+        )
+
+        if self._fp_logger is None:
+            self._fp_logger = FingerprintPerformanceLogger(
+                db_path=getattr(self.config, 'fp_log_db_path', 'factor_db.duckdb'),
+                table_name=getattr(self.config, 'fp_log_table_name', 'fingerprint_performance_log'),
+                enable=True,
+            )
+
+        # 遍历已拟合的指纹, 记录每因子的指纹 + 表现
+        fingerprints = getattr(self, 'fingerprints_', {})
+        for fname, fp in fingerprints.items():
+            # 计算因子表现 (如有 returns)
+            performance: Dict[str, float] = {}
+            if returns is not None and factor_data is not None and fname in factor_data:
+                f_vals = factor_data[fname].iloc[:, 0] if hasattr(factor_data[fname], 'iloc') else factor_data[fname]
+                aligned = pd.concat([f_vals, returns.iloc[:, 0] if returns.ndim > 1 else returns], axis=1).dropna()
+                if len(aligned) > 5:
+                    from scipy.stats import spearmanr
+                    ic_series = aligned.apply(
+                        lambda row: spearmanr(row.iloc[0], row.iloc[1])[0]
+                        if len(row) == 2 else float('nan'),
+                        axis=1,
+                    ) if aligned.shape[1] == 2 else pd.Series(dtype=float)
+                    # 简化: 用整体 IC
+                    if aligned.shape[1] == 2:
+                        ic_val, _ = spearmanr(aligned.iloc[:, 0], aligned.iloc[:, 1])
+                        performance = {
+                            'ic_mean': float(ic_val) if not np.isnan(ic_val) else 0.0,
+                            'ic_std': 0.0,
+                            'ic_ir': 0.0,
+                            'turnover': 0.0,
+                            'max_drawdown': 0.0,
+                            'sharpe_ratio': 0.0,
+                        }
+
+            # 管道权重
+            weights = getattr(self, 'pipeline_weights_', {}).get(fname, {})
+            pipeline_weights = {
+                'weight_static': float(weights.get('static', 0.0)),
+                'weight_dynamic': float(weights.get('dynamic', 0.0)),
+                'weight_mixed': float(weights.get('mixed', 0.0)),
+            }
+
+            try:
+                self._fp_logger.log(
+                    factor_name=fname,
+                    fingerprint=fp,
+                    performance=performance,
+                    pipeline_weights=pipeline_weights,
+                )
+            except Exception as e:
+                logger.warning(f"指纹性能日志记录失败 (factor={fname}): {e}")
+
+        return self._fp_logger
+
+    def get_fingerprint_performance_log(self, **query_kwargs) -> pd.DataFrame:
+        """RESEARCH_NOTES E4: 查询指纹性能日志.
+
+        Args:
+            **query_kwargs: 传递给 FingerprintPerformanceLogger.query()
+                           (factor_name, start_date, end_date, regime)
+
+        Returns:
+            查询结果 DataFrame (enable=False 或无记录时返回空 DataFrame)
+        """
+        if self._fp_logger is None or not getattr(self._fp_logger, 'enable', False):
+            return pd.DataFrame()
+        return self._fp_logger.query(**query_kwargs)
+
+    def apply_endogeneity_regularization(
+        self,
+        threat_assessment: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """v3.1.0 E5 (§5): 事后应用三层内生性正则化.
+
+        基于 E3 的 final_threat_assessment, 协调三层正则化配置:
+          L1 预处理层: DualNeutralizer 中性化强度 (skip_stage2/threat_level)
+          L2 检验层:   factor_significance 显著性阈值 α (α = α_base × (1 - γ × τ))
+          L3 组合层:   optimizer 因子权重惩罚 (w = w_raw × (1 - ρ × τ))
+
+        硬依赖 E3: threat_assessment 必须含 final_threat_tau.
+        enable_endogeneity_regularization=False 时返回 None (向后兼容).
+
+        Args:
+            threat_assessment: E3 EndogeneityDiagnosticOrchestrator.get_final_threat_assessment()
+                              返回的 dict. None 时使用 self._endogeneity_report.
+
+        Returns:
+            三层正则化配置 dict, 或 None (功能关闭).
+            {
+                'l1_neutralizer': {...},
+                'l2_significance': {...},
+                'l3_optimizer': {...},
+                'threat_tau': float,
+            }
+        """
+        if not getattr(self.config, 'enable_endogeneity_regularization', False):
+            return None
+
+        # 优先用参数, 否则用缓存的 E3 报告
+        assessment = threat_assessment
+        if assessment is None:
+            assessment = getattr(self, '_endogeneity_report', None)
+            if assessment is not None and 'final_assessment' in assessment:
+                assessment = assessment['final_assessment']
+        if assessment is None:
+            logger.warning(
+                "E5 三层正则化: 未提供 threat_assessment, 且 E3 未运行. "
+                "请先运行 check_endogeneity() 或直接传入 threat_assessment."
+            )
+            return None
+
+        from factor_pipeline.modules.endogeneity_regularizer import (
+            EndogeneityRegularizer,
+        )
+
+        reg = EndogeneityRegularizer(
+            threat_assessment=assessment,
+            reg_gamma=getattr(self.config, 'regularizer_gamma', 0.5),
+            reg_strength_rho=getattr(self.config, 'regularizer_rho', 0.3),
+        )
+
+        tau = float(assessment.get('final_threat_tau', 0.0))
+        result = {
+            'l1_neutralizer': reg.apply_l1_neutralizer_config(tau),
+            'l2_significance': reg.apply_l2_significance_config(tau),
+            'l3_optimizer': reg.apply_l3_optimizer_config(tau, w_raw=1.0),
+            'threat_tau': tau,
+        }
+        self._regularizer_config = result
+        return result
+
+    def estimate_with_endogeneity_mitigation(
+        self,
+        factor_data: pd.DataFrame,
+        returns: pd.DataFrame,
+        controls: Optional[pd.DataFrame] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """v3.1.0 E6 (§5.10): 事后估计层内生性缓解.
+
+        四种估计器 (Profile GMM / IVX / DOLS / PFGMM) + 方法选择器,
+        全部 opt-in. 与 E5 互补: E6 先估计, E5 再正则化残留威胁.
+
+        enable_endogeneity_estimators=False 时返回 None (向后兼容).
+
+        Args:
+            factor_data: 因子数据 (T, N)
+            returns: 未来收益 (T, N)
+            controls: 控制变量 (可选)
+
+        Returns:
+            估计结果 dict (含 method/beta/residual_threat_tau), 或 None (功能关闭).
+        """
+        if not getattr(self.config, 'enable_endogeneity_estimators', False):
+            return None
+
+        method = getattr(self.config, 'estimator_method', 'auto')
+
+        # auto 模式: 用方法选择器 (软依赖 E3 诊断)
+        if method == 'auto':
+            assessment = getattr(self, '_endogeneity_report', None)
+            final_assessment = None
+            if assessment is not None and 'final_assessment' in assessment:
+                final_assessment = assessment['final_assessment']
+            elif assessment is not None and 'final_threat_tau' in assessment:
+                final_assessment = assessment
+            else:
+                # E3 未运行, 降级为默认 Profile GMM
+                final_assessment = {'final_threat_tau': 0.5}
+
+            from factor_pipeline.modules.endogeneity_estimators.core.method_selector import (
+                EndogeneityMethodSelector,
+            )
+            selector = EndogeneityMethodSelector()
+            selection = selector.select(final_assessment, factor_data=factor_data)
+            method = selection['recommended_method']
+            # 'none' 时返回空结果 (仅三层正则化即可)
+            if method == 'none':
+                return {
+                    'method': 'none',
+                    'reason': selection['reason'],
+                    'beta': float('nan'),
+                    'residual_threat_tau': float(
+                        final_assessment.get('final_threat_tau', 0.0)
+                    ),
+                }
+
+        # 实例化对应估计器
+        if method == 'profile_gmm' or (
+            method != 'ivx' and method != 'dols' and method != 'pfgmm'
+            and getattr(self.config, 'enable_profile_gmm', False)
+        ):
+            from factor_pipeline.modules.endogeneity_estimators.core.profile_gmm import (
+                ProfileGMMEstimator,
+            )
+            est = ProfileGMMEstimator(
+                nuclear_lambda=getattr(self.config, 'profile_gmm_nuclear_lambda', 0.1),
+            )
+        elif method == 'ivx':
+            from factor_pipeline.modules.endogeneity_estimators.core.ivx import (
+                IVXEstimator,
+            )
+            est = IVXEstimator(
+                alpha=getattr(self.config, 'ivx_alpha', None),
+            )
+        elif method == 'dols':
+            from factor_pipeline.modules.endogeneity_estimators.core.regularized_dols import (
+                RegularizedDOLSEstimator,
+            )
+            est = RegularizedDOLSEstimator(
+                lag_order=getattr(self.config, 'dols_lag_order', 3),
+                lambda_l1=getattr(self.config, 'dols_lambda_l1', 0.0),
+                lambda_l2=getattr(self.config, 'dols_lambda_l2', 0.0),
+            )
+        elif method == 'pfgmm':
+            from factor_pipeline.modules.endogeneity_estimators.core.pfgmm import (
+                PFGMMEstimator,
+            )
+            est = PFGMMEstimator(
+                penalty=getattr(self.config, 'pfgmm_penalty', 'scad'),
+                lambda_penalty=getattr(self.config, 'pfgmm_lambda', 0.1),
+            )
+        else:
+            # 默认 Profile GMM
+            from factor_pipeline.modules.endogeneity_estimators.core.profile_gmm import (
+                ProfileGMMEstimator,
+            )
+            est = ProfileGMMEstimator(
+                nuclear_lambda=getattr(self.config, 'profile_gmm_nuclear_lambda', 0.1),
+            )
+
+        est.fit(factor_data, returns, controls)
+        diag = est.get_diagnostics()
+        self._estimation_report = diag
+        return diag
 
     def get_classification_summary(self) -> pd.DataFrame:
         """获取分类汇总表"""

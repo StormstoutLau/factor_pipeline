@@ -117,6 +117,8 @@ class EndToEndThresholdOptimizer:
         lambda_redundancy: float = 0.05,  # v2.6.0 E6: 冗余惩罚 (v1.1 从 0.1 降为 0.05)
         random_seed: int = 42,
         search_orth: bool = False,  # v2.6.0 E5: 正交化参数搜索
+        lambda_endogeneity: float = 0.0,  # v3.1.0 E5 L3: 内生性惩罚权重 (默认 0, 向后兼容)
+        threat_levels: Optional[Dict[str, float]] = None,  # v3.1.0 E5: {factor: τ}
     ):
         if not HAS_OPTUNA:
             raise ImportError(
@@ -133,6 +135,9 @@ class EndToEndThresholdOptimizer:
         self.lambda_redundancy = lambda_redundancy  # v2.6.0 E6
         self.random_seed = random_seed
         self.search_orth = search_orth  # v2.6.0 E5
+        # v3.1.0 E5 L3: 内生性威胁权重惩罚 (默认 0, 向后兼容)
+        self.lambda_endogeneity = lambda_endogeneity
+        self.threat_levels = threat_levels or {}  # 来自 E3 final_threat_tau
 
         # v2.6.0 E5: 根据 search_orth 标志合并搜索空间
         self.search_space = dict(DEFAULT_SEARCH_SPACE)
@@ -401,6 +406,36 @@ class EndToEndThresholdOptimizer:
             return 0.2  # ADR-004: < 60 → -0.2
         return 0.0
 
+    def _endogeneity_penalty(
+        self,
+        weights: np.ndarray,
+        factor_names: Optional[List[str]] = None,
+    ) -> float:
+        """内生性威胁权重惩罚 (v3.1.0 E5 L3).
+
+        数学: penalty = ρ × Σ |w_i| × τ_i
+        其中 ρ = self.lambda_endogeneity, τ_i 来自 E3 final_threat_tau.
+
+        与 _health_penalty_proxy 的关系 (v2.6.0 ADR-021):
+        - _health_penalty_proxy: 基于因子健康度 (拥挤度/效能/容量/衰减/体制) 惩罚
+        - _endogeneity_penalty: 基于内生性威胁惩罚
+        - 两者正交, 叠加: total_penalty = health_penalty + endogeneity_penalty
+
+        向后兼容: lambda_endogeneity=0.0 或 threat_levels 为空时返回 0.
+        """
+        if not self.threat_levels or self.lambda_endogeneity == 0:
+            return 0.0
+
+        if factor_names is None:
+            factor_names = list(self.threat_levels.keys())[:len(weights)]
+
+        penalty = 0.0
+        for i, w in enumerate(weights):
+            if i < len(factor_names):
+                tau = self.threat_levels.get(factor_names[i], 0.0)
+                penalty += abs(w) * tau
+        return float(self.lambda_endogeneity * penalty)
+
     def _composite_objective(
         self,
         ic_array: np.ndarray,
@@ -409,9 +444,10 @@ class EndToEndThresholdOptimizer:
         before: Optional[np.ndarray] = None,
         after: Optional[np.ndarray] = None,
         redundancy_penalty: float = 0.0,  # v2.6.0 E6: 冗余惩罚
+        endogeneity_penalty: float = 0.0,  # v3.1.0 E5 L3 新增
     ) -> float:
         """
-        复合目标函数 (v2.6.0 E4 对齐 ADR-004, E6 新增 redundancy).
+        复合目标函数 (v2.6.0 E4 对齐 ADR-004, E6 新增 redundancy, E5 新增 endogeneity).
 
         ADR-004 第 147 行:
             score = IC_score - stability_penalty - ks_penalty - health_penalty - coverage_penalty
@@ -422,6 +458,9 @@ class EndToEndThresholdOptimizer:
 
         v2.6.0 E6 新增:
         3. redundancy_penalty (基于 VRR, ADR-020): VRR < threshold 的因子扣分
+
+        v3.1.0 E5 新增:
+        4. endogeneity_penalty (基于 E3 final_threat_tau, lambda_endogeneity=0 时为 0)
         """
         ic_mean = float(np.nanmean(ic_array))
         vol_penalty = self._ic_volatility_penalty(ic_array)
@@ -439,6 +478,9 @@ class EndToEndThresholdOptimizer:
         # v2.6.0 E6: 冗余惩罚 (基于 VRR, ADR-020)
         # redundancy_penalty 已由 _redundancy_penalty 计算并传入
 
+        # v3.1.0 E5: 内生性惩罚 (基于 E3 final_threat_tau)
+        # endogeneity_penalty 已由 _endogeneity_penalty 计算并传入
+
         objective = (
             ic_mean
             - self.lambda_volatility * vol_penalty
@@ -446,6 +488,7 @@ class EndToEndThresholdOptimizer:
             - self.lambda_fidelity * ks_distortion_penalty  # 修正: + → -
             - self.lambda_health * health_penalty            # 新增 (v2.6.0 E4)
             - self.lambda_redundancy * redundancy_penalty    # 新增 (v2.6.0 E6)
+            - self.lambda_endogeneity * endogeneity_penalty  # 新增 (v3.1.0 E5)
         )
         return float(objective)
 

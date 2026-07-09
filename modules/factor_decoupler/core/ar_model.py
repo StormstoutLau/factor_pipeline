@@ -11,6 +11,12 @@ import pandas as pd
 from dataclasses import dataclass
 import logging
 
+# v3.1.0 E1 (§2): 隐藏效应诊断 Mixin (不侵入 fit/transform).
+# 局部导入避免循环依赖 — diagnostics 包仅依赖 numpy/pandas/scipy.
+from factor_pipeline.modules.factor_decoupler.diagnostics.hidden_effect import (
+    HiddenEffectDiagnosticMixin as _HiddenEffectDiagnosticMixin,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -202,7 +208,7 @@ class AROrderSelector:
         return results
 
 
-class ARDecoupler:
+class ARDecoupler(_HiddenEffectDiagnosticMixin):
     """
     AR解耦器
 

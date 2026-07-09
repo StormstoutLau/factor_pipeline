@@ -162,7 +162,8 @@ class ImputerAdapter(PipelineStep):
     封装 Factor_Imputer_v2.0 的 HierarchicalImputer
     """
     
-    def __init__(self, strategy: str = 'auto', module_path=None, import_path=None, class_name=None, **params):
+    def __init__(self, strategy: str = 'auto', enabled: bool = True,
+                 module_path=None, import_path=None, class_name=None, **params):
         super().__init__(
             name="FactorImputer",
             step_type="imputation",
@@ -170,17 +171,22 @@ class ImputerAdapter(PipelineStep):
             **params
         )
         self.strategy = strategy
+        self.enabled = enabled
         self._imputer = None
         self._missing_info = None
-        
+
         # P2.4: 保留 override 参数仅供测试 mock 使用, 生产路径直接导入
         self._module_path_override = module_path
         self._import_path_override = import_path
         self._class_name_override = class_name
 
-        # P2.4: REQUIRED 依赖, 构造时即校验, 失败抛 AdapterImportError
-        # 缓存类供 fit() 使用, 避免重复导入
-        self._imputer_class = self._get_imputer_class()
+        # ABLATION E1: enabled=False 时跳过外部依赖导入 (identity 模式零依赖)
+        if self.enabled:
+            # P2.4: REQUIRED 依赖, 构造时即校验, 失败抛 AdapterImportError
+            # 缓存类供 fit() 使用, 避免重复导入
+            self._imputer_class = self._get_imputer_class()
+        else:
+            self._imputer_class = None
         # is_fallback_mode 保留向后兼容, REQUIRED 依赖下永远为 False
         self.is_fallback_mode = False
     
@@ -214,6 +220,12 @@ class ImputerAdapter(PipelineStep):
     
     def fit(self, X: pd.DataFrame, **kwargs) -> 'ImputerAdapter':
         """拟合插补器 — P2.4: REQUIRED 依赖, 构造时已校验, 直接使用"""
+        # ABLATION E1: enabled=False → identity (保留 NaN, 不拟合)
+        if not self.enabled:
+            self.is_fitted = True
+            logger.info("ImputerAdapter: enabled=False, 跳过拟合 (identity)")
+            return self
+
         self._imputer = self._imputer_class(strategy=self.strategy)
 
         # 检测缺失信息
@@ -229,6 +241,10 @@ class ImputerAdapter(PipelineStep):
     
     def transform(self, X: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """应用插补 — P2.4: REQUIRED 依赖, _imputer 必非 None"""
+        # ABLATION E1: enabled=False → identity (保留 NaN)
+        if not self.enabled:
+            return X
+
         if not self.is_fitted:
             raise ValueError("插补器未拟合，请先调用 fit()")
 
@@ -263,6 +279,7 @@ class ProcessingAdapter(PipelineStep):
     }
     
     def __init__(self, process_type: str = 'outlier', method: str = 'auto',
+                 enabled: Optional[bool] = None,
                  module_path=None, import_path=None, class_name=None, **params):
         super().__init__(
             name=f"FactorProcessing_{process_type}",
@@ -277,13 +294,23 @@ class ProcessingAdapter(PipelineStep):
         # 全局展平 fit + 按列 transform 不能保证每列均值=0, 需按列单独 fit
         self._column_processors: Dict[str, Any] = {}
 
+        # ABLATION E1: enabled 仅对 outlier/standardization 生效; transformation 忽略 (永远 True)
+        if process_type in ('outlier', 'standardization'):
+            self.enabled = enabled if enabled is not None else True
+        else:
+            self.enabled = True  # transformation 不消融
+
         # 存储外部模块导入覆盖参数
         self._module_path_override = module_path
         self._import_path_override = import_path
         self._class_name_override = class_name
 
-        # P2.4: REQUIRED 依赖, 构造时即校验, 失败抛 AdapterImportError
-        self._processor_class = self._get_processor_class()
+        # ABLATION E1: enabled=False 时跳过外部依赖导入 (identity 模式零依赖)
+        if self.enabled:
+            # P2.4: REQUIRED 依赖, 构造时即校验, 失败抛 AdapterImportError
+            self._processor_class = self._get_processor_class()
+        else:
+            self._processor_class = None
         # is_fallback_mode 保留向后兼容, REQUIRED 依赖下永远为 False
         self.is_fallback_mode = False
     
@@ -330,6 +357,12 @@ class ProcessingAdapter(PipelineStep):
     
     def fit(self, X: pd.DataFrame, **kwargs) -> 'ProcessingAdapter':
         """拟合处理器 — P2.4: REQUIRED 依赖, 构造时已校验, 直接使用"""
+        # ABLATION E1: enabled=False → identity (跳过拟合)
+        if not self.enabled:
+            self.is_fitted = True
+            logger.info(f"ProcessingAdapter({self.process_type}): enabled=False, 跳过拟合 (identity)")
+            return self
+
         # 实例化处理器
         processor_params = {'method': self.method}
         processor_params.update(self.params)
@@ -364,6 +397,10 @@ class ProcessingAdapter(PipelineStep):
     
     def transform(self, X: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """应用处理 — P2.4: REQUIRED 依赖, _processor/_column_processors 必非空"""
+        # ABLATION E1: enabled=False → identity (返回 X 原样)
+        if not self.enabled:
+            return X
+
         if not self.is_fitted:
             raise ValueError("处理器未拟合，请先调用 fit()")
 
@@ -420,6 +457,7 @@ class NeutralizerAdapter(PipelineStep):
                  industry_method: str = 'regression',
                  industry_data: Optional[pd.Series] = None,
                  market_value_data: Optional[pd.DataFrame] = None,
+                 enabled: bool = True,
                  module_path=None, import_path=None, class_name=None,
                  **params):
         super().__init__(
@@ -433,6 +471,7 @@ class NeutralizerAdapter(PipelineStep):
         self.industry_method = industry_method
         self.industry_data = industry_data
         self.market_value_data = market_value_data
+        self.enabled = enabled
         self._neutralizer = None
 
         # TD-3 (ADR-018): fit() 预计算的 industry dummies 缓存
@@ -446,9 +485,13 @@ class NeutralizerAdapter(PipelineStep):
         self._import_path_override = import_path
         self._class_name_override = class_name
 
-        # P3.2: REQUIRED 依赖, 构造时即校验, 失败抛 AdapterImportError
-        # 缓存类供 fit() 使用, 避免重复导入
-        self._neutralizer_class = self._get_neutralizer_class()
+        # ABLATION E1: enabled=False 时跳过外部依赖导入 (identity 模式零依赖)
+        if self.enabled:
+            # P3.2: REQUIRED 依赖, 构造时即校验, 失败抛 AdapterImportError
+            # 缓存类供 fit() 使用, 避免重复导入
+            self._neutralizer_class = self._get_neutralizer_class()
+        else:
+            self._neutralizer_class = None
         # is_fallback_mode 保留向后兼容, REQUIRED 依赖下永远为 False
         self.is_fallback_mode = False
 
@@ -492,6 +535,12 @@ class NeutralizerAdapter(PipelineStep):
             1. kwargs['industry_data'] (fit_transform 透传)
             2. self.industry_data (__init__ 传入)
         """
+        # ABLATION E1: enabled=False → identity (跳过拟合)
+        if not self.enabled:
+            self.is_fitted = True
+            logger.info("NeutralizerAdapter: enabled=False, 跳过拟合 (identity)")
+            return self
+
         # 解析 industry_data: kwargs 优先 (fit_transform 透传), 其次 __init__
         industry_data = kwargs.get('industry_data', None)
         if industry_data is None:
@@ -546,6 +595,10 @@ class NeutralizerAdapter(PipelineStep):
             2. fit() 缓存的 _industry_dummies_cache (TD-3 新路径, 截面 OLS 残差)
             3. 无缓存且无 external_neutralizer: 跳过中性化 (warning + return X)
         """
+        # ABLATION E1: enabled=False → identity (返回 X 原样)
+        if not self.enabled:
+            return X
+
         if not self.is_fitted:
             raise ValueError("中性化器未拟合，请先调用 fit()")
 

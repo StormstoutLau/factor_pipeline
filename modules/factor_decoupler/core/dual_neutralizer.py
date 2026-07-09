@@ -19,6 +19,12 @@ import numpy as np
 import pandas as pd
 import logging
 
+# v3.1.0 E1 (§2): 隐藏效应诊断 Mixin (不侵入 fit/transform).
+# 局部导入避免循环依赖 — diagnostics 包仅依赖 numpy/pandas/scipy.
+from factor_pipeline.modules.factor_decoupler.diagnostics.hidden_effect import (
+    HiddenEffectDiagnosticMixin as _HiddenEffectDiagnosticMixin,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,14 +109,27 @@ class DualNeutralizer:
         self.is_fitted = True
         return self
 
-    def transform(self, X: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    def transform(
+        self,
+        X: pd.DataFrame,
+        threat_level: Optional[float] = None,
+        skip_stage2: bool = False,
+        **kwargs,
+    ) -> pd.DataFrame:
         """
         应用双重中性化
+
+        v3.1.0 E5 扩展: threat_level/skip_stage2 参数支持三层决策正则化.
+        threat_level=None, skip_stage2=False 时行为与 v3.0.0 完全一致.
 
         Parameters
         ----------
         X : pd.DataFrame, shape (T, N)
             原始因子数据
+        threat_level : float, optional
+            内生性威胁等级 τ ∈ [0, 1], 来自 E3. None 时走 v3.0.0 路径.
+        skip_stage2 : bool
+            是否跳过 Stage 2 (AR 建模), 由 EndogeneityRegularizer 根据 τ 决定.
 
         Returns
         -------
@@ -123,6 +142,10 @@ class DualNeutralizer:
         if self.industry_data is None:
             logger.warning("无行业数据，返回原始数据")
             return X
+
+        # v3.1.0 E5: 记录 threat_level (供诊断/审计), skip_stage2 由调用方决定
+        self._threat_level = threat_level
+        self._skip_stage2 = skip_stage2
 
         logger.info("应用双重中性化...")
 
@@ -311,7 +334,7 @@ class DualNeutralizer:
         return exposures
 
 
-class CompositeDecoupler:
+class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
     """
     组合解耦器
 
@@ -404,17 +427,31 @@ class CompositeDecoupler:
 
         return self
 
-    def transform(self, X: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    def transform(
+        self,
+        X: pd.DataFrame,
+        threat_level: Optional[float] = None,
+        skip_stage2: bool = False,
+        **kwargs,
+    ) -> pd.DataFrame:
         """
         应用组合解耦
 
         处理流程：
             原始值中性化 → AR建模提取残差 → 残差中性化
 
+        v3.1.0 E5 扩展: threat_level/skip_stage2 参数支持三层决策正则化.
+        - threat_level=None, skip_stage2=False: 行为与 v3.0.0 完全一致 (向后兼容)
+        - skip_stage2=True: 跳过 Stage 2 (AR 建模), 仅 Stage 1 + Stage 3 (低威胁轻量路径)
+
         Parameters
         ----------
         X : pd.DataFrame, shape (T, N)
             原始因子数据
+        threat_level : float, optional
+            内生性威胁等级 τ ∈ [0, 1], 来自 E3. None 时走 v3.0.0 路径.
+        skip_stage2 : bool
+            是否跳过 Stage 2 (AR 建模), 由 EndogeneityRegularizer 根据 τ 决定.
 
         Returns
         -------
@@ -426,16 +463,24 @@ class CompositeDecoupler:
 
         logger.info("[Transform] 应用组合解耦...")
 
-        # Stage 1: 原始值双重中性化
-        residuals_stage1 = self._dual_neutralizer.transform(X)
+        # v3.1.0 E5: 记录 threat_level (供诊断/审计)
+        self._threat_level = threat_level
+        self._skip_stage2 = skip_stage2
 
-        # Stage 2: AR解耦
-        residuals_ar = self._ar_decoupler.transform(residuals_stage1)
+        # Stage 1: 原始值双重中性化
+        residuals_stage1 = self._dual_neutralizer.transform(
+            X, threat_level=threat_level, skip_stage2=skip_stage2,
+        )
+
+        if skip_stage2 and self._ar_decoupler is not None:
+            # v3.1.0 E5 L1 低威胁路径: 跳过 Stage 2 (AR 建模), 仅 Stage 1 + Stage 3
+            logger.info("[Stage 2] 跳过 AR 建模 (低威胁轻量路径, E5 L1)")
+            residuals_ar = residuals_stage1
+        else:
+            # Stage 2: AR解耦 (标准路径)
+            residuals_ar = self._ar_decoupler.transform(residuals_stage1)
 
         # Stage 3: 第二重中性化（在AR残差上再中性化）
-        # 注：这里的第二重中性化已经在 DualNeutralizer 中完成
-        # 实际上 DualNeutralizer 只做了第一重
-        # 我们需要在 AR 残差上再做一次中性化
         logger.info("[Stage 3] AR残差中性化")
         residuals_final = self._neutralize_ar_residuals(residuals_ar)
 

@@ -11,14 +11,24 @@ factor_significance 共享调用.
   Journal of the Royal Statistical Society. Series B 57(1):289-300.
 
 TDD Red 阶段: 测试先于实现.
+
+E2 扩展 (RESEARCH_NOTES §1.4 第二块补强): Romano-Wolf (2005) k-FWER Bootstrap
+E3 扩展 (RESEARCH_NOTES §1.4 第三块补强): White Reality Check + Hansen SPA
 """
 import pytest
 import numpy as np
+import pandas as pd
 
 from backtest.multiple_testing import (
     apply_bh_fdr,
     apply_bonferroni,
     apply_no_correction,
+    apply_romano_wolf,
+    _generate_bootstrap_p_values_for_ks,
+    apply_white_reality_check,
+    apply_hansen_spa,
+    WhiteRealityCheck,
+    HansenSPA,
 )
 
 
@@ -241,3 +251,636 @@ class TestEdgeCases:
         """NaN p 值抛 ValueError"""
         with pytest.raises(ValueError):
             apply_bh_fdr([float('nan'), 0.5], alpha=0.05)
+
+
+# ============================================================
+# 6. Romano-Wolf (2005) k-FWER Bootstrap 校正 (E2)
+# ============================================================
+
+class TestRomanoWolf:
+    """Romano-Wolf (2005) k-FWER Bootstrap 校正
+
+    学术依据: Romano & Wolf (2005) "Stepwise Multiple Testing as Formalized
+    Data Snooping"
+
+    关键性质:
+    - k-FWER 控制: P(|{i ∈ I0: reject H_i}| ≥ k) ≤ α
+    - k=1 时等价强 FWER 控制
+    - Stepdown 比 single-step 更有检测力 (拒绝更多)
+    - 通过 bootstrap 估计 p 值相依结构, 不依赖 PRDS 假设
+    """
+
+    def _generate_null_bootstrap(self, m, B, seed=0):
+        """生成 H0 下的 bootstrap p 值矩阵 (B, m), 每行 i.i.d. U(0,1)"""
+        rng = np.random.default_rng(seed)
+        return rng.uniform(0.0, 1.0, size=(B, m))
+
+    def test_romano_wolf_k1_fwer_control(self):
+        """k=1 时 FWER ≤ α + 0.03 (Monte Carlo 误差容忍带)
+
+        在 H0 全真下重复 1000 次实验, 经验 FWER ≤ 0.08
+        """
+        rng = np.random.default_rng(2024)
+        m = 20
+        B = 200
+        n_trials = 300
+        alpha = 0.05
+        n_any_reject = 0
+        for t in range(n_trials):
+            # H0 全真: p 值 i.i.d. U(0,1)
+            p_vals = rng.uniform(0.0, 1.0, size=m).tolist()
+            # bootstrap 也在 H0 下 (i.i.d. U(0,1))
+            boot_p = rng.uniform(0.0, 1.0, size=(B, m))
+            _, rejected = apply_romano_wolf(
+                p_vals, boot_p, alpha=alpha, k=1, method="stepdown"
+            )
+            if any(rejected):
+                n_any_reject += 1
+        fwer = n_any_reject / n_trials
+        assert fwer <= alpha + 0.03, f"Romano-Wolf k=1 FWER 失控: {fwer:.4f} > 0.08"
+
+    def test_romano_wolf_stepdown_more_powerful(self):
+        """stepdown 拒绝数 >= single_step 拒绝数"""
+        rng = np.random.default_rng(42)
+        m = 50
+        B = 500
+        # 构造部分真实备择: 一半 p 值很小
+        p_vals = np.concatenate([
+            rng.uniform(0.0, 0.01, size=20),  # 强信号
+            rng.uniform(0.0, 1.0, size=30),   # 噪声
+        ]).tolist()
+        # 打乱顺序避免位置偏置
+        rng.shuffle(p_vals)
+        boot_p = self._generate_null_bootstrap(m, B, seed=100)
+        _, rej_stepdown = apply_romano_wolf(
+            p_vals, boot_p, alpha=0.05, k=1, method="stepdown"
+        )
+        _, rej_single = apply_romano_wolf(
+            p_vals, boot_p, alpha=0.05, k=1, method="single_step"
+        )
+        assert sum(rej_stepdown) >= sum(rej_single), (
+            f"stepdown ({sum(rej_stepdown)}) < single_step ({sum(rej_single)})"
+        )
+
+    def test_romano_wolf_single_step(self):
+        """single_step 模式可运行且返回正确长度"""
+        m = 10
+        B = 100
+        p_vals = np.linspace(0.001, 0.5, m).tolist()
+        boot_p = self._generate_null_bootstrap(m, B, seed=7)
+        adj_p, rejected = apply_romano_wolf(
+            p_vals, boot_p, alpha=0.05, k=1, method="single_step"
+        )
+        assert len(adj_p) == m
+        assert len(rejected) == m
+        # 调整后 p 值在 [0, 1]
+        assert all(0.0 <= p <= 1.0 for p in adj_p)
+        # 最小 p 值应被拒绝
+        assert rejected[0] is True
+
+    def test_romano_wolf_rejected_subset(self):
+        """RW 拒绝数 ≤ 无校正拒绝数 (k=1 等价 FWER, 应比无校正更保守)"""
+        rng = np.random.default_rng(33)
+        m = 30
+        B = 300
+        p_vals = rng.uniform(0.0, 1.0, size=m).tolist()
+        boot_p = self._generate_null_bootstrap(m, B, seed=200)
+        _, rej_rw = apply_romano_wolf(
+            p_vals, boot_p, alpha=0.05, k=1, method="stepdown"
+        )
+        n_rej_raw = sum(1 for p in p_vals if p < 0.05)
+        assert sum(rej_rw) <= n_rej_raw, (
+            f"RW ({sum(rej_rw)}) > raw ({n_rej_raw})"
+        )
+
+    def test_generate_bootstrap_p_values_shape(self):
+        """_generate_bootstrap_p_values_for_ks 输出形状 = (n_bootstrap, K)"""
+        rng = np.random.default_rng(11)
+        n_hist, n_recent, K = 60, 40, 5
+        hist_df = pd.DataFrame(
+            rng.standard_normal((n_hist, K)), columns=[f"f{i}" for i in range(K)]
+        )
+        recent_df = pd.DataFrame(
+            rng.standard_normal((n_recent, K)), columns=[f"f{i}" for i in range(K)]
+        )
+        n_boot = 50
+        boot_p = _generate_bootstrap_p_values_for_ks(
+            hist_df, recent_df, n_bootstrap=n_boot, random_state=2024
+        )
+        assert boot_p.shape == (n_boot, K), (
+            f"期望 ({n_boot}, {K}), 实际 {boot_p.shape}"
+        )
+        # 所有 p 值在 [0, 1]
+        assert np.all(boot_p >= 0.0) and np.all(boot_p <= 1.0)
+
+    def test_romano_wolf_reproducibility(self):
+        """相同输入下 apply_romano_wolf 可复现 (确定性算法)"""
+        rng = np.random.default_rng(55)
+        m = 25
+        B = 200
+        p_vals = rng.uniform(0.0, 1.0, size=m).tolist()
+        boot_p = rng.uniform(0.0, 1.0, size=(B, m))
+        adj1, rej1 = apply_romano_wolf(p_vals, boot_p, alpha=0.05, k=1)
+        adj2, rej2 = apply_romano_wolf(p_vals, boot_p, alpha=0.05, k=1)
+        np.testing.assert_allclose(adj1, adj2)
+        assert rej1 == rej2
+
+    def test_romano_wolf_k3_more_permissive_than_k1(self):
+        """k=3 比 k=1 更宽松 (允许更多假拒绝, 因此拒绝数 >= k=1)"""
+        rng = np.random.default_rng(77)
+        m = 50
+        B = 300
+        # 部分真备择
+        p_vals = np.concatenate([
+            rng.uniform(0.0, 0.01, size=15),
+            rng.uniform(0.0, 1.0, size=35),
+        ]).tolist()
+        rng.shuffle(p_vals)
+        boot_p = self._generate_null_bootstrap(m, B, seed=300)
+        _, rej_k1 = apply_romano_wolf(p_vals, boot_p, alpha=0.05, k=1)
+        _, rej_k3 = apply_romano_wolf(p_vals, boot_p, alpha=0.05, k=3)
+        assert sum(rej_k3) >= sum(rej_k1), (
+            f"k=3 ({sum(rej_k3)}) < k=1 ({sum(rej_k1)})"
+        )
+
+
+# ============================================================
+# 7. White Reality Check (2000) — E3
+# ============================================================
+
+class TestWhiteRealityCheck:
+    """White (2000) Reality Check — 策略回测 data snooping 校正
+
+    学术依据: White (2000) "A Reality Check for Data Snooping"
+    Bootstrap: Politis & Romano (1994) stationary bootstrap
+
+    函数式接口: apply_white_reality_check(strategy_returns, benchmark_return, ...)
+        返回 (p_value, is_significant)
+    """
+
+    def test_white_reality_check_null_rejected_correctly(self):
+        """全部策略等价基准时 RC p > α (不拒绝 H0)"""
+        rng = np.random.default_rng(2024)
+        T, K = 200, 10
+        # 所有策略与基准同分布 → 无真正优秀策略
+        benchmark = rng.standard_normal(T)
+        # 策略收益 = 基准 + 微小噪声 (均值 ≈ 0)
+        noise = rng.standard_normal((T, K)) * 0.01
+        strategy_returns = benchmark[:, None] + noise
+        p_value, is_sig = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=300, alpha=0.05,
+            block_size=5, random_state=42,
+        )
+        assert 0.0 <= p_value <= 1.0
+        # H0 下应不显著 (允许数值噪声: p_value > 0.05 即可)
+        assert p_value > 0.05, f"null 下 RC p_value={p_value:.4f} < 0.05, 误拒"
+        assert is_sig is False
+
+    def test_white_reality_check_superior_strategy(self):
+        """存在真正优秀策略时 RC p < 0.20 (放宽, RC 较保守)"""
+        rng = np.random.default_rng(2024)
+        T, K = 300, 20
+        benchmark = rng.standard_normal(T) * 0.1
+        # 19 个策略 ≈ 基准, 1 个策略显著优于基准 (+0.05 持续超额)
+        strategy_returns = np.zeros((T, K))
+        for k in range(K - 1):
+            strategy_returns[:, k] = benchmark + rng.standard_normal(T) * 0.01
+        # 第 K 个: 持续超额
+        strategy_returns[:, K - 1] = benchmark + 0.05 + rng.standard_normal(T) * 0.01
+        p_value, is_sig = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=500, alpha=0.20,
+            block_size=5, random_state=123,
+        )
+        # RC 以 max stat 校正, 较保守, 放宽到 0.20
+        assert p_value < 0.20, (
+            f"superior strategy 下 RC p_value={p_value:.4f} > 0.20, 检测力不足"
+        )
+
+    def test_white_reality_check_returns_tuple(self):
+        """返回类型为 (float, bool)"""
+        rng = np.random.default_rng(0)
+        T, K = 100, 5
+        benchmark = rng.standard_normal(T)
+        strategy_returns = rng.standard_normal((T, K))
+        result = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=50, random_state=0,
+        )
+        assert isinstance(result, tuple) and len(result) == 2
+        p_value, is_sig = result
+        assert isinstance(p_value, float)
+        assert isinstance(is_sig, bool)
+
+
+# ============================================================
+# 8. Hansen SPA (2005) — E3
+# ============================================================
+
+class TestHansenSPA:
+    """Hansen (2005) Superior Predictive Ability — White RC 的改进版
+
+    学术依据: Hansen (2005) "A Test for Superior Predictive Ability"
+
+    关键改进:
+    - 重新中心化 (recentering): 剔除"太差"的模型, 避免拉高临界值
+    - 阈值基于 Law of the Iterated Logarithm (LIL):
+        若 √n f_bar_k / ω_k ≤ -√(2 log log n), 模型被判为"太差"
+    - 三区域 partitioning: lower / consistent / upper p 值
+    - SPA 比 White RC 更有检测力 (lower p-values for genuinely superior strategies)
+
+    函数式接口: apply_hansen_spa(strategy_returns, benchmark_return, ...)
+        返回 (p_value, is_significant) — p_value 为 consistent SPA p 值
+    """
+
+    def test_hansen_spa_null(self):
+        """全部策略等价基准时 SPA p > α"""
+        rng = np.random.default_rng(2024)
+        T, K = 200, 10
+        benchmark = rng.standard_normal(T)
+        noise = rng.standard_normal((T, K)) * 0.01
+        strategy_returns = benchmark[:, None] + noise
+        p_value, is_sig = apply_hansen_spa(
+            strategy_returns, benchmark, n_bootstrap=300, alpha=0.05,
+            block_size=5, random_state=42,
+        )
+        assert 0.0 <= p_value <= 1.0
+        assert p_value > 0.05, f"null 下 SPA p_value={p_value:.4f} < 0.05, 误拒"
+        assert is_sig is False
+
+    def test_hansen_spa_superior(self):
+        """存在真正优秀策略时 SPA p ≤ White RC p (检测力优势)"""
+        rng = np.random.default_rng(2024)
+        T, K = 300, 20
+        benchmark = rng.standard_normal(T) * 0.1
+        strategy_returns = np.zeros((T, K))
+        for k in range(K - 1):
+            strategy_returns[:, k] = benchmark + rng.standard_normal(T) * 0.01
+        strategy_returns[:, K - 1] = benchmark + 0.05 + rng.standard_normal(T) * 0.01
+        p_spa, _ = apply_hansen_spa(
+            strategy_returns, benchmark, n_bootstrap=500, alpha=0.05,
+            block_size=5, random_state=123,
+        )
+        p_rc, _ = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=500, alpha=0.05,
+            block_size=5, random_state=123,
+        )
+        # SPA p ≤ RC p + 容忍带 (Monte Carlo 噪声)
+        assert p_spa <= p_rc + 0.10, (
+            f"SPA p ({p_spa:.4f}) > RC p ({p_rc:.4f}) + 0.10, SPA 未体现检测力优势"
+        )
+        # 同时 SPA 应能识别出 superior (放宽到 0.20)
+        assert p_spa < 0.20, f"superior 下 SPA p={p_spa:.4f} > 0.20"
+
+    def test_hansen_spa_returns_tuple(self):
+        """返回类型为 (float, bool)"""
+        rng = np.random.default_rng(0)
+        T, K = 100, 5
+        benchmark = rng.standard_normal(T)
+        strategy_returns = rng.standard_normal((T, K))
+        result = apply_hansen_spa(
+            strategy_returns, benchmark, n_bootstrap=50, random_state=0,
+        )
+        assert isinstance(result, tuple) and len(result) == 2
+        p_value, is_sig = result
+        assert isinstance(p_value, float)
+        assert isinstance(is_sig, bool)
+
+
+# ============================================================
+# 9. Bootstrap block_size + 可复现性 — E3
+# ============================================================
+
+class TestBootstrapBlockSizeAndReproducibility:
+    """E3: bootstrap 块大小自动估计 + 可复现性"""
+
+    def test_bootstrap_block_size(self):
+        """block_size=None 时按 T^(1/3) 自动估计, 块大小 ≥ 1"""
+        rng = np.random.default_rng(0)
+        T, K = 100, 5
+        benchmark = rng.standard_normal(T)
+        strategy_returns = rng.standard_normal((T, K))
+        # 不传 block_size, 应自动估计 (内部用 max(1, int(T**(1/3))))
+        p_value, _ = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=50, random_state=0,
+        )
+        assert 0.0 <= p_value <= 1.0
+        # 自动估计的 block_size 应为 max(1, int(100**(1/3))) = max(1, 4) = 4
+        # 这里只验证可运行且 p 值合法
+        # 再测试 Hansen SPA 同样行为
+        p_spa, _ = apply_hansen_spa(
+            strategy_returns, benchmark, n_bootstrap=50, random_state=0,
+        )
+        assert 0.0 <= p_spa <= 1.0
+
+    def test_reproducibility(self):
+        """相同 random_state 两次调用结果一致"""
+        rng = np.random.default_rng(0)
+        T, K = 150, 8
+        benchmark = rng.standard_normal(T)
+        strategy_returns = rng.standard_normal((T, K))
+        p1, sig1 = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=200, block_size=5, random_state=99,
+        )
+        p2, sig2 = apply_white_reality_check(
+            strategy_returns, benchmark, n_bootstrap=200, block_size=5, random_state=99,
+        )
+        assert p1 == p2, f"White RC 不可复现: {p1} vs {p2}"
+        assert sig1 == sig2
+
+        s1, sig1s = apply_hansen_spa(
+            strategy_returns, benchmark, n_bootstrap=200, block_size=5, random_state=99,
+        )
+        s2, sig2s = apply_hansen_spa(
+            strategy_returns, benchmark, n_bootstrap=200, block_size=5, random_state=99,
+        )
+        assert s1 == s2, f"Hansen SPA 不可复现: {s1} vs {s2}"
+        assert sig1s == sig2s
+
+
+# ============================================================
+# 10. E3 类接口: WhiteRealityCheck + HansenSPA
+# RESEARCH_NOTES §1.4 第三块补强 (spec L566-569)
+# ============================================================
+
+class TestWhiteRealityCheckClass:
+    """WhiteRealityCheck 类接口测试 (spec L566-567)
+
+    类接口返回 Dict 含 7 字段:
+        rc_p_value, rc_rejected, max_statistic, bootstrap_max_stats,
+        individual_p_values, n_strategies, block_size
+    """
+
+    def test_wrc_class_interface(self):
+        """类接口返回 Dict 含 7 个必要字段, 类型正确"""
+        rng = np.random.default_rng(2024)
+        T, K = 150, 8
+        # 构造 returns_matrix: 第 0 列为基准, 其余 K 列为策略
+        benchmark = rng.standard_normal(T)
+        strategies = benchmark[:, None] + rng.standard_normal((T, K)) * 0.01
+        returns_matrix = np.column_stack([benchmark, strategies])  # (T, K+1)
+
+        wrc = WhiteRealityCheck(
+            n_bootstrap=200, block_size=5, method='stationary', random_state=42,
+        )
+        result = wrc.test(returns_matrix, benchmark_index=0, alpha=0.05)
+
+        # 验证返回 Dict 含 7 字段
+        expected_keys = {
+            'rc_p_value', 'rc_rejected', 'max_statistic',
+            'bootstrap_max_stats', 'individual_p_values',
+            'n_strategies', 'block_size',
+        }
+        assert set(result.keys()) == expected_keys, (
+            f"字段不匹配: {set(result.keys())} != {expected_keys}"
+        )
+        # 类型验证
+        assert isinstance(result['rc_p_value'], float)
+        assert 0.0 <= result['rc_p_value'] <= 1.0
+        assert isinstance(result['rc_rejected'], list)
+        assert len(result['rc_rejected']) == K
+        assert all(isinstance(r, bool) for r in result['rc_rejected'])
+        assert isinstance(result['max_statistic'], float)
+        assert isinstance(result['bootstrap_max_stats'], np.ndarray)
+        assert len(result['bootstrap_max_stats']) == 200
+        assert isinstance(result['individual_p_values'], list)
+        assert len(result['individual_p_values']) == K
+        assert result['n_strategies'] == K
+        assert isinstance(result['block_size'], float)
+
+    def test_wrc_individual_p_values(self):
+        """individual_p_values 字段: 各策略单独 p 值在 [0, 1], 长度 = K"""
+        rng = np.random.default_rng(7)
+        T, K = 120, 6
+        benchmark = rng.standard_normal(T)
+        strategies = benchmark[:, None] + rng.standard_normal((T, K)) * 0.02
+        returns_matrix = np.column_stack([benchmark, strategies])
+
+        wrc = WhiteRealityCheck(
+            n_bootstrap=150, block_size=4, random_state=11,
+        )
+        result = wrc.test(returns_matrix, benchmark_index=0)
+
+        individual = result['individual_p_values']
+        assert len(individual) == K
+        for p in individual:
+            assert isinstance(p, float)
+            assert 0.0 <= p <= 1.0, f"individual p 值越界: {p}"
+
+    def test_wrc_class_reproducibility(self):
+        """相同 random_state 的类实例结果一致"""
+        rng = np.random.default_rng(0)
+        T, K = 100, 5
+        returns_matrix = rng.standard_normal((T, K + 1))
+
+        wrc1 = WhiteRealityCheck(n_bootstrap=100, block_size=5, random_state=77)
+        wrc2 = WhiteRealityCheck(n_bootstrap=100, block_size=5, random_state=77)
+        r1 = wrc1.test(returns_matrix, benchmark_index=0)
+        r2 = wrc2.test(returns_matrix, benchmark_index=0)
+        assert r1['rc_p_value'] == r2['rc_p_value']
+        np.testing.assert_array_equal(
+            r1['bootstrap_max_stats'], r2['bootstrap_max_stats']
+        )
+
+
+class TestHansenSPAClass:
+    """HansenSPA 类接口测试 (spec L568-569)
+
+    类接口返回 Dict 含 8 字段:
+        spa_p_value, spa_lc_p_value, spa_uc_p_value, rejected,
+        h1_set, h0_set, max_statistic, block_size
+    """
+
+    def test_spa_class_interface(self):
+        """类接口返回 Dict 含 8 个必要字段, 类型正确"""
+        rng = np.random.default_rng(2024)
+        T, K = 150, 8
+        benchmark = rng.standard_normal(T)
+        strategies = benchmark[:, None] + rng.standard_normal((T, K)) * 0.01
+        returns_matrix = np.column_stack([benchmark, strategies])
+
+        spa = HansenSPA(
+            n_bootstrap=200, block_size=5, method='stationary', random_state=42,
+        )
+        result = spa.test(returns_matrix, benchmark_index=0, alpha=0.05)
+
+        # 验证返回 Dict 含 8 字段
+        expected_keys = {
+            'spa_p_value', 'spa_lc_p_value', 'spa_uc_p_value', 'rejected',
+            'h1_set', 'h0_set', 'max_statistic', 'block_size',
+        }
+        assert set(result.keys()) == expected_keys, (
+            f"字段不匹配: {set(result.keys())} != {expected_keys}"
+        )
+        # 类型验证
+        assert isinstance(result['spa_p_value'], float)
+        assert isinstance(result['spa_lc_p_value'], float)
+        assert isinstance(result['spa_uc_p_value'], float)
+        assert 0.0 <= result['spa_p_value'] <= 1.0
+        assert 0.0 <= result['spa_lc_p_value'] <= 1.0
+        assert 0.0 <= result['spa_uc_p_value'] <= 1.0
+        assert isinstance(result['rejected'], list)
+        assert len(result['rejected']) == K
+        assert isinstance(result['h1_set'], list)
+        assert isinstance(result['h0_set'], list)
+        assert isinstance(result['max_statistic'], float)
+        assert isinstance(result['block_size'], float)
+
+    def test_spa_h1_h0_separation(self):
+        """h1_set 与 h0_set 互斥且并集 = 全部策略索引"""
+        rng = np.random.default_rng(2024)
+        T, K = 300, 20
+        benchmark = rng.standard_normal(T) * 0.1
+        strategies = np.zeros((T, K))
+        # 19 个策略 ≈ 基准 (可能进入 H1 或 H0 边界)
+        for k in range(K - 1):
+            strategies[:, k] = benchmark + rng.standard_normal(T) * 0.01
+        # 第 K 个策略: 显著劣于基准 (太差 → 应进入 H0)
+        strategies[:, K - 1] = benchmark - 0.5 + rng.standard_normal(T) * 0.01
+        returns_matrix = np.column_stack([benchmark, strategies])
+
+        spa = HansenSPA(n_bootstrap=200, block_size=5, random_state=42)
+        result = spa.test(returns_matrix, benchmark_index=0)
+
+        h1 = set(result['h1_set'])
+        h0 = set(result['h0_set'])
+        # 互斥
+        assert h1.isdisjoint(h0), f"h1 与 h0 有重叠: h1={h1}, h0={h0}"
+        # 并集 = 全部策略索引 {0, 1, ..., K-1}
+        assert h1 | h0 == set(range(K)), (
+            f"h1 ∪ h0 ≠ 全集: h1={h1}, h0={h0}, K={K}"
+        )
+        # 显著劣于基准的策略应进入 H0 (太差集合)
+        assert (K - 1) in h0, (
+            f"显著劣于基准的策略 {K - 1} 应在 h0_set 中, h0={h0}"
+        )
+
+    def test_spa_lc_uc_consistency(self):
+        """单调性: p_lc ≥ p ≥ p_uc (lower 最保守, upper 最宽松)"""
+        rng = np.random.default_rng(2024)
+        T, K = 300, 20
+        benchmark = rng.standard_normal(T) * 0.1
+        strategies = np.zeros((T, K))
+        for k in range(K - 1):
+            strategies[:, k] = benchmark + rng.standard_normal(T) * 0.01
+        # 一个显著优于基准的策略
+        strategies[:, K - 1] = benchmark + 0.05 + rng.standard_normal(T) * 0.01
+        returns_matrix = np.column_stack([benchmark, strategies])
+
+        spa = HansenSPA(n_bootstrap=300, block_size=5, random_state=123)
+        result = spa.test(returns_matrix, benchmark_index=0)
+
+        p = result['spa_p_value']
+        p_lc = result['spa_lc_p_value']
+        p_uc = result['spa_uc_p_value']
+        assert p_lc >= p - 1e-9, (
+            f"单调性违反: p_lc ({p_lc:.4f}) < p ({p:.4f})"
+        )
+        assert p >= p_uc - 1e-9, (
+            f"单调性违反: p ({p:.4f}) < p_uc ({p_uc:.4f})"
+        )
+
+    def test_spa_more_powerful_than_wrc_class(self):
+        """类接口: SPA p ≤ White RC p (检测力优势)"""
+        rng = np.random.default_rng(2024)
+        T, K = 300, 20
+        benchmark = rng.standard_normal(T) * 0.1
+        strategies = np.zeros((T, K))
+        for k in range(K - 1):
+            strategies[:, k] = benchmark + rng.standard_normal(T) * 0.01
+        strategies[:, K - 1] = benchmark + 0.05 + rng.standard_normal(T) * 0.01
+        returns_matrix = np.column_stack([benchmark, strategies])
+
+        wrc = WhiteRealityCheck(n_bootstrap=300, block_size=5, random_state=123)
+        spa = HansenSPA(n_bootstrap=300, block_size=5, random_state=123)
+        r_wrc = wrc.test(returns_matrix, benchmark_index=0)
+        r_spa = spa.test(returns_matrix, benchmark_index=0)
+        # SPA p ≤ RC p + 容忍带 (Monte Carlo 噪声)
+        assert r_spa['spa_p_value'] <= r_wrc['rc_p_value'] + 0.10, (
+            f"SPA p ({r_spa['spa_p_value']:.4f}) > RC p ({r_wrc['rc_p_value']:.4f}) + 0.10"
+        )
+
+
+class TestBootstrapMethods:
+    """bootstrap 方法测试: circular block bootstrap + auto block size (含 rho)"""
+
+    def test_circular_block_bootstrap(self):
+        """circular block bootstrap: 输出长度 = 输入长度, 值来自输入"""
+        wrc = WhiteRealityCheck(n_bootstrap=10, block_size=5, random_state=42)
+        T = 100
+        x = np.arange(T, dtype=float)  # 0, 1, ..., 99
+        boot = wrc._circular_block_bootstrap(x, block_size=7)
+        # 长度保持
+        assert len(boot) == T, f"长度不匹配: {len(boot)} != {T}"
+        # 值来自输入 (索引环绕后取 x[idx], 值 ∈ {0, ..., 99})
+        assert boot.min() >= 0 and boot.max() <= 99
+        # 多次调用长度稳定
+        for _ in range(5):
+            b = wrc._circular_block_bootstrap(x, block_size=3)
+            assert len(b) == T
+
+    def test_circular_block_bootstrap_small_block(self):
+        """circular block bootstrap: 块大小 1 时仍长度保持"""
+        wrc = WhiteRealityCheck(n_bootstrap=10, random_state=1)
+        x = np.linspace(0, 1, 50)
+        boot = wrc._circular_block_bootstrap(x, block_size=1)
+        assert len(boot) == 50
+
+    def test_stationary_block_bootstrap_length(self):
+        """stationary block bootstrap: 输出长度 = 输入长度"""
+        wrc = WhiteRealityCheck(n_bootstrap=10, block_size=5, random_state=42)
+        x = np.arange(80, dtype=float)
+        boot = wrc._stationary_block_bootstrap(x, block_size=6.0)
+        assert len(boot) == 80
+
+    def test_auto_block_size_with_rho(self):
+        """_auto_block_size 含 rho 公式: B = (2T)^(1/3) * rho^(2/3)"""
+        wrc = WhiteRealityCheck(n_bootstrap=10, random_state=42)
+        # 构造 AR(1) 序列: x[t] = rho_true * x[t-1] + noise, 含正自相关
+        rng = np.random.default_rng(2024)
+        T = 500
+        rho_true = 0.8
+        x = np.zeros(T)
+        for t in range(1, T):
+            x[t] = rho_true * x[t - 1] + rng.standard_normal() * 0.5
+
+        B = wrc._auto_block_size(x)
+        # 用样本自相关系数复算期望值
+        rho_sample = float(np.corrcoef(x[:-1], x[1:])[0, 1])
+        expected = float(np.ceil((2 * T) ** (1.0 / 3.0) * rho_sample ** (2.0 / 3.0)))
+        assert B == expected, (
+            f"auto_block_size 含 rho 公式不符: B={B}, expected={expected}, "
+            f"rho_sample={rho_sample:.4f}"
+        )
+        # B >= 1
+        assert B >= 1.0
+
+    def test_auto_block_size_rho_nonpositive(self):
+        """rho <= 0 时返回 2.0 (退化情况)"""
+        wrc = WhiteRealityCheck(n_bootstrap=10, random_state=42)
+        # 无自相关的白噪声 (样本 rho ≈ 0, 可能略负)
+        rng = np.random.default_rng(0)
+        x = rng.standard_normal(1000)
+        # 多次尝试, 至少有一次 rho <= 0 返回 2.0
+        results = []
+        for seed in range(20):
+            rng_i = np.random.default_rng(seed)
+            xi = rng_i.standard_normal(500)
+            results.append(wrc._auto_block_size(xi))
+        # 退化情况返回 2.0
+        assert 2.0 in results, "rho <= 0 时应返回 2.0"
+
+    def test_method_circular_runs(self):
+        """method='circular' 可正常运行并返回合法 p 值"""
+        rng = np.random.default_rng(2024)
+        T, K = 100, 5
+        returns_matrix = rng.standard_normal((T, K + 1))
+        wrc = WhiteRealityCheck(
+            n_bootstrap=100, block_size=5, method='circular', random_state=42,
+        )
+        result = wrc.test(returns_matrix, benchmark_index=0)
+        assert 0.0 <= result['rc_p_value'] <= 1.0
+
+    def test_method_invalid_raises(self):
+        """非法 method 抛出 ValueError"""
+        with pytest.raises(ValueError, match="method"):
+            WhiteRealityCheck(method='invalid')
+

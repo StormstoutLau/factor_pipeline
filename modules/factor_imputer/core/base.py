@@ -300,6 +300,7 @@ class MissingDiagnosisResult:
         self.cross_sectional_structure = {}
         self.recommendations = []
         self.overall_quality_score = 0.0
+        self.mechanism_analysis = {}  # v3.1.0 E3 S1: 含 mcar_test / correlation_analysis / temporal_dependency
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -311,6 +312,7 @@ class MissingDiagnosisResult:
             "cross_sectional_structure": self.cross_sectional_structure,
             "recommendations": self.recommendations,
             "overall_quality_score": self.overall_quality_score,
+            "mechanism_analysis": self.mechanism_analysis,
         }
 
 
