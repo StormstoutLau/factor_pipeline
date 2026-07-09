@@ -89,9 +89,11 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 #### Phase 1 — P1（可并行，~4h）
 
-- [ ] **R1 PowerCurveAnalyzer**: BH-FDR 检测力曲线对比 (Bonferroni/Holm/none), ≥10 测试
-- [ ] **R2 Romano-Wolf**: Stepdown 多重检验对比, ≥9 测试
-- [ ] **R3 White RC + Hansen SPA**: 数据窥探偏差防御, ≥12 测试
+> **完成日期**: 2026-07-09
+
+- [x] **R1 PowerCurveAnalyzer**: BH-FDR 检测力曲线对比 (Bonferroni/Holm/none), ≥10 测试
+- [x] **R2 Romano-Wolf**: Stepdown 多重检验对比, ≥9 测试
+- [x] **R3 White RC + Hansen SPA**: 数据窥探偏差防御, ≥12 测试
 
 #### Phase 2 — P2（串行，~8h）
 
