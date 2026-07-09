@@ -107,8 +107,10 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 #### Phase 3 — P3（条件触发，~4h）
 
-- [ ] **R6 DriftAwareBandit** (依赖 R4+T3): 漂移感知 Contextual Bandit, ≥11 测试
-- [ ] **R10 StatisticalDecisionBridge** (依赖 R8): 概率映射 + 在线凸优化, ≥15 测试
+> **完成日期**: 2026-07-09
+
+- [x] **R6 DriftAwareBandit** (依赖 R4+T3): 漂移感知 Contextual Bandit — BanditMCSandbox MC 验证沙箱, ≥11 测试
+- [x] **R10 StatisticalDecisionBridge** (依赖 R8): 概率映射 + 在线凸优化 + Q2 soft-update, ≥15 测试
 
 ---
 
