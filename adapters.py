@@ -293,9 +293,10 @@ class ProcessingAdapter(PipelineStep):
         self.process_type = process_type
         self.method = method
         self._processor = None
-        # P1.3 修复: standardization 类型按列拟合（截面因子时序标准化语义）
-        # 全局展平 fit + 按列 transform 不能保证每列均值=0, 需按列单独 fit
         self._column_processors: Dict[str, Any] = {}
+        self._cross_sectional_zscore = (
+            process_type == 'standardization' and method == 'z_score'
+        )
 
         # ABLATION E1: enabled 仅对 outlier/standardization 生效; transformation 忽略 (永远 True)
         if process_type in ('outlier', 'standardization'):
@@ -370,9 +371,12 @@ class ProcessingAdapter(PipelineStep):
         processor_params = {'method': self.method}
         processor_params.update(self.params)
 
-        # P1.3 修复: standardization 类型按列拟合（截面因子时序标准化语义）
-        # 全局展平 fit + 按列 transform 不能保证每列均值=0, 需按列单独 fit
-        if self.process_type == 'standardization' and isinstance(X, pd.DataFrame):
+        # P0-3 fix: z_score 模式使用横截面标准化 (rank-preserving)
+        # 每期独立计算 (x - cross_mean) / cross_std, 不改变截面排序
+        if self._cross_sectional_zscore:
+            self._processor = None
+            self._column_processors = {}
+        elif self.process_type == 'standardization' and isinstance(X, pd.DataFrame):
             self._processor = None
             self._column_processors = {}
             for col in X.columns:
@@ -406,6 +410,16 @@ class ProcessingAdapter(PipelineStep):
 
         if not self.is_fitted:
             raise ValueError("处理器未拟合，请先调用 fit()")
+
+        # P0-3 fix: 横截面 z_score (rank-preserving)
+        # x_i(t) = (x_i(t) - mean_t) / std_t  → 每期独立, 不改变截面排序
+        if self._cross_sectional_zscore:
+            result = X.copy()
+            row_means = result.mean(axis=1)
+            row_stds = result.std(axis=1)
+            row_stds = row_stds.replace(0, 1.0)
+            result = result.sub(row_means, axis=0).div(row_stds, axis=0)
+            return result
 
         # P1.3 修复: standardization 类型按列应用对应 processor
         if self.process_type == 'standardization' and self._column_processors:

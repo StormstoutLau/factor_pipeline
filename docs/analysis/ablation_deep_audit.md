@@ -24,11 +24,11 @@ Cross-sectional Spearman B3 vs ScalerOff:
   rho == 1.0? 0/231  ← 没有一期是完全 rank-preserving 的
 ```
 
-**结论: 标准化 NOT rank-preserving**
+**结论: 标准化 NOT rank-preserving — 确认为 BUG, 已修复**
 
 横截面 Spearman ρ 仅 0.905 — 意味着标准化改变了约 10% 的截面排序。
 
-### 1.2 根因分析
+### 1.2 根因分析 (BUG 定位)
 
 管线中的标准化执行的是 **per-stock z-score** (每个股票用自身历史均值和标准差做归一化):
 
@@ -36,7 +36,8 @@ Cross-sectional Spearman B3 vs ScalerOff:
 z_i(t) = (x_i(t) - mean_i) / std_i
 ```
 
-其中 `mean_i` 和 `std_i` 是股票 i 的时序统计量 (fit 阶段从全量数据学习)。
+其中 `mean_i` 和 `std_i` 来自 `ProcessingAdapter.fit()` → 遍历 `X.columns` (股票代码) → 对每个股票单独拟合
+`EnhancedRankPreservingScaler` → 在该股票的时间序列上独立计算统计量拟合。
 
 当不同股票有不同的 `std_i` 时:
 - 低波动股票 (std 小): z-score 放大原始值
@@ -44,32 +45,41 @@ z_i(t) = (x_i(t) - mean_i) / std_i
 
 这导致了**截面排序的重新洗牌**: 原始排名第一的股票可能因为其标准差较大而在 z-score 空间中被低波动股票超越。
 
-**这不是 bug — 这是金融因子标准化的正确行为。** 相反, 跨截面 z-score 标准化 `(x_i - cross_mean) / cross_std` 才应该是 rank-preserving 的, 但 per-stock z-score 在学术界是既定实践。
+**根因**: `ProcessingAdapter.fit()` (L375-L383) 对 standardization 按列迭代 `for col in X.columns`, 每列 = 一只股票的时间序列。
+因子标准化的正确语义是**横截面标准化** `(x_i - cross_mean) / cross_std`, 对每个时间点 t 的所有股票施加相同的仿射变换,
+保证截面排序不变。per-stock z-score 破坏了截面排序。
 
-### 1.3 IC/Sharpe 影响路径
+### 1.3 修复 (commit 109bc32 → 当前)
 
-| 环节 | 标准化前 | 标准化后 | 影响方向 |
-|------|---------|---------|---------|
-| IC (Spearman) | 用原始排名计算 | 用标准化后排名计算 | ρ_B3,raw = 0.905 → IC 差 |
-| LS 组合 | argsort(f) → top/bottom | argsort(z) → top/bottom | 标准化后选股完全不同的股票 |
-| LS 权重 | 等权 top/bottom 20% | 等权 top/bottom 20% | 股票不同但权重结构相同 |
+修改 [adapters.py](file:///f:/Coding/factor_pipeline/adapters.py):
 
-**消融结果解读**:
-- ScalerOff ΔIC = +175%: 关闭标准化后, raw 值的截面排名产生的 IC 表面"(负 IC 变小)" — 但这只是排名不同带来的数值偏差, 不能解释为"管线性能提升"
-- ScalerOff ΔSharpe = +374%: LS 组合中选到了完全不同的股票, Sharpe 差异来自选股差异而非信号增强
+1. **`__init__`**: 增加 `self._cross_sectional_zscore` 标志 (当 `process_type='standardization'` 且 `method='z_score'` 时为 True)
+2. **`fit()`**: z_score 模式跳过 per-column 拟合, 横截面标准化无需 fit
+3. **`transform()`**: z_score 模式执行 `result = (X - X.mean(axis=1)) / X.std(axis=1)`
 
-**建议**:
-1. 标准化应从 `module_enabled` 中排除, 标记为 Core 级别 (不可消融)。它在数学上不是 rank-preserving, 但它是管线中必要的统计归一化步骤。消融它会产生"苹果 vs 橙子"的对比
-2. 应增加 **cross-sectional z-score** 选项 (`method='cross_sectional'`), 用于需要严格 rank-preserving 的场景
-3. 文档中应明确标注标准化不是 rank-preserving, 避免用户产生"标准化不通则 IC 不变"的错误直觉
+横截面 z-score 是严格 rank-preserving 的:
+```python
+# 验证: Spearman ρ = 1.0 for all time steps
+X = pd.DataFrame(rng.normal(0, 1, (50, 20)))
+z = X.sub(X.mean(axis=1), axis=0).div(X.std(axis=1).replace(0, 1.0), axis=0)
+all(spearmanr(X.iloc[t], z.iloc[t])[0] == 1.0 for t in range(50))  # True
+```
 
-### 1.4 统计显著性
+### 1.4 修复后消融语义
 
-HAC test (Ledoit-Wolf 2008, Newey-West 带宽): t_stat=1.4234, **p=0.1546 (不显著)**。
+修复前 (per-stock):
+- scaler_off 的 ΔIC = +175% 是"苹果 vs 橙子" — B3 (per-stock z-score 破坏排名后计算 IC) vs ScalerOff (原始排名)
+- 这个对比没有消融意义, 因为它比较的是**不同截面排序**的 IC
 
-这意味着 175% 的 ΔIC 虽然幅度很大, 但在 229 期的样本下 HAC 检验未能拒绝 H0。这揭示了真实数据消融实验的根本局限:
-- **真实因子信号远弱于管线的机械偏差**
-- 231 期日频数据不足以区分"真正的 alpha 差异"和"由标准化引起的排名震荡"
+修复后 (cross-sectional):
+- scaler_off 的 ΔIC 仅来自数值尺度的改变 (标准化统一量纲但不改变排序)
+- B3 vs ScalerOff 的 IC 现在真正反映标准化模块的贡献 — 仅剩跨因子量纲统一的边际效应
+- ΔIC 预期大幅缩小 (接近 0), ΔSharpe 保持 (受绝对数值尺度影响)
+
+### 1.5 统计显著性 (修复后需重跑)
+
+HAC test 当前结果: t_stat=1.4234, **p=0.1546 (不显著)**, 但这是 per-stock 模式的结果。
+修复后需用真实数据重跑消融实验, 预期结果将完全不同。
 
 ---
 
