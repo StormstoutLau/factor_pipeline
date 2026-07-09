@@ -659,7 +659,9 @@ class NeutralizerAdapter(PipelineStep):
                 logger.warning(f"日期 {date} 中性化失败: {e}")
                 result.loc[date, common] = y
 
-        return result.fillna(0)
+        # P0-4 audit fix: 不填 0, 保留 NaN (避免静默数据污染 + 与 imputer_off 语义一致)
+        # 原逻辑: return result.fillna(0) 将所有未处理位置填 0 → 下游 fake factor 值
+        return result
     
     def get_stats(self) -> Dict[str, Any]:
         stats = super().get_stats()
