@@ -131,23 +131,30 @@ def load_real_data():
     factor_data = {k: v[common] for k, v in factor_data.items()}
     fwd_returns = fwd_returns[common]
 
+    # 6. 市值数据 (log market cap, for market-cap neutralization)
+    common_mv_cols = mv.columns.intersection(common)
+    market_cap = mv.loc[common_dates, common_mv_cols]
+    market_cap = np.log(np.maximum(market_cap, 1e-8))  # log transform, clip at 0
+
     print(f"\nFinal shapes after alignment:")
     print(f"  factor_data: {', '.join(f'{k}={v.shape}' for k, v in factor_data.items())}")
     print(f"  fwd_returns: {fwd_returns.shape}")
     print(f"  industry_data: {industry_data.shape if industry_data is not None else 'None'}")
+    print(f"  market_cap: {market_cap.shape}")
     print(f"  Periods: {len(common_dates)} days")
     print(f"  Stocks: {len(common)}")
 
-    return factor_data, fwd_returns, industry_data
+    return factor_data, fwd_returns, industry_data, market_cap
 
 
-def run_ablation(factor_data, fwd_returns, industry_data):
+def run_ablation(factor_data, fwd_returns, industry_data, market_cap_data):
     base_config = PipelineV2Config()
     runner = AblationRunner(base_config, alpha=0.05, n_bootstrap=500, random_seed=SEED)
 
     print("\n1/3 Running Baselines (B0-B3)...")
     t0 = time.time()
-    baselines = runner.run_baselines(factor_data, fwd_returns, industry_data)
+    baselines = runner.run_baselines(factor_data, fwd_returns, industry_data,
+                                      market_cap_data=market_cap_data)
     b3 = baselines[-1]
     print(f"   B3: IC_mean={b3.metrics.get('ic_mean',np.nan):.4f}, "
           f"ICIR={b3.metrics.get('ic_ir',np.nan):.2f}, "
@@ -161,7 +168,9 @@ def run_ablation(factor_data, fwd_returns, industry_data):
 
     print("\n2/3 Running L1 Component Ablation (5 modules)...")
     t0 = time.time()
-    l1_results = runner.run_l1(factor_data, fwd_returns, industry_data, b3_full_result=b3)
+    l1_results = runner.run_l1(factor_data, fwd_returns, industry_data,
+                               market_cap_data=market_cap_data,
+                               b3_full_result=b3)
     l1_comps = runner.compare_all(l1_results, b3)
     print(f"   {len(l1_results)} configs, {len(l1_comps)} comparisons "
           f"({sum(1 for c in l1_comps if c.is_significant)} significant) ({time.time()-t0:.0f}s)")
@@ -169,7 +178,9 @@ def run_ablation(factor_data, fwd_returns, industry_data):
     print("\n3/3 Running L2 Routing Ablation...")
     t0 = time.time()
     try:
-        l2_results = runner.run_l2(factor_data, fwd_returns, industry_data, b3_full_result=b3)
+        l2_results = runner.run_l2(factor_data, fwd_returns, industry_data,
+                                   market_cap_data=market_cap_data,
+                                   b3_full_result=b3)
         l2_comps = runner.compare_all(l2_results, b3)
         print(f"   L2: {len(l2_results)} configs ({time.time()-t0:.0f}s)")
     except Exception as e:
@@ -293,8 +304,8 @@ def main():
     print("Factor Pipeline v3.1.0 — Real A-Share Ablation")
     print("=" * 64)
 
-    factor_data, fwd_returns, industry_data = load_real_data()
-    results = run_ablation(factor_data, fwd_returns, industry_data)
+    factor_data, fwd_returns, industry_data, market_cap_data = load_real_data()
+    results = run_ablation(factor_data, fwd_returns, industry_data, market_cap_data)
     summary = analyze_and_save(results, factor_data, fwd_returns, industry_data)
 
     print("\n" + "=" * 64)

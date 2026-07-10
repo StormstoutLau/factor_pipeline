@@ -240,3 +240,148 @@ class TestNumericalCorrectness:
             actual_residuals, expected_residuals, decimal=10,
             err_msg=f"日期 {test_date} 残差与直接 OLS 不一致"
         )
+
+
+# =============================================================================
+# P0-5: 市值中性化 TDD 测试
+# =============================================================================
+
+@pytest.fixture
+def td3_market_cap_data() -> pd.DataFrame:
+    """市值数据 (5 日期 × 20 股票)
+
+    模拟对数市值, 行业间有系统性差异:
+    - 银行 (S00-S03): log_mv ~ 4.0 (大盘)
+    - 医药 (S04-S07): log_mv ~ 2.5 (中盘)
+    - 科技 (S08-S11): log_mv ~ 1.5 (小盘)
+    - 消费 (S12-S15): log_mv ~ 3.0 (中大盘)
+    - 银行 (S16-S19): log_mv ~ 4.0 (大盘)
+    """
+    np.random.seed(789)
+    dates = pd.date_range('2020-01-01', periods=5, freq='D')
+    stocks = [f'S{i:02d}' for i in range(20)]
+    # 行业市值分布 (每行业 5 只)
+    sector_mv = np.array([4.0, 4.0, 4.0, 4.0,   # S00-S03 银行
+                           2.5, 2.5, 2.5, 2.5,   # S04-S07 医药
+                           1.5, 1.5, 1.5, 1.5,   # S08-S11 科技
+                           3.0, 3.0, 3.0, 3.0,   # S12-S15 消费
+                           4.0, 4.0, 4.0, 4.0])  # S16-S19 银行
+    data = sector_mv + np.random.randn(5, 20) * 0.1  # 小噪声
+    return pd.DataFrame(data, index=dates, columns=stocks)
+
+
+class TestMarketCapNeutralization:
+    """P0-5: NeutralizerAdapter 应支持行业+市值联合中性化"""
+
+    def test_fit_with_market_cap_sets_cache(self, td3_factor_data,
+                                             td3_industry_data, td3_market_cap_data):
+        """fit() 传入 market_cap_data 应设置 _market_cap_data_cache"""
+        adapter = NeutralizerAdapter(neutralization_type='industry_marketcap')
+        adapter.fit(
+            td3_factor_data,
+            industry_data=td3_industry_data,
+            market_cap_data=td3_market_cap_data,
+        )
+
+        assert hasattr(adapter, '_market_cap_data_cache'), (
+            "fit() 后应有 _market_cap_data_cache 属性"
+        )
+        assert adapter._market_cap_data_cache is not None
+        assert len(adapter._market_cap_data_cache) >= 4, (
+            f"市值缓存应有 >=4 条目, 实际 {len(adapter._market_cap_data_cache)}"
+        )
+
+    def test_industry_mcap_residuals_match_direct_ols(self, td3_factor_data,
+                                                       td3_industry_data,
+                                                       td3_market_cap_data):
+        """行业+市值中性化残差应与直接 OLS (dummies + log_mv) 一致"""
+        adapter = NeutralizerAdapter()
+
+        # 使用 industry_marketcap 模式
+        adapter_mcap = NeutralizerAdapter(neutralization_type='industry_marketcap')
+        result = adapter_mcap.fit_transform(
+            td3_factor_data,
+            industry_data=td3_industry_data,
+            market_cap_data=td3_market_cap_data,
+        )
+
+        # 手工计算第一个日期
+        test_date = td3_factor_data.index[0]
+        factor_col = td3_factor_data.loc[test_date].dropna()
+        common = factor_col.index.intersection(td3_industry_data.index)
+        common = list(set(common) & set(td3_market_cap_data.columns))
+
+        y = factor_col[common].values.astype(float)
+        ind_dummies = pd.get_dummies(td3_industry_data[common], drop_first=True).astype(float)
+        log_mv = td3_market_cap_data.loc[test_date, common].values.reshape(-1, 1)
+        X = np.column_stack([sm.add_constant(ind_dummies, has_constant='add').astype(float),
+                             log_mv])
+
+        model = sm.OLS(y, X).fit()
+        expected_residuals = model.resid
+
+        actual_residuals = result.loc[test_date, common].values
+        np.testing.assert_array_almost_equal(
+            actual_residuals, expected_residuals, decimal=10,
+            err_msg=f"行业+市值残差与直接 OLS 不一致"
+        )
+
+    def test_market_cap_improves_residual_cleanness(self, td3_factor_data,
+                                                      td3_industry_data,
+                                                      td3_market_cap_data):
+        """市值中性化应进一步降低残差与 log_mv 的相关性"""
+        # 仅行业中性化
+        ind_only = NeutralizerAdapter(neutralization_type='industry')
+        result_ind = ind_only.fit_transform(
+            td3_factor_data, industry_data=td3_industry_data,
+        )
+
+        # 行业+市值中性化
+        ind_mcap = NeutralizerAdapter(neutralization_type='industry_marketcap')
+        result_both = ind_mcap.fit_transform(
+            td3_factor_data, industry_data=td3_industry_data,
+            market_cap_data=td3_market_cap_data,
+        )
+
+        # 计算每个截面残差与 log_mv 的相关系数
+        corr_ind_only = []
+        corr_both = []
+        for t_idx, date in enumerate(td3_factor_data.index):
+            common_cols = list(set(td3_factor_data.columns) &
+                               set(td3_market_cap_data.columns))
+            if len(common_cols) < 10:
+                continue
+            mv_t = td3_market_cap_data.loc[date, common_cols].values
+            if date in result_ind.index:
+                r_ind = np.corrcoef(result_ind.loc[date, common_cols].values, mv_t)[0, 1]
+                r_both = np.corrcoef(result_both.loc[date, common_cols].values, mv_t)[0, 1]
+                if not np.isnan(r_ind) and not np.isnan(r_both):
+                    corr_ind_only.append(abs(r_ind))
+                    corr_both.append(abs(r_both))
+
+        mean_corr_ind = np.mean(corr_ind_only) if corr_ind_only else 0
+        mean_corr_both = np.mean(corr_both) if corr_both else 0
+        # 市值中性化后残差与市值相关性应更低
+        assert mean_corr_both <= mean_corr_ind * 1.1, (
+            f"市值中性化应降低残差-市值相关性: "
+            f"仅行业={mean_corr_ind:.4f}, 行业+市值={mean_corr_both:.4f}"
+        )
+
+    def test_market_cap_fit_without_mcap_skips(self, td3_factor_data,
+                                                 td3_industry_data):
+        """无 market_cap_data 时 industry_marketcap 模式应退化为仅行业"""
+        adapter = NeutralizerAdapter(neutralization_type='industry_marketcap')
+        result = adapter.fit_transform(
+            td3_factor_data, industry_data=td3_industry_data,
+        )
+
+        # 应与仅行业模式一致
+        ind_only = NeutralizerAdapter(neutralization_type='industry')
+        result_ind = ind_only.fit_transform(
+            td3_factor_data, industry_data=td3_industry_data,
+        )
+
+        np.testing.assert_array_almost_equal(
+            result.values, result_ind.values, decimal=10,
+            err_msg="无市值数据时 industry_marketcap 应退化为仅行业"
+        )

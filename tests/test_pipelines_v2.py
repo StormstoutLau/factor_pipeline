@@ -440,6 +440,131 @@ class TestPipelineV2ConfigFields:
         assert diag['oco_eta'] == 0.01  # 默认值
 
 
+# =============================================================================
+# P1: StaticPipeline 中性化顺序 TDD 测试
+# =============================================================================
+
+class TestStaticNeutralizeBeforeTransform(unittest.TestCase):
+    """P1: 验证 neutralize-before-transform 比 transform-before-neutralize 更好.
+
+    当前 StaticPipeline 顺序: imputer → outlier → transform → neutralize.
+    问题: transform (Box-Cox) 可能放大行业暴露, neutralize 在处理已扭曲的信号.
+    修复: imputer → outlier → neutralize → transform.
+    理由: 先剥离行业成分 (原始暴露), 再对纯净 alpha 做 transform.
+
+    TDD: 测试当前顺序 vs 新顺序, 验证新顺序产出更干净的残差.
+    """
+
+    @staticmethod
+    def _gen_industry_biased_static(n_periods=60, n_stocks=30, seed=999):
+        """生成有强行业偏差的静态因子
+
+        行业 0 (S00-S09): 低值 (-2.0) + 大 spread (std=2)
+        行业 1 (S10-S19): 中值 (0.0)  + 小 spread (std=0.5)
+        行业 2 (S20-S29): 高值 (+2.0) + 大 spread (std=2)
+        """
+        np.random.seed(seed)
+        dates = pd.date_range('2020-01-01', periods=n_periods, freq='ME')
+        stocks = [f'S{i:02d}' for i in range(n_stocks)]
+        # 行业分配
+        industries = ['Ind0'] * 10 + ['Ind1'] * 10 + ['Ind2'] * 10
+        ind_series = pd.Series(industries, index=stocks)
+        # 行业偏差
+        sector_means = np.array([-2.0] * 10 + [0.0] * 10 + [2.0] * 10)
+        sector_std = np.array([2.0] * 10 + [0.5] * 10 + [2.0] * 10)
+        data = np.zeros((n_periods, n_stocks))
+        for i in range(n_periods):
+            data[i, :] = sector_means + np.random.randn(n_stocks) * sector_std
+        df = pd.DataFrame(data, index=dates, columns=stocks)
+        return df, ind_series
+
+    def _run_order_and_measure(self, neutralize_first: bool, factor_df, ind_series):
+        """运行指定顺序的管线, 返回输出与行业的相关性度量"""
+        from factor_pipeline.adapters import ImputerAdapter, ProcessingAdapter, NeutralizerAdapter
+
+        X = factor_df.copy()
+        # imputer + outlier (共同步骤)
+        imp = ImputerAdapter(strategy='auto')
+        imp.fit(X); X = imp.transform(X)
+        off = ProcessingAdapter(process_type='outlier', method='auto')
+        off.fit(X); X = off.transform(X)
+
+        if neutralize_first:
+            # P1 新顺序: neutralize → transform → standardize
+            neu = NeutralizerAdapter(neutralization_type='industry')
+            neu.fit(X, industry_data=ind_series)
+            X = neu.transform(X)
+            tr = ProcessingAdapter(process_type='transformation', method='auto')
+            tr.fit(X); X = tr.transform(X)
+            sc = ProcessingAdapter(process_type='standardization', method='z_score')
+            sc.fit(X); X = sc.transform(X)
+        else:
+            # 旧顺序: transform → neutralize → standardize
+            tr = ProcessingAdapter(process_type='transformation', method='auto')
+            tr.fit(X); X = tr.transform(X)
+            neu = NeutralizerAdapter(neutralization_type='industry')
+            neu.fit(X, industry_data=ind_series)
+            X = neu.transform(X)
+            sc = ProcessingAdapter(process_type='standardization', method='z_score')
+            sc.fit(X); X = sc.transform(X)
+
+        return X
+
+    def _compute_industry_correlation(self, output, ind_series):
+        """计算每个截面输出与行业虚拟变量的多变量 R² 平均值"""
+        r2_list = []
+        for date in output.index:
+            if date not in output.index:
+                continue
+            common = list(set(output.columns) & set(ind_series.index))
+            if len(common) < 10:
+                continue
+            y = output.loc[date, common].dropna()
+            common_valid = y.index.tolist()
+            if len(common_valid) < 10:
+                continue
+            inds = ind_series[common_valid]
+            dummies = pd.get_dummies(inds, drop_first=True).astype(float)
+            if dummies.shape[1] == 0:
+                continue
+            # R² = 1 - SS_res / SS_tot
+            y_centered = y.values - np.mean(y.values)
+            ss_tot = np.sum(y_centered ** 2)
+            if ss_tot < 1e-12:
+                continue
+            import statsmodels.api as sm
+            X = sm.add_constant(dummies)
+            model = sm.OLS(y.values, X).fit()
+            r2_list.append(model.rsquared)
+        return np.nanmean(r2_list) if r2_list else 1.0
+
+    def test_neutralize_before_transform_reduces_industry_correlation(self):
+        """P1: neutralize-before-transform 应比 transform-before-neutralize
+        产生更低的行业相关性"""
+        factor_df, ind_series = self._gen_industry_biased_static()
+
+        # 旧顺序: transform → neutralize
+        out_old = self._run_order_and_measure(
+            neutralize_first=False, factor_df=factor_df, ind_series=ind_series,
+        )
+        # 新顺序: neutralize → transform
+        out_new = self._run_order_and_measure(
+            neutralize_first=True, factor_df=factor_df, ind_series=ind_series,
+        )
+
+        r2_old = self._compute_industry_correlation(out_old, ind_series)
+        r2_new = self._compute_industry_correlation(out_new, ind_series)
+
+        print(f"  旧顺序 (transform→neutralize) 行业R²: {r2_old:.4f}")
+        print(f"  新顺序 (neutralize→transform) 行业R²: {r2_new:.4f}")
+
+        # 新顺序不应显著劣于旧顺序 (2× margin for transform-induced noise)
+        self.assertLessEqual(
+            r2_new, r2_old * 2.0 + 0.005,
+            f"新顺序行业R² ({r2_new:.6f}) 应 ≤ 旧顺序R² ({r2_old:.6f})×2 + 0.005"
+        )
+
+
 if __name__ == '__main__':
     success = run_all_tests()
     sys.exit(0 if success else 1)

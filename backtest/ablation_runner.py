@@ -440,6 +440,7 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
     ) -> AblationResult:
         """运行单次消融实验
 
@@ -513,6 +514,7 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
         module_override: Optional[Dict[str, bool]] = None,
         ortho_enabled: Optional[bool] = None,
     ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, float], Dict[str, float]]:
@@ -548,7 +550,8 @@ class AblationRunner:
 
         # 运行管线
         pipeline = FactorProcessingPipelineV2(modified_config)
-        pipeline.fit(factor_data, industry_data=industry_data)
+        pipeline.fit(factor_data, industry_data=industry_data,
+                     market_cap_data=market_cap_data)
 
         # P0-2 (spec §2.5/§4.3): fit 后、transform 前覆盖路由分类
         # (分类在 fit 阶段确定, 故必须在 fit 后覆盖)
@@ -923,6 +926,7 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
         b3_full_result: Optional[AblationResult] = None,
     ) -> List[AblationResult]:
         """L1 组件消融: 5 模块逐个关闭 + B3 完整管线参照
@@ -973,6 +977,7 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
         b3_full_result: Optional[AblationResult] = None,
     ) -> List[AblationResult]:
         """L2 路由消融: 5 配置
@@ -1023,6 +1028,7 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
     ) -> List[AblationResult]:
         """B0-B3 Baseline 阶梯
 

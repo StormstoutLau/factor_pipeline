@@ -870,6 +870,11 @@ class StaticFactorPipeline(_BaseFactorPipeline):
     为何这样处理：
         静态因子的价值在截面排序，非线性变换可有效驯服厚尾和偏态。
         高自相关性意味着GARCH预白化可能有必要。
+
+    P1 修复: 中性化顺序从 transform→neutralize 改为 neutralize→transform.
+    理由: 先剥离行业暴露 (原始值), 再对纯净 alpha 做 transform.
+    旧顺序下 Box-Cox 可能放大行业信号, neutralize 虽然数学上能移除但
+    transform 的扭曲已经锁定到值空间中, 影响下游多因子组合的信号结构.
     """
 
     def __init__(self,
@@ -883,6 +888,9 @@ class StaticFactorPipeline(_BaseFactorPipeline):
             ('imputer', ImputerAdapter(strategy='auto', enabled=me.get('imputer', True))),
             ('outlier', ProcessingAdapter(process_type='outlier', method='auto',
                                           enabled=me.get('winsorizer', True))),
+            # P1: neutralize before transform — 先剥离行业暴露再变换
+            ('neutralize', NeutralizerAdapter(enabled=me.get('neutralizer', True),
+                                              **(neutralizer_params or {}))),
             ('transform', ProcessingAdapter(process_type='transformation', method='auto')),
         ]
 
@@ -891,12 +899,10 @@ class StaticFactorPipeline(_BaseFactorPipeline):
             garch_kwargs = garch_params or {}
             self.steps.append(('garch_whiten', GarchWhiteningAdapter(**garch_kwargs)))
 
-        self.steps.extend([
-            ('neutralize', NeutralizerAdapter(enabled=me.get('neutralizer', True),
-                                              **(neutralizer_params or {}))),
+        self.steps.append(
             ('standardize', ProcessingAdapter(process_type='standardization', method='auto',
                                               enabled=me.get('scaler', True))),
-        ])
+        )
 
     def fit(self, X: pd.DataFrame, **kwargs) -> 'StaticFactorPipeline':
         self._intermediate_data = {}
@@ -1267,6 +1273,7 @@ class FactorProcessingPipelineV2:
     def fit(self,
             factor_data: Dict[str, pd.DataFrame],
             industry_data: Optional[pd.Series] = None,
+            market_cap_data: Optional[pd.DataFrame] = None,
             descriptions: Optional[Dict[str, str]] = None,
             **kwargs) -> 'FactorProcessingPipelineV2':
         """
@@ -1278,6 +1285,8 @@ class FactorProcessingPipelineV2:
             因子名字到数据的映射
         industry_data : pd.Series, optional
             行业数据，用于中性化
+        market_cap_data : pd.DataFrame, optional
+            市值数据 (日期×股票), 用于市值中性化
         descriptions : Dict[str, str], optional
             因子名字到构造描述的映射（用于语义-统计融合）
         """
@@ -1336,7 +1345,13 @@ class FactorProcessingPipelineV2:
         # 正确方案: 每个因子创建独立 pipeline 实例, 单因子 fit/transform,
         #   列名天然唯一, industry 匹配正常, 软路由通过拟合次类型管道支持
         logger.info("Step 3+4: Creating and fitting per-factor pipelines...")
-        neutralizer_params = {'industry_data': industry_data} if industry_data is not None else {}
+        neutralizer_params = {}
+        if industry_data is not None:
+            neutralizer_params['industry_data'] = industry_data
+        # P0-5: market_cap_data 透传 + 自动切换 neutralization_type
+        if market_cap_data is not None:
+            neutralizer_params['market_cap_data'] = market_cap_data
+            neutralizer_params['neutralization_type'] = 'industry_marketcap'
 
         for name, classification in classifications.items():
             self.factor_classifications[name] = classification

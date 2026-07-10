@@ -495,6 +495,8 @@ class NeutralizerAdapter(PipelineStep):
         # TD-3 (ADR-018): fit() 预计算的 industry dummies 缓存
         # {date: (dummy_matrix_with_const, common_stocks_Index)}
         self._industry_dummies_cache: Dict[Any, Any] = {}
+        # P0-5: market_cap_data 缓存 (log_mv for each date)
+        self._market_cap_data_cache: Dict[Any, np.ndarray] = {}
         # fit() 时绑定的 industry_data (可能来自 kwargs 或 __init__)
         self._fitted_industry_data: Optional[pd.Series] = None
 
@@ -565,8 +567,14 @@ class NeutralizerAdapter(PipelineStep):
             industry_data = self.industry_data
         self._fitted_industry_data = industry_data
 
+        # P0-5: 解析 market_cap_data (kwargs 优先)
+        market_cap_data = kwargs.get('market_cap_data', None)
+        if market_cap_data is None:
+            market_cap_data = self.market_value_data
+
         # 重置缓存 (允许重复 fit)
         self._industry_dummies_cache = {}
+        self._market_cap_data_cache = {}
 
         if industry_data is not None:
             for date in X.index:
@@ -598,6 +606,20 @@ class NeutralizerAdapter(PipelineStep):
                 f"中性化器拟合完成，类型: {self.neutralization_type}, "
                 f"预计算 {len(self._industry_dummies_cache)}/{len(X.index)} 个日期的 dummies"
             )
+
+            # P0-5: 预计算 log_mv for market cap neutralization
+            if (market_cap_data is not None
+                    and self.neutralization_type == 'industry_marketcap'):
+                common_stocks_all = list(
+                    set(X.columns) & set(market_cap_data.columns)
+                )
+                for date in self._industry_dummies_cache:
+                    if date in market_cap_data.index:
+                        mcap_series = market_cap_data.loc[date, common_stocks_all]
+                        self._market_cap_data_cache[date] = mcap_series.astype(float)
+                logger.info(
+                    f"市值数据缓存: {len(self._market_cap_data_cache)} 个日期"
+                )
         else:
             logger.info(f"中性化器拟合完成，无 industry_data, transform 时将跳过中性化")
 
@@ -634,8 +656,13 @@ class NeutralizerAdapter(PipelineStep):
         return X
 
     def _neutralize_with_cache(self, X: pd.DataFrame) -> pd.DataFrame:
-        """用 fit() 预计算的 dummies 做截面 OLS + 残差 (TD-3 ADR-018)"""
+        """用 fit() 预计算的 dummies 做截面 OLS + 残差 (TD-3 ADR-018)
+
+        P0-5: 当 _market_cap_data_cache 非空时, 将 log_mv 加入回归矩阵
+        (行业 dummies + 对数市值), 剥离行业暴露和市值暴露.
+        """
         result = pd.DataFrame(index=X.index, columns=X.columns, dtype=float)
+        use_mcap = (len(self._market_cap_data_cache) > 0)
 
         for date in X.index:
             if date not in self._industry_dummies_cache:
@@ -643,16 +670,25 @@ class NeutralizerAdapter(PipelineStep):
 
             dummy_matrix, common = self._industry_dummies_cache[date]
             date_factor = X.loc[date]
+
+            # P0-5: 加入市值
+            if use_mcap and date in self._market_cap_data_cache:
+                mv_series = self._market_cap_data_cache[date]
+                mv_common = mv_series.reindex(common).values
+                dummy_matrix_ext = np.column_stack([dummy_matrix, mv_common])
+            else:
+                dummy_matrix_ext = dummy_matrix
+
             y = date_factor[common].values.astype(float)
 
             # 维度校验 (transform 数据应与 fit 数据一致)
-            if dummy_matrix.shape[0] != len(y):
+            if dummy_matrix_ext.shape[0] != len(y):
                 logger.warning(f"日期 {date} transform 数据维度与 fit 不匹配，跳过")
                 result.loc[date, common] = y
                 continue
 
             try:
-                model = sm.OLS(y, dummy_matrix).fit()
+                model = sm.OLS(y, dummy_matrix_ext).fit()
                 residuals = model.resid.values if hasattr(model.resid, 'values') else model.resid
                 result.loc[date, common] = residuals
             except (ValueError, TypeError, RuntimeError) as e:
