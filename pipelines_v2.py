@@ -1345,6 +1345,10 @@ class FactorProcessingPipelineV2:
         #   (b) 加前缀避免重复 → industry_data 的 stock 名无法匹配 → KeyError
         # 正确方案: 每个因子创建独立 pipeline 实例, 单因子 fit/transform,
         #   列名天然唯一, industry 匹配正常, 软路由通过拟合次类型管道支持
+        # Step 7: Hard routing — 基于 StatisticalClassifier 的确定分类
+        from factor_pipeline.modules.statistical_classifier import StatisticalClassifier
+        stat_clf = StatisticalClassifier(alpha=0.05, vr_q=5)
+
         logger.info("Step 3+4: Creating and fitting per-factor pipelines...")
         neutralizer_params = {}
         if industry_data is not None:
@@ -1357,26 +1361,15 @@ class FactorProcessingPipelineV2:
         for name, classification in classifications.items():
             self.factor_classifications[name] = classification
 
+            # Step 7: Statistical classifier overrides fingerprint-based classification
+            pipe_type = stat_clf.classify(factor_data[name])
+            logger.info(f"  {name} → {pipe_type} (StatisticalClassifier, was {classification.primary_type.value})")
+
             factor_pipes = {}
-            primary_type = classification.primary_type.value.lower()
-
-            # 创建并拟合主类型管道
-            factor_pipes[primary_type] = self._create_pipeline(
-                primary_type, neutralizer_params, self.config.module_enabled)
-            logger.info(f"Fitting {name} → {primary_type} pipeline")
-            factor_pipes[primary_type].fit(factor_data[name], **kwargs)
-
-            # 软路由: 创建并拟合次类型管道 (权重 > 0.01 时)
-            if (not classification.is_hard and
-                    classification.secondary_type is not None and
-                    classification.secondary_prob is not None and
-                    classification.secondary_prob > 0.01):
-                secondary_type = classification.secondary_type.value.lower()
-                if secondary_type != primary_type:
-                    factor_pipes[secondary_type] = self._create_pipeline(
-                        secondary_type, neutralizer_params, self.config.module_enabled)
-                    logger.info(f"Fitting {name} → {secondary_type} pipeline (soft routing)")
-                    factor_pipes[secondary_type].fit(factor_data[name], **kwargs)
+            factor_pipes[pipe_type] = self._create_pipeline(
+                pipe_type, neutralizer_params, self.config.module_enabled)
+            logger.info(f"Fitting {name} → {pipe_type} pipeline")
+            factor_pipes[pipe_type].fit(factor_data[name], **kwargs)
 
             self.factor_pipelines[name] = factor_pipes
 
@@ -1434,114 +1427,22 @@ class FactorProcessingPipelineV2:
                     raise ValueError(f"因子 {name} 未在 fit 阶段分类，请在 strict_mode=False 时使用或重新拟合")
                 continue
 
-            # P0-1: 使用概率加权路由
-            # v3.0.0 T1 (E2): enable_multi_dim_routing 开关控制路由路径
-            #   True: 多维指纹驱动 (含 T1 tail/regime 修正)
-            #   False (默认): 仅 ar1 驱动 (向后兼容)
-            if self.config.enable_multi_dim_routing:
-                # 从 monitor 获取指纹 (fit 阶段已存入)
-                fp = None
-                if self.monitor is not None:
-                    fp_history = self.monitor.fingerprint_history.get(name, [])
-                    fp = fp_history[-1] if fp_history else None
-                if fp is None:
-                    fp = FactorFingerprint()  # 全 NaN 兜底
-                weights = _get_multi_dim_pipeline_weights(
-                    fp, classification,
-                    hard_routing_prob=self.config.hard_routing_prob,
-                )
-            else:
-                weights = _get_pipeline_weights(
-                    classification, hard_routing_prob=self.config.hard_routing_prob
-                )
-
-            # P1-5: 检查 monitor 的迁移权重，合并平滑过渡
-            if self.monitor is not None and self.monitor.config.enable_smooth_transition:
-                current_fp = self.monitor.fingerprint_history.get(name, [None])[-1]
-                if current_fp is not None:
-                    trans_weights = self.monitor.get_transition_weights(name, current_fp)
-                    if len(trans_weights) > 1:
-                        # P2-6: KS 显著性检验 — 验证迁移是否真实
-                        # Fix 1: 使用 transform 参数 factor_data (当前因子数据) 替代
-                        #         未定义的 self.factors, 使 KS 检验路径可达
-                        # Fix 1b: 按时间(columns/dates)拆分而非按股票(rows)拆分,
-                        #         转置后让 stocks 成为 columns, 逐股票做时间维度 KS
-                        if name in factor_data:
-                            factor_df = factor_data[name]  # (n_stocks, n_dates)
-                            n_dates = factor_df.shape[1]
-                            if n_dates >= 10:
-                                split_idx = n_dates // 2
-                                hist_data = factor_df.iloc[:, :split_idx]
-                                recent_data = factor_df.iloc[:, split_idx:]
-                                is_sig, p_val, ks_details = _ks_migration_significance(
-                                    hist_data.T, recent_data.T,
-                                    alpha=self.config.ks_alpha,
-                                )
-                                if is_sig:
-                                    logger.info(
-                                        f"Factor {name}: KS 检验显著 (p={p_val:.4f}), 确认迁移"
-                                    )
-                                    weights = _merge_transition_weights(
-                                        weights, trans_weights, alpha=self.config.merge_alpha
-                                    )
-                                    logger.info(
-                                        f"Factor {name} in migration: merged weights={weights}"
-                                    )
-                                else:
-                                    logger.info(
-                                        f"Factor {name}: KS 检验不显著 (p={p_val:.4f}), "
-                                        f"忽略噪声迁移"
-                                    )
-                            else:
-                                # 数据不足，使用原始迁移权重（保守处理）
-                                weights = _merge_transition_weights(
-                                    weights, trans_weights, alpha=self.config.merge_alpha
-                                )
-                        else:
-                            # 无原始数据，直接合并
-                            weights = _merge_transition_weights(
-                                weights, trans_weights, alpha=self.config.merge_alpha
-                            )
-
-            # 构建管道字典 — P4'.3: 优先使用 per-factor 管道, 回退共享管道
+            # Step 7: Hard routing — 单管道变换, 无加权
             factor_pipes = self.factor_pipelines.get(name, {})
-            pipelines = {
-                'static': factor_pipes.get('static', self.static_pipeline),
-                'dynamic': factor_pipes.get('dynamic', self.dynamic_pipeline),
-                'mixed': factor_pipes.get('mixed', self.mixed_pipeline),
-            }
-
-            # 过滤掉权重为 0 的管道
-            active_pipelines = {
-                k: v for k, v in pipelines.items()
-                if k in weights and weights[k] > 0.001
-            }
-            active_weights = {
-                k: v for k, v in weights.items()
-                if k in active_pipelines
-            }
-
-            if not active_pipelines:
-                logger.warning(f"因子 {name} 无有效管道权重，跳过")
+            pipe_keys = list(factor_pipes.keys())
+            if not pipe_keys:
+                logger.warning(f"因子 {name} 无可用管线, 跳过")
                 continue
 
-            if len(active_pipelines) == 1:
-                pipe_name = list(active_pipelines.keys())[0]
-                logger.info(
-                    f"Transforming {name} → {pipe_name} pipeline "
-                    f"(hard routing, prob={active_weights[pipe_name]:.3f})"
-                )
-            else:
-                pipe_names = ', '.join(
-                    f"{k}({v:.2f})" for k, v in active_weights.items()
-                )
-                logger.info(
-                    f"Transforming {name} → soft routing: {pipe_names}"
-                )
+            pipe_type = pipe_keys[0]  # exactly one pipeline (hard routing)
+            pipe = factor_pipes[pipe_type]
+            try:
+                processed = pipe.transform(data)
+            except (ValueError, TypeError, RuntimeError) as e:
+                logger.warning(f"因子 {name} 变换失败: {e}")
+                continue
 
-            results[name] = _apply_weighted_transform(
-                data, active_pipelines, active_weights, **kwargs
-            )
+            results[name] = processed
 
         # v2.5.0: post_transform_hooks (Layer 2 正交化等, O2.8.3)
         # 半侵入式: per-factor 循环外, return 之前
