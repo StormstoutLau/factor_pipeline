@@ -93,3 +93,39 @@ class TestIdentityNoChange:
             diff = (X - X_out).std()
             # identity 应不改变数据 (允许 < 1e-12 浮点误差)
             assert diff < 1e-12, f"identity 不应改变数据, diff_std={diff}"
+
+
+class TestShapiroWilkNormality:
+    """Step 2: Shapiro-Wilk 形式检验替代启发式 is_normal"""
+
+    def test_normal_data_shapiro_p_gt_005_selects_identity(self):
+        """N(0,1) — Shapiro-Wilk p≥0.05 → is_normal=True → identity"""
+        from scipy.stats import shapiro
+        np.random.seed(42)
+        for _ in range(10):
+            X = np.random.randn(3000)  # large enough for Shapiro-Wilk
+            t = AdaptiveTransformer(method='auto')
+            t.fit(X)
+            feat = t.fitted_params['data_features']
+            # ensure Shapiro-Wilk p-value was computed
+            assert 'normality_p_value' in feat, "expected normality_p_value in features"
+            p_val = feat['normality_p_value']
+            print(f"  SW p={p_val:.4f}, is_normal={feat['is_normal']}")
+            if p_val >= 0.05:  # normal at α=0.05
+                assert feat['is_normal'], f"p={p_val:.4f}≥0.05 should be is_normal=True"
+                assert t.fitted_params['method'] == 'identity', \
+                    f"normal data should select identity, got {t.fitted_params['method']}"
+                return  # test passes on first normal sample
+        pytest.skip("no sample passed Shapiro-Wilk at α=0.05 (rare but possible)")
+
+    def test_skewed_data_shapiro_p_lt_005_selects_transform(self):
+        """exp(λ=2) 偏态 — Shapiro-Wilk p<0.05 → need transform"""
+        np.random.seed(42)
+        X = np.random.exponential(2, 3000)
+        t = AdaptiveTransformer(method='auto')
+        t.fit(X)
+        feat = t.fitted_params['data_features']
+        print(f"  SW p={feat.get('normality_p_value', 'N/A'):}, method={t.fitted_params['method']}")
+        assert not feat['is_normal'], f"skewed exp(2) should NOT be is_normal"
+        assert t.fitted_params['method'] != 'identity', \
+            f"skewed data should NOT select identity, got {t.fitted_params['method']}"

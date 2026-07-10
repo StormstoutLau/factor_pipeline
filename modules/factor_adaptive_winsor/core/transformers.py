@@ -600,8 +600,20 @@ class AdaptiveTransformer(BaseTransformer):
         features['kurtosis'] = stats.kurtosis(X)
         
         # 分布特征
-        # scipy.stats.kurtosis 返回 excess kurtosis (Fisher=True)
-        features['is_normal'] = abs(features['skewness']) < 0.5 and abs(features['kurtosis']) < 1
+        # Step 2: Shapiro-Wilk 形式正态性检验 (替代启发式边界)
+        from scipy.stats import shapiro
+        sample = X if len(X) <= 5000 else np.random.choice(X, 5000, replace=False)
+        try:
+            stat_sw, p_sw = shapiro(sample)
+            features['normality_p_value'] = float(p_sw)
+            features['normality_test'] = 'shapiro_wilk'
+            features['is_normal'] = (p_sw >= 0.05)
+        except (ValueError, RuntimeError):
+            # fallback: heuristic (Shapiro-Wilk fails for degenerate data)
+            features['is_normal'] = abs(features['skewness']) < 0.5 and abs(features['kurtosis']) < 1
+            features['normality_p_value'] = float('nan')
+            features['normality_test'] = 'heuristic_fallback'
+
         features['is_positive'] = np.all(X >= 0)
         features['is_heavy_tailed'] = features['kurtosis'] > 3
         features['is_skewed'] = abs(features['skewness']) > 0.5
