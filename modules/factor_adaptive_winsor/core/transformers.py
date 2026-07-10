@@ -518,7 +518,9 @@ class AdaptiveTransformer(BaseTransformer):
             selected_method = self.method
         
         # 拟合变换参数
-        if selected_method == 'yeojohnson':
+        if selected_method == 'identity':
+            params = {'success': True}
+        elif selected_method == 'yeojohnson':
             params = self._fit_yeojohnson(X_clean)
         elif selected_method == 'boxcox':
             params = self._fit_boxcox(X_clean)
@@ -583,7 +585,8 @@ class AdaptiveTransformer(BaseTransformer):
         features['kurtosis'] = stats.kurtosis(X)
         
         # 分布特征
-        features['is_normal'] = abs(features['skewness']) < 0.5 and abs(features['kurtosis'] - 3) < 1
+        # scipy.stats.kurtosis 返回 excess kurtosis (Fisher=True)
+        features['is_normal'] = abs(features['skewness']) < 0.5 and abs(features['kurtosis']) < 1
         features['is_positive'] = np.all(X >= 0)
         features['is_heavy_tailed'] = features['kurtosis'] > 3
         features['is_skewed'] = abs(features['skewness']) > 0.5
@@ -591,18 +594,18 @@ class AdaptiveTransformer(BaseTransformer):
         return features
     
     def _select_optimal_transform(self, features: Dict[str, Any]) -> str:
-        """选择最优变换方法"""
+        """选择最优变换方法 — 已修复: 正态数据返回 identity"""
         if not features['is_normal']:
             if not features['is_positive']:
-                return 'yeojohnson'  # Yeo-Johnson可以处理负值
+                return 'yeojohnson'
             elif features['is_heavy_tailed']:
-                return 'boxcox'  # Box-Cox对重尾效果好
+                return 'boxcox'
             elif features['is_skewed']:
                 return 'log' if features['is_positive'] else 'yeojohnson'
             else:
-                return 'quantile'  # 分位数变换通用性强
+                return 'quantile'
         else:
-            return 'power'  # 幂变换对接近正态的数据效果好
+            return 'identity'
     
     def _fit_yeojohnson(self, X: np.ndarray) -> Dict[str, Any]:
         """拟合Yeo-Johnson变换"""
