@@ -340,3 +340,358 @@ f_test = model.f_test("industry_dummies = 0, log_mv = 0")  # joint F-test
 13. **Novy-Marx, R., Velikov, M.** (2016). "A Taxonomy of Anomalies and Their Trading Costs." *Review of Financial Studies*, 29(1), 104-147.
 14. **Frisch, R., Waugh, F.V.** (1933). "Partial Time Regressions as Compared with Individual Trends." *Econometrica*, 1(4), 387-401.
 15. **Jegadeesh, N., Titman, S.** (1993). "Returns to Buying Winners and Selling Losers: Implications for Stock Market Efficiency." *Journal of Finance*, 48(1), 65-91.
+
+
+---
+
+## §9 改进方案: 从启发式到原则驱动
+
+### 9.0 核心设计原则
+
+1. **固定方法 + 形式检验** > 自适应 auto 策略
+2. **可复现性** > 可能更高的 IC
+3. **每个决策点** 都有学术引文支撑
+4. **消融实验** 验证每一步的边际贡献
+
+---
+
+### 9.1 Winsorizer: `method='auto'` → `method='percentile'` (1%/99%)
+
+**优先级**: **P0 (立即)** — 最简单, 影响最大, 学术依据最强
+
+**当前代码** (pipelines_v2.py 所有三个 pipeline 的 outlier 步骤):
+```python
+('outlier', ProcessingAdapter(process_type='outlier', method='auto',
+                              enabled=me.get('winsorizer', True))),
+```
+
+**改进后**:
+```python
+('outlier', ProcessingAdapter(process_type='outlier', method='percentile',
+                              percentile_lower=1.0, percentile_upper=99.0,
+                              cross_sectional=True,
+                              enabled=me.get('winsorizer', True))),
+```
+
+**改动文件**:
+| 文件 | 位置 | 变更 |
+|------|------|------|
+| `pipelines_v2.py` | StaticFactorPipeline.__init__ L889 | `method='auto'` → `method='percentile'` |
+| `pipelines_v2.py` | DynamicFactorPipeline.__init__ L975 | 同上 |
+| `pipelines_v2.py` | MixedFactorPipeline L1084-1090 | `_compute_winsorize_params` → `percentile(1, 99)` |
+| `transformers.py` | SmartOutlierDetector | 新增 `method='percentile'` 分支 (如不存在) |
+| `config_v2.py` | PipelineV2Config | 新增 `winsorizer_percentile_lower/upper` 字段 |
+
+**验证**: 消融实验重跑 → winsorizer_off 的 ΔIC 从复合效应 (无 auto + 无缩尾) 变为纯 "无缩尾" 效应
+
+---
+
+### 9.2 Transformer: Shapiro-Wilk 形式检验替代启发式 is_normal
+
+**优先级**: **P0 (立即)** — P1 已有 identity 回退, 用形式检验增强
+
+**当前代码** (transformers.py L585-L589):
+```python
+features['is_normal'] = abs(features['skewness']) < 0.5 and abs(features['kurtosis']) < 1
+```
+
+**改进后** (transformers.py `_analyze_features`):
+```python
+from scipy.stats import shapiro
+
+# 形式正态性检验 (Shapiro-Wilk, max 5000 obs)
+sample = X_clean if len(X_clean) <= 5000 else np.random.choice(X_clean, 5000, replace=False)
+stat, p_value = shapiro(sample)
+features['is_normal'] = (p_value >= 0.05)  # H₀: normal, reject at α=0.05
+features['normality_p_value'] = float(p_value)
+features['normality_test'] = 'shapiro_wilk'
+```
+
+**改进后** (transformers.py `_select_optimal_transform` — 新增决策表):
+```python
+def _select_optimal_transform(self, features: Dict[str, Any]) -> str:
+    """基于 Shapiro-Wilk 形式检验的变换决策
+
+    决策矩阵 (α=0.05):
+    ┌───────────────────┬──────────────┬──────────────────────┐
+    │ is_normal (p≥.05) │ is_positive  │ selected_method      │
+    ├───────────────────┼──────────────┼──────────────────────┤
+    │ True              │ —            │ identity             │
+    │ False             │ False        │ yeojohnson           │
+    │ False             │ True, heavy  │ boxcox               │
+    │ False             │ True, skewed │ log (positive)       │
+    │ False             │ True, other  │ quantile             │
+    └───────────────────┴──────────────┴──────────────────────┘
+    """
+    if features['is_normal']:
+        return 'identity'
+
+    if not features['is_positive']:
+        return 'yeojohnson'
+    elif features['is_heavy_tailed']:
+        return 'boxcox'
+    elif features['is_skewed']:
+        return 'log'
+    else:
+        return 'quantile'
+```
+
+**改动文件**:
+| 文件 | 位置 | 变更 |
+|------|------|------|
+| `transformers.py` | `_analyze_features` L585-589 | Shapiro-Wilk 替代启发式 |
+| `transformers.py` | `_select_optimal_transform` L593-605 | 决策表重写 (已部分在 P1 完成) |
+
+**验证**: `tests/unit/test_adaptive_transformer_identity.py` — 扩展 2 个新测试:
+- `test_normal_data_shapiro_wilk_p_gt_005` → identity
+- `test_skewed_data_shapiro_wilk_p_lt_005` → yeojohnson
+
+---
+
+### 9.3 Imputer: `strategy='auto'` → `strategy='ffill_ts'`
+
+**优先级**: **P0 (立即)** — 消除 CrossSectional 全量中位数偏差
+
+**当前代码** (adapters.py ImputerAdapter):
+```python
+ImputerAdapter(strategy='auto')  # → PanelHierarchicalImputer
+```
+
+**改进后**:
+```python
+ImputerAdapter(strategy='ffill_ts', fill_remaining='cross_median')
+```
+
+**改动文件**:
+| 文件 | 位置 | 变更 |
+|------|------|------|
+| `modules/factor_adaptive_winsor/core/imputers.py` | PanelHierarchicalImputer | 新增 `ffill_ts` 模式 |
+| `pipelines_v2.py` | 三个 pipeline __init__ | `strategy='auto'` → `strategy='ffill_ts'` |
+| `config_v2.py` | PipelineV2Config | 新增 `imputer_strategy`, `imputer_fill_remaining` |
+
+**实现 (`ffill_ts` 模式)**:
+```python
+def _impute_ffill_ts(self, X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Per-stock time-series ffill → remaining NaN fill with cross-sectional median.
+
+    Rationale: Little & Rubin (2002) §4.3 — "fill within-unit first,
+    then across-units" minimizes information loss under MAR.
+    """
+    # Step 1: Per-stock ffill (沿每列向下)
+    X_filled = X.ffill(axis=0)
+
+    # Step 2: Remaining NaN → 当期截面中位数
+    if X_filled.isnull().any().any():
+        row_medians = X_filled.median(axis=1)
+        X_filled = X_filled.T.fillna(row_medians).T
+
+    # Step 3: 如果还有 NaN (整行都是 NaN) → 0
+    X_filled = X_filled.fillna(0)
+
+    return X_filled
+```
+
+**验证**: 消融实验重跑 → imputer_off 的 ΔSharpe 从复合效应变为纯 "无插补" 效应
+
+---
+
+### 9.4 Routing: SOFT → Hard + Variance Ratio + KPSS
+
+**优先级**: **P1 (下一个 sprint)** — 改动最大, 需 A/B 验证
+
+**当前代码** (pipelines_v2.py L1308-1370):
+```python
+# 指纹分类 + softmax → 软权重
+classification = self.classifier.classify(fp)
+# ...
+if not classification.is_hard:
+    # 创建主类型 + 次类型管道
+    # f_out = w1 * f_static + w2 * f_mixed
+```
+
+**改进后**:
+```python
+# 指纹提取 (不变)
+fingerprint = FactorFingerprint.from_factor_data(X)
+
+# 新: 形式统计分类 (替代启发式阈值)
+from factor_pipeline.modules.statistical_classifier import StatisticalClassifier
+classifier = StatisticalClassifier(alpha=0.05)
+pipe_type = classifier.classify(X, fingerprint)
+# Returns: 'static' | 'dynamic' | 'mixed'
+
+# Hard routing: 只创建确定的单管道
+factor_pipe = self._create_pipeline(pipe_type, neutralizer_params, ...)
+factor_pipe.fit(X_single)
+processed = factor_pipe.transform(X_single)
+```
+
+**新模块** `modules/statistical_classifier.py`:
+```python
+class StatisticalClassifier:
+    """
+    基于形式统计检验的因子分类.
+
+    ┌────────────────────────────────────────────────────────────┐
+    │ Test                           │ H₀          │ Reject →   │
+    ├────────────────────────────────────────────────────────────┤
+    │ Lo-MacKinlay VR(q=5)           │ random walk │ predictable│
+    │ KPSS                           │ stationary  │ unit root  │
+    └────────────────────────────────────────────────────────────┘
+
+    分类规则:
+    ┌──────────────────────┬──────────┬──────────┬──────────┐
+    │ VR rejects RW?       │ YES      │ NO       │ —        │
+    │ KPSS stationary?     │ YES      │ YES      │ NO       │
+    ├──────────────────────┼──────────┼──────────┼──────────┤
+    │ → Type               │ STATIC   │ DYNAMIC  │ MIXED    │
+    └──────────────────────┴──────────┴──────────┴──────────┘
+    """
+
+    def __init__(self, alpha: float = 0.05, vr_lags: int = 5):
+        self.alpha = alpha
+        self.vr_lags = vr_lags
+
+    def classify(self, factor_data, fingerprint):
+        candidates = []
+        for col in factor_data.columns[:min(20, len(factor_data.columns))]:
+            ts = factor_data[col].dropna().values
+            if len(ts) < 20:
+                continue
+
+            # Variance Ratio Test
+            from arch.unitroot import VarianceRatio
+            vr = VarianceRatio(ts, lags=self.vr_lags)
+            vr_rejects = (vr.pvalue < self.alpha)
+
+            # KPSS Stationarity Test
+            from arch.unitroot import KPSS
+            kpss = KPSS(ts)
+            is_stationary = (kpss.pvalue >= self.alpha)
+
+            candidates.append((vr_rejects, is_stationary))
+
+        # 多数投票
+        n_static = sum(1 for v, k in candidates if v and k)
+        n_dynamic = sum(1 for v, k in candidates if not v and k)
+        n_mixed = sum(1 for v, k in candidates if not k)
+
+        if n_static > max(n_dynamic, n_mixed):
+            return 'static'
+        elif n_dynamic > max(n_static, n_mixed):
+            return 'dynamic'
+        else:
+            return 'mixed'
+```
+
+**改动文件**:
+| 文件 | 变更 |
+|------|------|
+| `modules/statistical_classifier.py` | **新建** — 形式统计分类器 |
+| `pipelines_v2.py` L1308-1370 | SOFT routing → hard routing |
+| `tests/test_pipelines_v2.py` | 新增 TestStatisticalClassifier (4 tests) |
+
+**验证**: 消融实验 L2 routing 对比 — hard vs soft vs full → HAC 显著性检验
+
+---
+
+### 9.5 Neutralization: Anderson-Rubin 后验检验 (仅监控)
+
+**优先级**: **P2 (监控)** — 中性化本身已正确, 加后验检验为监控
+
+**新增代码** (adapters.py NeutralizerAdapter.transform 末尾):
+```python
+# P2: Anderson-Rubin 后验检验 — 验证中性化是否完全
+if self._enable_ar_test and len(self._industry_dummies_cache) > 0:
+    from statsmodels.api import OLS
+    ar_p_values = []
+    for date in result.index:
+        if date in self._industry_dummies_cache:
+            dummies, common = self._industry_dummies_cache[date]
+            resid_t = result.loc[date, common].dropna()
+            if len(resid_t) < 10:
+                continue
+            model = OLS(resid_t, dummies.loc[resid_t.index]).fit()
+            ar_p = model.f_pvalue
+            ar_p_values.append(ar_p)
+    avg_ar_p = np.mean(ar_p_values) if ar_p_values else 1.0
+    if avg_ar_p < 0.05:
+        logger.warning(f"Anderson-Rubin test: mean p={avg_ar_p:.4f} < 0.05 — "
+                       f"neutralization may be incomplete")
+    else:
+        logger.info(f"Anderson-Rubin test: mean p={avg_ar_p:.4f} — OK")
+```
+
+---
+
+## §10 执行顺序 (严格按序)
+
+| 序号 | 任务 | 优先级 | 改动文件 | 预计工作量 | 前置依赖 |
+|------|------|--------|---------|-----------|---------|
+| **1** | Winsorizer 1%/99% 固定 | **P0** | 3 files | 2h | 无 |
+| **2** | Transformer Shapiro-Wilk | **P0** | 1 file + 2 tests | 1.5h | §9.2 (P1 identity 已做) |
+| **3** | Imputer ffill_ts | **P0** | 3 files + 1 test | 2h | 无 |
+| **4** | 消融重跑 (P0 三步后) | **P0** | 1 script | 30min + 运行时间 | 1,2,3 |
+| **5** | 回归测试 (全量) | **P0** | — | 20min (运行) | 4 |
+| **6** | A/B 对比: 旧 vs 新准则 | **P0** | 1 script | 1h + 运行 | 5 |
+| **7** | Routing: hard + VR/KPSS | **P1** | 4 files + 4 tests | 4h | 5 (P0 绿灯后) |
+| **8** | AR 后验检验 (监控) | **P2** | 2 files | 1h | 7 (可选独立) |
+| **9** | 审计文档 v2.0 (修正评分) | **P2** | 1 doc | 1h | 7 |
+
+### 依赖图
+
+```
+  1 ─┬─ 2 ─┬─ 4 ── 5 ── 6
+     │     │            │
+     3 ───┘            └── 7 ──┬── 8
+                              └── 9
+```
+
+### 不做 (明确排除)
+
+| 不做 | 理由 |
+|------|------|
+| MICE 多重插补 (P1 of §1) | 计算成本过高 (每期 5×m imputations), A 股 200+ 期 × 100 股不可行 |
+| Hill-adaptive 缩尾 (P1 of §2) | 1%/99% 固定足以覆盖 95% 的因子 |
+| Box-Cox LRT (P0 of §3) | Shapiro-Wilk 更简单, 回答相同问题 (need transform?), 不需要额外 fit |
+| 保留 SOFT routing | 无学术依据, 破坏可审计性 |
+
+---
+
+## §11 验证验收标准
+
+### 11.1 自动化验收 (CI)
+
+```bash
+# 1. 全量测试通过
+pytest tests/ -x -q --ignore=tests/integration --ignore=tests/test_backtest/test_p0_duckdb_pivot.py
+# Expected: 132+ passed, 0 failed
+
+# 2. 消融实验可复现
+python scripts/run_ablation_real.py
+# Expected: IC/Sharpe 各模块贡献度可解释, 无 unexpected sign flips
+
+# 3. 新准则 vs 旧准则 A/B
+python scripts/ablate_academic_criteria_vs_heuristic.py
+# Expected: p(HAC) report for each module
+```
+
+### 11.2 人工验收
+
+| 检查项 | 标准 |
+|--------|------|
+| 所有 `method='auto'` 替换为显式 method | `grep -r "method='auto'" pipelines_v2.py adapters.py` 返回空 |
+| SOFT routing 已禁用 | `grep "secondary_type" pipelines_v2.py` 仅在注释中出现 |
+| Imputer strategy 固定为 ffill_ts | `grep "strategy='ffill_ts'" pipelines_v2.py` 命中 3 次 |
+| 每个决策点有学术引文 | 文档 §1-§5 每个建议标注了来源文献 |
+
+### 11.3 性能验收
+
+| 指标 | 当前 (auto) | 目标 (固定方法) | 允许 |
+|------|------------|---------------|------|
+| 单因子 fit+transform 时间 | ~2s | ~1.5s | -25% (auto 策略选择开销消除) |
+| 消融实验总时间 | ~60s | ~50s | -15% |
+| NaN 比例 | <1% | <1% | 不变 |
+| IC 稳定性 (cross-run) | σ_IC ~ 0.002 (auto 模式导致变化) | **σ_IC < 0.0005** | >4× improvement |
+
