@@ -30,13 +30,15 @@ v3.0.0 T3 (2026-07) CUSUM 在线漂移检测 (ADR-025)               [x]
 v3.1.0     (2026-07) 内生性诊断 v1.0 (E1-E6, DESIGN_DISCUSSION)  [x]
 v3.1.0          (2026-07) Audit-Driven Code Quality Remediation    [x]
 v3.1.0          (2026-07) P2+ 断言恒真式 + 设计约束 + 端到端        [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.1.0
-v3.0.0 T2     (远期)  流式处理支持                               [ ]
+v3.2.0     (2026-07) 学术准则驱动管线重构 (P0 固定方法 + P1 Hard Routing) [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.2.0
+v3.2.0 P2  (远期)  AR 后验检验 + 审计文档 v2.0                         [ ]
+v3.0.0 T2  (远期)  流式处理支持                                         [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.1.0 完成后)
+## §2. 当前待办 (v3.2.0 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -44,9 +46,32 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### 🟡 P1 — 消融 Tier 3 收尾 (5 项)
+### v3.2.0 已实施 — 学术准则驱动重构 (6 steps)
 
-> **审计文档**: [audit/2026-07-08-ablation-code-quality-audit.md](audit/2026-07-08-ablation-code-quality-audit.md)
+> **审计文档**: [docs/analysis/principle_vs_hacking_audit.md](docs/analysis/principle_vs_hacking_audit.md)
+> **决策文档**: [docs/analysis/academic_literature_decision_criteria.md](docs/analysis/academic_literature_decision_criteria.md)
+> **完成日期**: 2026-07-10
+
+- [x] **Step 1**: Winsorizer `method='percentile'` (1%/99%) — Bali et al. 2016 行业标准
+- [x] **Step 2**: Transformer Shapiro-Wilk 形式正态性检验 — Shapiro & Wilk 1965
+- [x] **Step 3**: Imputer `strategy='ffill_ts'` — Little & Rubin 2002
+- [x] **Step 4**: 消融重跑 — winsorizer+scaler 显著 (p_bootstrap=0.016)
+- [x] **Step 5**: 全量回归 — 168/168 passed ✅
+- [x] **Step 7**: Hard Routing + StatisticalClassifier (VR + AR(1)) — Lo & MacKinlay 1988
+
+### 🟡 P2 — 远期
+
+| # | 任务 | 状态 |
+|---|------|------|
+| Step 8 | Anderson-Rubin 后验检验 (中性化质量监控) | [ ] |
+| Step 9 | 审计文档 v2.0 (修正原则评分 → ~90%) | [ ] |
+| — | 跨市场验证 (港股/US) | [ ] |
+| — | Pipeline 日志记录 intermediate data | [ ] |
+
+---
+
+### v3.1.0 消融实验 (已有) — 保留历史参考
+
 > **完成日期**: 2026-07-09
 
 - [x] **P2-1**: Neutralizer/Imputer 未传 `enabled` 给 `super().__init__()` — PipelineStep 加 enabled 参数, 3 个 Adapter 透传
@@ -69,22 +94,6 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 - [x] 阶段 1 MVP: 10-cell notebook — 指纹雷达图 / 分类决策树 / 分布直方图 / Spearman 排序 / IC 追溯 / W 热力图 / 迁移检测 / 输出对比 / 校验报告
 - [x] Cell 11 消融实验贡献度: ablation_results.json 加载 + 水平条形图 (IC/Sharpe 双向), 13 tests
-
----
-
-### v3.1.0 消融实验
-
-> **完成日期**: 2026-07-09
-> **脚本**: [scripts/run_ablation.py](file:///f:/Coding/factor_pipeline/scripts/run_ablation.py)
-> **结果**: [notebooks/ablation_results.json](file:///f:/Coding/factor_pipeline/notebooks/ablation_results.json)
-
-- [x] 消融实验自动运行 (B0-B3 + L1 5 模块消融 + 贡献度排名)
-- [x] 模块贡献度：
-  - neutralizer: ΔIC +47.6%, ΔSharpe -83.7% (行业中性化移除噪声共变)
-  - scaler: ΔIC +28.1%, ΔSharpe +174.6% (标准化对 Sharpe 计算关键)
-  - winsorizer: ΔIC +5.2% (合成数据无极端值, 预期低)
-  - imputer/orthogonalizer: 0% (合成数据无缺失/正交化默认关闭)
-- [x] 所有 6 组对比 p > 0.05 (合成数据无真实信号, Type-I 控制正确)
 
 ---
 
@@ -150,7 +159,7 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 > **每次发版必须更新以下文件**，对照勾选防止遗漏。
 
-| 文档 | 更新内容 | v3.1.0 |
+| 文档 | 更新内容 | v3.2.0 |
 |------|---------|--------|
 | [CHANGELOG.md](file:///f:/Coding/factor_pipeline/CHANGELOG.md) | 新版本条目 | ✅ |
 | [README.md](file:///f:/Coding/factor_pipeline/README.md) | 版本摘要 + 版本信息块 + 版本历史表 | ✅ |
@@ -165,6 +174,13 @@ v3.0.0 T2     (远期)  流式处理支持                               [ ]
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-07-10 | add441b | feat(v3.2.0 Step 4+7): 消融重跑 + Hard Routing (StatisticalClassifier) |
+| 2026-07-10 | 7e6bc08 | feat(v3.2.0 Step 3): Imputer ffill_ts 固定 (TDD) |
+| 2026-07-10 | 480cb3d | feat(v3.2.0 Step 2): Transformer Shapiro-Wilk 形式检验 |
+| 2026-07-10 | 38966db | feat(v3.2.0 Step 1): Winsorizer 1%/99% percentile (Bali 2016) (TDD) |
+| 2026-07-10 | 2a4f181 | docs: 改进方案向量化审计 — 消除 for 循环 |
+| 2026-07-10 | 85b4e45 | docs: 改进方案 — 9步执行顺序 + 代码级方案 |
+| 2026-07-10 | 08264f2 | docs: 学术文献统计决策准则 — 5模块逐项分析 |
 | 2026-07-09 | afb6fea | fix(v3.1.0): 消融 Tier 3 收尾 (5项) + unified_decoupler fingerprint 集成 |
 | 2026-07-09 | b9066dc | docs: 文档残留学债修复 + 创建 PROJECT_STATUS.md 统一待办视图 |
 | 2026-07-09 | 7993a93 | docs(v3.1.0): 项目文档同步 — CHANGELOG/DECISIONS/CODE_WIKI/README.en |

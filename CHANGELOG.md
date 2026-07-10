@@ -1,5 +1,103 @@
 # 开发日志 (Changelog)
 
+## v3.2.0 — 学术准则驱动管线重构 (已实施, 2026-07-10)
+
+### 概览
+
+系统审计 5 个核心处理模块的统计决策准则，发现 ~32% 依赖硬编码启发式阈值（数据迁就）。基于 15 篇学术文献（Box-Cox 1964 / Shapiro-Wilk 1965 / Bali-Engle-Murray 2016 / Lo-MacKinlay 1988 等）制定严格的统计决策准则，并逐步 TDD 实施。9 阶段执行计划中 P0 三步 + P1 Hard routing 已完成，全量回归 168/168 零回归。
+
+**核心产出**:
+- 3 篇分析文档: [academic_literature_decision_criteria.md](docs/analysis/academic_literature_decision_criteria.md) (含 §9 改进方案 + §10 执行顺序 + §11 验收标准) + [principle_vs_hacking_audit.md](docs/analysis/principle_vs_hacking_audit.md) + [ablation_post_fix_analysis.md](docs/analysis/ablation_post_fix_analysis.md) (含 P1 顺序 A/B 测试附录)
+- 6 个 commits, 12 files changed, +1098/-185
+- 消融实验: P0 三步后重跑，B3 IC=-0.0067, Sharpe=0.0028，winsorizer+scaler 显著 (p_bootstrap=0.016)
+- 全量回归: 168/168 passed + 4 warnings (零回归)
+
+### Step 1: Winsorizer `method='percentile'` (1%/99%) — Bali et al. 2016
+
+| 项 | 值 |
+|----|-----|
+| 学术依据 | Bali, Engle & Murray (2016): "all variables are winsorized at the 1st and 99th percentiles" — JFE/JF/RFS 事实标准 |
+| 改动 | `SmartOutlierDetector` 新增 `method='percentile'` → `np.percentile([1, 99])` + `np.clip` |
+| 管线 | 三个管线 `method='auto'` → `method='percentile', percentile_lower=1.0, percentile_upper=99.0` |
+| MixedPipeline | `_compute_winsorize_params` 从 3σ → `np.nanpercentile(arr, [1, 99], axis=0)` |
+| 测试 | 4 tests — fit/clip/preservation/cross-sectional |
+| commit | `38966db` |
+
+### Step 2: Transformer Shapiro-Wilk 正态性检验 — Shapiro & Wilk 1965
+
+| 项 | 值 |
+|----|-----|
+| 学术依据 | Shapiro & Wilk (1965): 形式正态性检验 H₀: normal, α=0.05 |
+| 改动 | `_analyze_features`: 启发式 `abs(skew)<0.5 & abs(kurt)<1` → `shapiro(sample).pvalue ≥ 0.05` |
+| fallback | Shapiro-Wilk 失败时 (degenerate data) → heuristic fallback |
+| 新增字段 | `normality_p_value`, `normality_test` |
+| 测试 | 2 新测试 (8 total) — N(0,1)→identity / skewed exp(2)→yeojohnson |
+| commit | `480cb3d` |
+
+### Step 3: Imputer `strategy='ffill_ts'` — Little & Rubin 2002
+
+| 项 | 值 |
+|----|-----|
+| 学术依据 | Little & Rubin (2002) §4.3: "fill within-unit first, then across-units" |
+| 改动 | `ImputerAdapter` 内置 `_transform_ffill_ts`: `X.ffill(axis=0)` → `row_median.fillna` → `fillna(0)` |
+| 向量化 | O(T×N) pandas/numpy, 零 for 循环 |
+| 管线 | 三个管线 `strategy='auto'` → `strategy='ffill_ts'` |
+| 测试 | 4 tests — ffill/cross-median/no-nan-preserved |
+| commit | `7e6bc08` |
+
+### Step 4: 消融重跑
+
+| 指标 | P0 前 (auto mode) | P0 后 (fixed methods) |
+|------|------------------|----------------------|
+| B3 IC_mean | -0.0074 | -0.0067 |
+| B3 Sharpe | 0.0007 | 0.0028 |
+| winsorizer ΔIC | -44.1% (**p=0.026**, 边界显著) | -51.7% (**p=0.016**, **显著**) |
+| scaler ΔIC | +122.0% (**p=0.018**) | +128.0% (**p=0.016**, **显著**) |
+
+关键发现: 固定方法后 winsorizer 的显著性从边界提升到正式显著 (p 从 0.026→0.016)，说明消除 auto 策略噪声后信号更干净。
+
+### Step 7: Hard Routing + StatisticalClassifier — Lo & MacKinlay 1988
+
+| 项 | 值 |
+|----|-----|
+| 学术依据 | Lo & MacKinlay (1988): Variance Ratio test + AR(1) stationarity |
+| 新增模块 | `modules/statistical_classifier/` — 向量化面板分类 |
+| 路由变更 | SOFT routing (加权混合) → **hard routing** (单管路线性变换) |
+| 分类规则 | VR rejects random walk + stationary → static / VR OK + stationary → dynamic / else → mixed |
+| 测试 | 4 tests — static→static / dynamic→dynamic / valid-type / speed<1s |
+| commit | `add441b` |
+
+### 决策历史
+
+| 决策 | 结论 | 依据 |
+|------|------|------|
+| P1 StaticPipeline 顺序 | 保留新顺序 (no-revert) | A/B p=0.80 不显著，原则性更好，Spearman ρ=0.9958 近乎等价 |
+| 市值中性化 | 集成到 B3 baseline | 市值是 momentum >70% alpha 来源，行业+市值 OLS 双重中性化 |
+| SOFT → hard routing | 实施 | 无学术依据，破坏可审计性 |
+| Auto → 固定方法 | 实施 | 消融可复现性 > IC 优化 |
+| identity 回退 | 实施 | Box-Cox 不强制变换正态数据 |
+| kurtosis 阈值 bug | 已修复 | scipy.stats.kurtosis 返回 excess kurtosis (~0 for N(0,1))，原代码错误假设 ~3 |
+
+### 学术依据 (15 篇)
+
+| 文献 | 用途 |
+|------|------|
+| Box & Cox (1964) | 变换似然比检验 |
+| Shapiro & Wilk (1965) | 正态性形式检验 |
+| Lo & MacKinlay (1988) | Variance Ratio 可预测性 |
+| KPSS (1992) | 平稳性检验 |
+| Fama & French (1993, 2015) | 多因子模型残差中性化 |
+| Jegadeesh & Titman (1993) | 动量因子基准 |
+| Little & Rubin (2002) | 面板缺失插补 ffill |
+| Huber & Ronchetti (2009) | 稳健统计缩尾 |
+| Van Buuren (2011) | MICE 多重插补 |
+| Bali, Engle & Murray (2016) | 1%/99% 缩尾行业标准 |
+| Barroso & Santa-Clara (2015) | 动量波动率时变 |
+| Novy-Marx & Velikov (2016) | 异常因子分类学 |
+| Frisch & Waugh (1933) / Lovell (1963) | FWL 定理 — 中性化顺序等价 |
+
+---
+
 ## v3.1.0 — Audit-Driven Code Quality Remediation (已实施, 2026-07-09)
 
 执行 audit-driven-development 4 阶段流程: P0×8 + P1×8 + P2+×15 (断言恒真式重写 5 + 设计约束测试 10 + 端到端 2 + E5 测试补强 5) + spec 反向对齐 11 项。子集回归 754 passed + 1 skipped (零回归, E1-E10 + V3.1.0 E1-E6 范围)。
