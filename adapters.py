@@ -505,6 +505,7 @@ class NeutralizerAdapter(PipelineStep):
                  industry_data: Optional[pd.Series] = None,
                  market_value_data: Optional[pd.DataFrame] = None,
                  enabled: bool = True,
+                 enable_ar_check: bool = False,
                  module_path=None, import_path=None, class_name=None,
                  **params):
         super().__init__(
@@ -513,6 +514,7 @@ class NeutralizerAdapter(PipelineStep):
             enabled=enabled,
             neutralization_type=neutralization_type,
             industry_method=industry_method,
+            enable_ar_check=enable_ar_check,
             **params
         )
         self.neutralization_type = neutralization_type
@@ -520,7 +522,11 @@ class NeutralizerAdapter(PipelineStep):
         self.industry_data = industry_data
         self.market_value_data = market_value_data
         self.enabled = enabled
+        self.enable_ar_check = enable_ar_check
         self._neutralizer = None
+
+        # Step 8: AR 后验 R² 历史 (监控用)
+        self._ar_r2_history: list[float] = []
 
         # TD-3 (ADR-018): fit() 预计算的 industry dummies 缓存
         # {date: (dummy_matrix_with_const, common_stocks_Index)}
@@ -690,9 +696,13 @@ class NeutralizerAdapter(PipelineStep):
 
         P0-5: 当 _market_cap_data_cache 非空时, 将 log_mv 加入回归矩阵
         (行业 dummies + 对数市值), 剥离行业暴露和市值暴露.
+
+        Step 8 (P2): enable_ar_check=True 时计算 R²(residuals~dummies) 监控.
         """
         result = pd.DataFrame(index=X.index, columns=X.columns, dtype=float)
         use_mcap = (len(self._market_cap_data_cache) > 0)
+
+        self._ar_r2_history = []
 
         for date in X.index:
             if date not in self._industry_dummies_cache:
@@ -701,7 +711,6 @@ class NeutralizerAdapter(PipelineStep):
             dummy_matrix, common = self._industry_dummies_cache[date]
             date_factor = X.loc[date]
 
-            # P0-5: 加入市值
             if use_mcap and date in self._market_cap_data_cache:
                 mv_series = self._market_cap_data_cache[date]
                 mv_common = mv_series.reindex(common).values
@@ -711,7 +720,6 @@ class NeutralizerAdapter(PipelineStep):
 
             y = date_factor[common].values.astype(float)
 
-            # 维度校验 (transform 数据应与 fit 数据一致)
             if dummy_matrix_ext.shape[0] != len(y):
                 logger.warning(f"日期 {date} transform 数据维度与 fit 不匹配，跳过")
                 result.loc[date, common] = y
@@ -721,9 +729,46 @@ class NeutralizerAdapter(PipelineStep):
                 model = sm.OLS(y, dummy_matrix_ext).fit()
                 residuals = model.resid.values if hasattr(model.resid, 'values') else model.resid
                 result.loc[date, common] = residuals
+
+                # Step 8 (P2): Anderson-Rubin R² 监控
+                if self.enable_ar_check:
+                    ar_r2 = self._compute_ar_r2(residuals, dummy_matrix_ext)
+                    self._ar_r2_history.append(ar_r2)
             except (ValueError, TypeError, RuntimeError) as e:
                 logger.warning(f"日期 {date} 中性化失败: {e}")
                 result.loc[date, common] = y
+
+        # Step 8 (P2): 汇总 AR 后验检验结果
+        if self.enable_ar_check and self._ar_r2_history:
+            avg_r2 = np.mean(self._ar_r2_history)
+            if avg_r2 > 0.01:
+                logger.warning(
+                    f"Anderson-Rubin check: mean R²(residuals~dummies) = {avg_r2:.4f} > 0.01 — "
+                    f"neutralization may be incomplete (non-linear industry effects or model misspecification)"
+                )
+            else:
+                logger.info(
+                    f"Anderson-Rubin check: mean R² = {avg_r2:.4f} — neutralization OK "
+                    f"({len(self._ar_r2_history)} periods)"
+                )
+        return result
+
+    @staticmethod
+    def _compute_ar_r2(residuals: np.ndarray, X: np.ndarray) -> float:
+        """Anderson-Rubin: R²(residuals ~ X) — 应 ≈ 0 若中性化完全.
+
+        O(T·k) where k = X.shape[1] (≤ 30 for A-share industries).
+        """
+        ss_tot = np.var(residuals) * len(residuals)
+        if ss_tot < 1e-12:
+            return 0.0
+        try:
+            beta = np.linalg.lstsq(X, residuals, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            return 1.0
+        y_hat = X @ beta
+        ss_res = np.sum((residuals - y_hat) ** 2)
+        return float(np.clip(1.0 - ss_res / ss_tot, 0.0, 1.0))
 
         # P0-4 audit fix: 不填 0, 保留 NaN (避免静默数据污染 + 与 imputer_off 语义一致)
         # 原逻辑: return result.fillna(0) 将所有未处理位置填 0 → 下游 fake factor 值
