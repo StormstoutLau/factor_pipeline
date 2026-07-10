@@ -228,6 +228,13 @@ class ImputerAdapter(PipelineStep):
             logger.info("ImputerAdapter: enabled=False, 跳过拟合 (identity)")
             return self
 
+        # Step 3: ffill_ts 内置路径 (无需 HierarchicalImputer)
+        if self.strategy == 'ffill_ts':
+            self._imputer = None  # 不使用外部 imputer
+            self.is_fitted = True
+            logger.info("ImputerAdapter: ffill_ts 模式拟合完成 (无外部依赖)")
+            return self
+
         self._imputer = self._imputer_class(strategy=self.strategy)
 
         # 检测缺失信息
@@ -250,6 +257,10 @@ class ImputerAdapter(PipelineStep):
         if not self.is_fitted:
             raise ValueError("插补器未拟合，请先调用 fit()")
 
+        # Step 3: ffill_ts 内置路径 (向量化, 无 for 循环)
+        if self.strategy == 'ffill_ts':
+            return self._transform_ffill_ts(X)
+
         result = self._imputer.transform(X)
 
         # 记录插补统计
@@ -258,6 +269,25 @@ class ImputerAdapter(PipelineStep):
         logger.info(f"插补完成: {missing_before} -> {missing_after} 缺失值")
 
         return result
+
+    def _transform_ffill_ts(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Per-stock ffill → cross-sectional median fill → 0 fill.
+
+        O(T×N) 向量化, 零 for 循环.
+        Rationale: Little & Rubin (2002) §4.3 — fill within-unit first.
+        """
+        # Step 1: per-stock forward fill (沿每列向下)
+        X_filled = X.ffill(axis=0)
+
+        # Step 2: remaining NaN → 当期截面中位数
+        if X_filled.isnull().any().any():
+            row_medians = X_filled.median(axis=1)
+            X_filled = X_filled.T.fillna(row_medians).T
+
+        # Step 3: 如果整行 NaN → 0
+        X_filled = X_filled.fillna(0)
+
+        return X_filled
     
     def get_stats(self) -> Dict[str, Any]:
         stats = super().get_stats()

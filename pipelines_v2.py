@@ -885,7 +885,7 @@ class StaticFactorPipeline(_BaseFactorPipeline):
         super().__init__()
         me = module_enabled or {}
         self.steps = [
-            ('imputer', ImputerAdapter(strategy='auto', enabled=me.get('imputer', True))),
+            ('imputer', ImputerAdapter(strategy='ffill_ts', enabled=me.get('imputer', True))),
             ('outlier', ProcessingAdapter(process_type='outlier', method='percentile',
                                           percentile_lower=1.0, percentile_upper=99.0,
                                           enabled=me.get('winsorizer', True))),
@@ -973,7 +973,7 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
 
         # Step 1: 插补
         logger.info("[DynamicPipeline] Step 1: 缺失值插补")
-        self._imputer = ImputerAdapter(strategy='auto', enabled=self._imputer_enabled)
+        self._imputer = ImputerAdapter(strategy='ffill_ts', enabled=self._imputer_enabled)
         self._imputer.fit(X, **kwargs)
         X_imputed = self._imputer.transform(X, **kwargs)
         self._intermediate_data['imputation'] = X_imputed.copy()
@@ -1080,12 +1080,11 @@ class MixedFactorPipeline(_BaseFactorPipeline):
 
         # Step 1: 插补
         logger.info("[MixedPipeline] Fitting imputer...")
-        self._imputer = ImputerAdapter(strategy='auto', enabled=self._imputer_enabled)
+        self._imputer = ImputerAdapter(strategy='ffill_ts', enabled=self._imputer_enabled)
         self._imputer.fit(X, **kwargs)
         X = self._imputer.transform(X, **kwargs)
         self._intermediate_data['imputation'] = X.copy()
 
-        # Step 2: 温和去极值（3σ缩尾）
         # ABLATION E1: winsorizer 关闭时跳过 (identity)
         if self._winsorizer_enabled:
             logger.info("[MixedPipeline] Applying gentle winsorization...")
