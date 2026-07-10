@@ -29,7 +29,7 @@ class SmartOutlierDetector(BaseTransformer):
     """智能去极值检测器 - 根据数据特征自适应选择方法"""
     
     def __init__(self, method='auto', auto_select=True, max_outlier_frac=0.05, 
-                 adaptive_threshold=True):
+                 adaptive_threshold=True, percentile_lower=1.0, percentile_upper=99.0):
         super().__init__(
             method=method, auto_select=auto_select, 
             max_outlier_frac=max_outlier_frac, adaptive_threshold=adaptive_threshold
@@ -38,6 +38,8 @@ class SmartOutlierDetector(BaseTransformer):
         self.auto_select = auto_select
         self.max_outlier_frac = max_outlier_frac
         self.adaptive_threshold = adaptive_threshold
+        self.percentile_lower = percentile_lower
+        self.percentile_upper = percentile_upper
         
     def fit(self, X: Union[pd.Series, pd.DataFrame, np.ndarray]) -> 'SmartOutlierDetector':
         """拟合去极值参数"""
@@ -65,7 +67,9 @@ class SmartOutlierDetector(BaseTransformer):
             selected_method = self.method
         
         # 计算去极值参数
-        if selected_method == 'quantile':
+        if selected_method == 'percentile':
+            params = self._fit_percentile_method(X_clean)
+        elif selected_method == 'quantile':
             params = self._fit_quantile_method(X_clean)
         elif selected_method == 'z_score':
             params = self._fit_z_score_method(X_clean)
@@ -100,12 +104,14 @@ class SmartOutlierDetector(BaseTransformer):
         method = self.fitted_params['method']
         
         # 处理可能的异常方法名或未知方法
-        valid_methods = ['identity', 'quantile', 'z_score', 'mad', 'iqr', 'adaptive', 'sigmoid_soft']
+        valid_methods = ['identity', 'percentile', 'quantile', 'z_score', 'mad', 'iqr', 'adaptive', 'sigmoid_soft']
         if method not in valid_methods:
             method = 'identity'
         
         if method == 'identity':
             transformed = X_array
+        elif method == 'percentile':
+            transformed = self._apply_percentile_method(X_array)
         elif method == 'quantile':
             transformed = self._apply_quantile_method(X_array)
         elif method == 'z_score':
@@ -478,6 +484,15 @@ class SmartOutlierDetector(BaseTransformer):
         
         # 逆标准化
         return compressed_z * mad_val + median_val
+
+    def _fit_percentile_method(self, X: np.ndarray) -> Dict[str, Any]:
+        lo, hi = np.percentile(X, [self.percentile_lower, self.percentile_upper])
+        return {'lower_bound': float(lo), 'upper_bound': float(hi)}
+
+    def _apply_percentile_method(self, X: np.ndarray) -> np.ndarray:
+        lo = self.fitted_params['lower_bound']
+        hi = self.fitted_params['upper_bound']
+        return np.clip(X, lo, hi)
 
 
 class AdaptiveTransformer(BaseTransformer):

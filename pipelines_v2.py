@@ -886,7 +886,8 @@ class StaticFactorPipeline(_BaseFactorPipeline):
         me = module_enabled or {}
         self.steps = [
             ('imputer', ImputerAdapter(strategy='auto', enabled=me.get('imputer', True))),
-            ('outlier', ProcessingAdapter(process_type='outlier', method='auto',
+            ('outlier', ProcessingAdapter(process_type='outlier', method='percentile',
+                                          percentile_lower=1.0, percentile_upper=99.0,
                                           enabled=me.get('winsorizer', True))),
             # P1: neutralize before transform — 先剥离行业暴露再变换
             ('neutralize', NeutralizerAdapter(enabled=me.get('neutralizer', True),
@@ -1148,16 +1149,17 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         return X
 
     def _compute_winsorize_params(self, X: pd.DataFrame) -> Dict:
-        """计算温和缩尾参数"""
-        means = X.mean()
-        stds = X.std()
+        """计算 1%/99% 分位数缩尾参数 (Bali et al. 2016 行业标准)"""
+        arr = X.values
+        lo = np.nanpercentile(arr, 1.0, axis=0)
+        hi = np.nanpercentile(arr, 99.0, axis=0)
         return {
-            'lower': means - self.mixed_winsor_sigma * stds,
-            'upper': means + self.mixed_winsor_sigma * stds,
+            'lower': pd.Series(lo, index=X.columns),
+            'upper': pd.Series(hi, index=X.columns),
         }
 
     def _apply_winsorize(self, X: pd.DataFrame) -> pd.DataFrame:
-        """应用3σ缩尾"""
+        """应用 1%/99% 分位数缩尾"""
         return X.clip(lower=self._winsorize_params['lower'],
                       upper=self._winsorize_params['upper'],
                       axis=1)
