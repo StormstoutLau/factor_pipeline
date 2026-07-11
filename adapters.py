@@ -526,7 +526,7 @@ class NeutralizerAdapter(PipelineStep):
         self._neutralizer = None
 
         # Step 8: AR 后验 R² 历史 (监控用)
-        self._ar_r2_history: list[float] = []
+        self._ar_r2_history: list[tuple] = []
 
         # TD-3 (ADR-018): fit() 预计算的 industry dummies 缓存
         # {date: (dummy_matrix_with_const, common_stocks_Index)}
@@ -733,23 +733,33 @@ class NeutralizerAdapter(PipelineStep):
                 # Step 8 (P2): Anderson-Rubin R² 监控
                 if self.enable_ar_check:
                     ar_r2 = self._compute_ar_r2(residuals, dummy_matrix_ext)
-                    self._ar_r2_history.append(ar_r2)
+                    self._ar_r2_history.append((float(ar_r2), dummy_matrix_ext.shape[1], len(y)))
             except (ValueError, TypeError, RuntimeError) as e:
                 logger.warning(f"日期 {date} 中性化失败: {e}")
                 result.loc[date, common] = y
 
-        # Step 8 (P2): 汇总 AR 后验检验结果
+        # Step 8 (P2): AR 后验 F-test (替代硬编码 R²>0.01)
         if self.enable_ar_check and self._ar_r2_history:
-            avg_r2 = np.mean(self._ar_r2_history)
-            if avg_r2 > 0.01:
+            from scipy.stats import f as fdist
+            n_periods = len(self._ar_r2_history)
+            n_sig = 0
+            for r2, k_dummy, n_obs in self._ar_r2_history:
+                k = k_dummy - 1
+                n = n_obs
+                if k > 0 and n > k + 1:
+                    f_val = (r2 / k) / ((1 - r2 + 1e-12) / (n - k - 1))
+                    f_crit = fdist.ppf(1 - 0.05 / max(n_periods, 1), k, n - k - 1)
+                    if f_val > f_crit:
+                        n_sig += 1
+            sig_ratio = n_sig / max(n_periods, 1)
+            if sig_ratio > 0.10:
                 logger.warning(
-                    f"Anderson-Rubin check: mean R²(residuals~dummies) = {avg_r2:.4f} > 0.01 — "
-                    f"neutralization may be incomplete (non-linear industry effects or model misspecification)"
+                    f"AR F-test: {n_sig}/{n_periods} periods ({sig_ratio:.1%}) significant "
+                    f"(Bonferroni corrected) — possible incomplete neutralization"
                 )
             else:
                 logger.info(
-                    f"Anderson-Rubin check: mean R² = {avg_r2:.4f} — neutralization OK "
-                    f"({len(self._ar_r2_history)} periods)"
+                    f"AR F-test: {n_sig}/{n_periods} ({sig_ratio:.1%}) significant — neutralization OK"
                 )
         return result
 
@@ -769,10 +779,6 @@ class NeutralizerAdapter(PipelineStep):
         y_hat = X @ beta
         ss_res = np.sum((residuals - y_hat) ** 2)
         return float(np.clip(1.0 - ss_res / ss_tot, 0.0, 1.0))
-
-        # P0-4 audit fix: 不填 0, 保留 NaN (避免静默数据污染 + 与 imputer_off 语义一致)
-        # 原逻辑: return result.fillna(0) 将所有未处理位置填 0 → 下游 fake factor 值
-        return result
     
     def get_stats(self) -> Dict[str, Any]:
         stats = super().get_stats()

@@ -57,12 +57,17 @@ class StatisticalClassifier:
 
         vr_rejects = p_vr < self.alpha  # (N,) bool
 
-        # ── Step 2: Panel AR(1) stationarity (向量化) ──
+        # ── Step 2: Panel AR(1) stationarity (Dickey-Fuller formal test) ──
+        # 替代硬编码 threshold 0.98 → DF τ-statistic (Dickey & Fuller 1979)
         ar1 = self._compute_panel_ar1(arr)  # (N,)
-        se_ar1 = np.sqrt(np.maximum(1 - ar1**2, 1e-6) / T)  # (N,)
-        z_ar1 = (ar1 - 0.98) / se_ar1
-        p_unit_root = norm.cdf(z_ar1)
-        is_stationary = p_unit_root < self.alpha  # (N,) bool
+        se_ar1 = np.sqrt(np.maximum(1 - ar1**2, 1e-6) / T)  # (N,) Bartlett 1946 SE
+        tau_df = (ar1 - 1.0) / se_ar1  # (N,) DF τ-statistic: H₀: ρ=1
+
+        # DF critical value: approximate via Fuller (1976) Table 8.5.2
+        # For no-intercept, no-trend: τ_crit(T) ≈ -1.95 + 4.8/T
+        # Large T approximation (>100): -1.95
+        tau_crit = -1.95 + 4.8 / np.maximum(T, 1)
+        is_stationary = tau_df < tau_crit  # (N,) reject unit root if τ < τ_crit
 
         # ── Step 3: Majority vote ──
         n_static = int(np.sum(vr_rejects & is_stationary))
