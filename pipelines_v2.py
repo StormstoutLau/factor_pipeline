@@ -1212,6 +1212,9 @@ class FactorProcessingPipelineV2:
         self.factor_pipelines: Dict[str, Any] = {}
         self.is_fitted = False
 
+        # P2: 中间数据日志 — 每个因子的每步输出 (transform 后填充)
+        self._intermediate_data: Dict[str, Dict[str, pd.DataFrame]] = {}
+
         # v3.1.0 E1 (§2): 隐藏效应诊断 — 当前激活的解耦器引用 (fit 后填充)
         # 由 diagnose_hidden_effects 委托调用; 未 fit 时为 None.
         # 测试可直接注入已拟合的解耦器以聚焦委托逻辑 (见 E1-T15).
@@ -1444,6 +1447,14 @@ class FactorProcessingPipelineV2:
 
             results[name] = processed
 
+            # P2: 收集中间数据 — 从子管线提升到主管线
+            if hasattr(pipe, '_intermediate_data') and pipe._intermediate_data:
+                self._intermediate_data[name] = {
+                    k: v.copy() for k, v in pipe._intermediate_data.items()
+                    if isinstance(v, pd.DataFrame)
+                }
+                logger.debug(f"  中间数据已记录: {name} ({list(self._intermediate_data[name].keys())})")
+
         # v2.5.0: post_transform_hooks (Layer 2 正交化等, O2.8.3)
         # 半侵入式: per-factor 循环外, return 之前
         for hook in self.post_transform_hooks:
@@ -1460,6 +1471,15 @@ class FactorProcessingPipelineV2:
                       **kwargs) -> Dict[str, pd.DataFrame]:
         """拟合并变换"""
         return self.fit(factor_data, industry_data=industry_data, **kwargs).transform(factor_data, **kwargs)
+
+    def get_intermediate_data(self) -> Dict[str, Dict[str, pd.DataFrame]]:
+        """返回 transform 后每步中间输出的浅拷贝.
+
+        Returns:
+            {factor_name: {step_name: DataFrame}}, e.g.
+            {'momentum_1m': {'imputation': df, 'outlier': df, 'decoupling': df, ...}}
+        """
+        return {k: dict(v) for k, v in self._intermediate_data.items()}
 
     def _create_pipeline(self, pipe_type: str, neutralizer_params: dict,
                          module_enabled: Optional[Dict[str, bool]] = None):
