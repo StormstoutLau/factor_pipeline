@@ -35,6 +35,21 @@ In other words, this is not just code—it is an **epistemological stance**: dis
 
 ## Version Update Summary
 
+### v3.2.0 Academic-Principled Pipeline Refactoring (2026.07, Implemented)
+
+> **Status**: Implemented, 9-step TDD execution plan all complete (168/168 regression)
+> **Docs**: [docs/analysis/academic_literature_decision_criteria.md](docs/analysis/academic_literature_decision_criteria.md) + [docs/analysis/principle_vs_hacking_audit_v2.md](docs/analysis/principle_vs_hacking_audit_v2.md)
+> **Baseline**: 168/168 tests (v3.2.0), principle ratio 68%→88% (+20%)
+
+Systematic audit of 5 core processing modules found ~32% reliance on hardcoded heuristic thresholds (data hacking). A strict statistical decision framework based on 15 academic papers (Box-Cox 1964 / Shapiro-Wilk 1965 / Bali-Engle-Murray 2016 / Lo-MacKinlay 1988 etc.) was defined and implemented via TDD:
+
+**Core changes**:
+- **Winsorizer**: `method='auto'` → `method='percentile'` (1%/99%) — Bali et al. 2016
+- **Transformer**: Heuristic `is_normal` → Shapiro-Wilk formal normality test — Shapiro & Wilk 1965
+- **Imputer**: `strategy='auto'` → `strategy='ffill_ts'` (per-stock ffill → cross-median) — Little & Rubin 2002
+- **Routing**: SOFT routing (weighted blend) → Hard routing + StatisticalClassifier (VR + AR(1)) — Lo & MacKinlay 1988
+- **Neutralization**: Anderson-Rubin posterior R² monitoring (optional, P2) — Anderson & Rubin 1949
+
 ### v3.1.0 Audit-Driven Code Quality Remediation (2026.07, Implemented)
 
 > **Status**: Implemented, audit P0×8 + P1×8 + P2+×15 all fixed, subset regression 754 passed + 1 skipped (zero regression)
@@ -917,13 +932,13 @@ factor_pipeline/
 
 ## Version Information
 
-- **Pipeline Version**: v3.1.0 (audit-driven remediation, implemented)
-- **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
+- **Pipeline Version**: v3.2.0 (academic-principled refactoring, implemented)
+- **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020) + **statistical_classifier** (NEW v3.2.0 ADR-027)
 - **External Data Boundary**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **Test Baseline**: 974 passed + 6 skipped (v3.0.0 T1 full) → audit subset 754 passed + 1 skipped (v3.1.0 E1-E10 + V3.1.0 E1-E6 scope)
+- **Test Baseline**: 168/168 (v3.2.0 full regression)
 - **CI Matrix**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **Build Date**: 2026.07.09
-- **Status**: STABLE (v3.1.0 audit-driven remediation)
+- **Build Date**: 2026.07.10
+- **Status**: STABLE (v3.2.0 academic principles-driven)
 
 ### Version History
 
@@ -942,6 +957,7 @@ factor_pipeline/
 | v3.0.0 T4 | 2026.07.04 | KS migration detection BH-FDR replaces Bonferroni (ADR-002a, E1-E3 all completed): `_ks_migration_significance` three-path dispatch (BH/Bonferroni/none, default BH) + field isolation + backward compat + golden reference verification, Benjamini-Hochberg (1995) FDR control, 934 passed + 6 skipped + 11 subtests |
 | v3.0.0 T1 | 2026.07.04 | Fingerprint dimension expansion to 21-dim (ADR-024, E1-E3 all completed), 974 passed + 6 skipped + 11 subtests |
 | v3.1.0 | 2026.07.09 | Audit-Driven Code Quality Remediation (ADR-026): P0+P1×16 + P2+×15 + spec alignment×11, subset regression 754 passed+1 skipped |
+| v3.2.0 | 2026.07.10 | Academic-Principled Pipeline Refactoring (ADR-027): all `auto` modes→fixed methods, SOFT→hard routing, Shapiro-Wilk/Variance Ratio/Anderson-Rubin formal tests, 9-step TDD (168/168 regression), principles ratio 68%→88% |
 
 ---
 

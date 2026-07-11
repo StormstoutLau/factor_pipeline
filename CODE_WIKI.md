@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.1.0-audit-remediation | **构建日期**: 2026-07-09 | **状态**: STABLE (v3.1.0)
+> **版本**: v3.2.0 | **构建日期**: 2026-07-10 | **状态**: STABLE (学术准则驱动重构完成)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -23,6 +23,7 @@
    - [4.9 `cache.py` — 中间结果缓存](#49-cachepy--中间结果缓存)
    - [4.10 `performance.py` — 性能优化工具](#410-performancepy--性能优化工具)
    - [4.11 `reporting.py` — 执行报告生成](#411-reportingpy--执行报告生成)
+   - [4.12 `modules/statistical_classifier` — 形式统计因子分类器 (NEW v3.2.0)](#412-modulesstatistical_classifier--形式统计因子分类器)
 5. [依赖关系图](#5-依赖关系图)
 6. [外部子模块依赖](#6-外部子模块依赖)
 7. [项目运行方式](#7-项目运行方式)

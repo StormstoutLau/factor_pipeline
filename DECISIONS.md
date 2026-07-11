@@ -1733,7 +1733,72 @@ v3.1.0 完成了内生性诊断框架 (E1-E6) 实施后, 存在大量"代码实�
 
 ---
 
+## ADR-027: 学术准则驱动管线重构 (v3.2.0, 2026-07-10)
+
+### 背景
+
+系统审计 5 个核心处理模块发现 ~32% 依赖硬编码启发式阈值 (数据迁就)。制定基于 15 篇学术文献的严格统计决策准则，分 9 步 TDD 实施。
+
+### 决策
+
+**采用学术准则驱动的固定方法管线，消除所有 `auto` 模式静默策略切换。**
+
+### 9 步执行计划与状态
+
+| # | 任务 | 状态 | 学术依据 |
+|---|------|------|---------|
+| 1 | Winsorizer `method='percentile'` (1%/99%) | ✅ | Bali, Engle & Murray (2016) |
+| 2 | Transformer Shapiro-Wilk 形式检验 | ✅ | Shapiro & Wilk (1965) |
+| 3 | Imputer `strategy='ffill_ts'` | ✅ | Little & Rubin (2002) |
+| 4 | 消融重跑 | ✅ | B3 IC=-0.0067, winsorizer+scaler 显著 |
+| 5 | 全量回归 | ✅ | 168/168 |
+| 6 | A/B 对比 | ✅ | p(HAC)=0.80 |
+| 7 | Hard routing + StatisticalClassifier (VR) | ✅ | Lo & MacKinlay (1988) |
+| 8 | AR 后验检验 (监控) | ✅ | Anderson & Rubin (1949) |
+| 9 | 审计文档 v2.0 | ✅ | 原则评分 68%→88% |
+
+### 核心变更
+
+1. **所有 `method='auto'` → 固定方法**: Winsorizer `percentile(1,99)`, Imputer `ffill_ts`, Transformer `identity` (Shapiro-Wilk p≥0.05)
+2. **SOFT routing → Hard routing**: 因子分类基于 VR test (形式统计检验) 而非指纹 softmax 权重
+3. **每步有学术引文**: 15 篇核心文献 (1964-2016)
+
+### 学术依据 (15 篇)
+
+| 文献 | 用途 |
+|------|------|
+| Box & Cox (1964) | 变换似然比检验 |
+| Shapiro & Wilk (1965) | 正态性形式检验 |
+| Lo & MacKinlay (1988) | Variance Ratio 可预测性 |
+| KPSS (1992) | 平稳性检验 |
+| Fama & French (1993, 2015) | 多因子模型残差中性化 |
+| Jegadeesh & Titman (1993) | 动量因子基准 |
+| Little & Rubin (2002) | 面板缺失插补 ffill |
+| Huber & Ronchetti (2009) | 稳健统计缩尾 |
+| Van Buuren (2011) | MICE 多重插补 |
+| Bali, Engle & Murray (2016) | 1%/99% 缩尾行业标准 |
+| Barroso & Santa-Clara (2015) | 动量波动率时变 |
+| Novy-Marx & Velikov (2016) | 异常因子分类学 |
+| Frisch & Waugh (1933) / Lovell (1963) | FWL 定理 — 中性化顺序等价 |
+| Anderson & Rubin (1949) | 中性化后验检验 |
+
+### 回滚方案
+
+恢复 `method='auto'` 和 SOFT routing 的 git revert。审计文档指出剩余 12% 迁就可进一步消除 (Box-Cox LRT / KPSS)，但当前 trade-off 合理。
+
+---
+
 ## 路线图
+
+### 已完成 (v3.2.0 — 学术准则驱动管线重构)
+
+- [x] Step 1-3: Winsorizer 1%/99% + Transformer Shapiro-Wilk + Imputer ffill_ts (P0)
+- [x] Step 4-6: 消融重跑 + 全量回归 (168/168) + A/B 对比 (p=0.80)
+- [x] Step 7: Hard Routing + StatisticalClassifier (VR + AR(1), Lo-MacKinlay 1988)
+- [x] Step 8: Anderson-Rubin 后验 R² 监控 (P2)
+- [x] Step 9: 审计文档 v2.0 — 原则评分 68%→88%
+- [x] 文档同步: CHANGELOG / DECISIONS (ADR-027) / CODE_WIKI / README / PROJECT_STATUS
+- [x] 15 篇学术文献 (1964-2016) 支撑所有决策点
 
 ### 已完成 (v3.1.0 — Audit-Driven Code Quality Remediation)
 

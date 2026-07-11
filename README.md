@@ -1026,7 +1026,7 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.1.0 (audit-driven remediation, 已实施)
+- **Pipeline 版本**: v3.2.0 (学术准则驱动重构, 已实施)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
 - **测试基线**: 974 passed + 6 skipped (v3.0.0 T1 全量) → audit 后子集 754 passed + 1 skipped (v3.1.0 E1-E10 + V3.1.0 E1-E6 范围)
