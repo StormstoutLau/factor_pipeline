@@ -11,12 +11,12 @@
     "has_industry": true
   },
   "b3_baseline": {
-    "ic_mean": -0.00674197895836762,
-    "ic_std": 0.07460176720800277,
-    "icir": -0.0903729122068892,
-    "sharpe_ls": 0.0027948269062948007,
-    "max_drawdown": -5.992838888888889,
-    "hit_rate": 0.4978165938864629
+    "ic_mean": -0.00026179194073572325,
+    "ic_std": 0.08266188387877568,
+    "icir": -0.0031670212249171967,
+    "sharpe_ls": 0.11092531460738377,
+    "max_drawdown": -5.402899999999997,
+    "hit_rate": 0.5065502183406113
   },
   "l1_contributions": [
     {
@@ -31,42 +31,42 @@
     },
     {
       "module": "imputer",
-      "delta_ic": -0.0014563932782779782,
-      "delta_sharpe": -0.05872898252682044,
-      "ic_impact_pct": -21.6,
-      "sharpe_impact_pct": -2101.3,
+      "delta_ic": 0.00028101336996866246,
+      "delta_sharpe": -0.0022891343314488805,
+      "ic_impact_pct": 107.3,
+      "sharpe_impact_pct": -2.1,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.442,
+      "p_value_bootstrap": 0.234,
       "is_significant": false
     },
     {
       "module": "winsorizer",
-      "delta_ic": -0.003482827143642039,
-      "delta_sharpe": -0.05752411180292134,
-      "ic_impact_pct": -51.7,
-      "sharpe_impact_pct": -2058.2,
+      "delta_ic": -3.4235529712702006e-05,
+      "delta_sharpe": -0.00041295378359590407,
+      "ic_impact_pct": -13.1,
+      "sharpe_impact_pct": -0.4,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.016,
-      "is_significant": true
+      "p_value_bootstrap": 0.684,
+      "is_significant": false
     },
     {
       "module": "scaler",
-      "delta_ic": 0.00863115848819848,
-      "delta_sharpe": 0.12664301102320275,
-      "ic_impact_pct": 128.0,
-      "sharpe_impact_pct": 4531.3,
+      "delta_ic": 0.0,
+      "delta_sharpe": 0.0,
+      "ic_impact_pct": 0.0,
+      "sharpe_impact_pct": 0.0,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.016,
-      "is_significant": true
+      "p_value_bootstrap": 1.0,
+      "is_significant": false
     },
     {
       "module": "neutralizer",
-      "delta_ic": -0.0006179324426577636,
-      "delta_sharpe": -0.02069565645571461,
-      "ic_impact_pct": -9.2,
-      "sharpe_impact_pct": -740.5,
+      "delta_ic": 0.0033192401924873054,
+      "delta_sharpe": 0.002659709874115318,
+      "ic_impact_pct": 1267.9,
+      "sharpe_impact_pct": 2.4,
       "p_value_hac": NaN,
-      "p_value_bootstrap": 0.924,
+      "p_value_bootstrap": 0.578,
       "is_significant": false
     },
     {
@@ -80,6 +80,6 @@
       "is_significant": false
     }
   ],
-  "l1_n_significant": 2,
-  "l2_n_comparisons": 0
+  "l1_n_significant": 0,
+  "l2_n_comparisons": 5
 }
