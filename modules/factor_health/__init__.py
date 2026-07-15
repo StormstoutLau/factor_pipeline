@@ -1,4 +1,4 @@
-"""Layer 3: Factor Health Diagnosis — LGMM Premium Estimation + CUSUM Breakpoint + Multi-State
+"""Layer 3: Factor Health Diagnosis — LGMM Premium Estimation + Chow Breakpoint + Multi-State
 
 Architecture:
   Layer 2 (existing): StatisticalClassifier → raw return type (static/dynamic/mixed)
@@ -9,14 +9,16 @@ Combined diagnosis = return_type × premium_health → actionable governance lab
 Academic foundations:
   - Premium estimation: Fama-MacBeth (1973) cross-sectional β_t + Epanechnikov kernel
     smoothing (local constant nonparametric regression, simplest LGMM variant)
-  - Breakpoint detection: CUSUM (Brown, Durbin & Evans 1975, JRSS-B)
+  - Breakpoint detection: Chow (1960) F-test grid-search on raw β_t
+    (simplified Bai-Perron 1998; CUSUM was tested but abandoned due to F-stat inflation
+    on kernel-smoothed data — see DESIGN_DISCUSSION_V3.3.0 §3.3)
   - Self-similarity: H≈1.14 premium process (LGMM paper empirical finding)
   - Multi-state: AMH (Lo 2004) + factor failure taxonomy (ES/TD/IV/EL, LGMM paper)
 
 Design constraints:
-  - Zero for-loop over stocks: vectorized cross-sectional regression O(T×N)
+  - Per-period cross-sectional regression O(T×N), vectorized per period
   - Kernel smoothing: O(T²) but T≤500 for typical factor history
-  - CUSUM: O(T) recursive residuals
+  - Breakpoint: O(T) grid search, single F-test per candidate split
 """
 import numpy as np
 import pandas as pd

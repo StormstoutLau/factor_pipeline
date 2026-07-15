@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-07-09
+> **更新日期**: 2026-07-15
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -31,14 +31,14 @@ v3.1.0     (2026-07) 内生性诊断 v1.0 (E1-E6, DESIGN_DISCUSSION)  [x]
 v3.1.0          (2026-07) Audit-Driven Code Quality Remediation    [x]
 v3.1.0          (2026-07) P2+ 断言恒真式 + 设计约束 + 端到端        [x]
 v3.2.0     (2026-07) 学术准则驱动管线重构 (P0 固定方法 + P1 Hard Routing) [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.2.0
-v3.2.0 P2  (远期)  AR 后验检验 + 审计文档 v2.0                         [ ]
-v3.0.0 T2  (远期)  流式处理支持                                         [ ]
+v3.3.0     (2026-07) Layer 3 溢价健康诊断双层体系 (6 任务 + FactorHealthDiagnoser) [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.3.0
+v3.4.0     (远期)  内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计           [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.2.0 完成后)
+## §2. 当前待办 (v3.3.0 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -46,27 +46,35 @@ v3.0.0 T2  (远期)  流式处理支持                                         
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### v3.2.0 已实施 — 学术准则驱动重构 (6 steps)
+### v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
-> **审计文档**: [docs/analysis/principle_vs_hacking_audit.md](docs/analysis/principle_vs_hacking_audit.md)
-> **决策文档**: [docs/analysis/academic_literature_decision_criteria.md](docs/analysis/academic_literature_decision_criteria.md)
-> **完成日期**: 2026-07-10
+> **设计文档**: [docs/private/DESIGN_DISCUSSION_V3.3.0.md](private/DESIGN_DISCUSSION_V3.3.0.md)
+> **实施文档**: [docs/EXECUTION_V3.3.0.md](../EXECUTION_V3.3.0.md)
+> **完成日期**: 2026-07-15
 
-- [x] **Step 1**: Winsorizer `method='percentile'` (1%/99%) — Bali et al. 2016 行业标准
-- [x] **Step 2**: Transformer Shapiro-Wilk 形式正态性检验 — Shapiro & Wilk 1965
-- [x] **Step 3**: Imputer `strategy='ffill_ts'` — Little & Rubin 2002
-- [x] **Step 4**: 消融重跑 — winsorizer+scaler 显著 (p_bootstrap=0.016)
-- [x] **Step 5**: 全量回归 — 168/168 passed ✅
-- [x] **Step 7**: Hard Routing + StatisticalClassifier (VR + AR(1)) — Lo & MacKinlay 1988
+- [x] **Task 1**: L2 Routing 消融修复 (P0) — 5 tests, 5 消融配置全部通过
+- [x] **Task 2**: 更多因子测试 (P1) — 10 因子分类验证
+- [x] **Task 3**: 跨市场验证 (P1) — 4 市场 544 因子 100% 一致
+- [x] **Task 4**: 原则评分 92% (P1) — Dickey-Fuller τ + F-test + Bonferroni
+- [x] **Task 5**: 真实数据全量消融 (P1) — B3 IC=-0.0003, Sharpe=0.111
+- [x] **Task 6**: Pipeline 日志 (P2) — `_intermediate_data` + `get_intermediate_data()`
+- [x] **Layer 3 FactorHealthDiagnoser**: PremiumEstimator + BreakpointDetector + FactorHealthDiagnoser
+- [x] 9/9 TDD 测试 + 128/128 全量回归 + A股 3 因子真实验证
+- [x] 兼容性分析: FactorHealthDiagnoser vs FactorHealthMonitor — **互补不合并**
+- [x] 设计文档: [DESIGN_DISCUSSION_V3.3.0.md](private/DESIGN_DISCUSSION_V3.3.0.md) (260行, 7章)
+- [x] 实施文档: [EXECUTION_V3.3.0.md](../EXECUTION_V3.3.0.md) (11章, 附录)
+- [x] 文档 Review: 严格 Review 通过 (9 项问题, 全部修复)
+- [x] 代码修复: 模块 docstring CUSUM→Chow F-test 修正
 
 ### 🟡 P2 — 远期
 
-| # | 任务 | 状态 |
-|---|------|------|
-| Step 8 | Anderson-Rubin 后验检验 (中性化质量监控) | [ ] |
-| Step 9 | 审计文档 v2.0 (修正原则评分 → ~90%) | [ ] |
-| — | 跨市场验证 (港股/US) | [ ] |
-| — | Pipeline 日志记录 intermediate data | [ ] |
+| # | 任务 | 状态 | 来源 |
+|---|------|------|------|
+| — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.1 |
+| — | 多断点支持 (Bai-Perron LWZ) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.2 |
+| — | 面板 HAC 稳健估计 (Newey-West) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.3 |
+| — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
+| — | Anderson-Rubin 后验检验 (中性化质量监控) | [ ] | v3.2.0 Step 8 |
 
 ---
 
@@ -159,14 +167,14 @@ v3.0.0 T2  (远期)  流式处理支持                                         
 
 > **每次发版必须更新以下文件**，对照勾选防止遗漏。
 
-| 文档 | 更新内容 | v3.2.0 |
+| 文档 | 更新内容 | v3.3.0 |
 |------|---------|--------|
 | [CHANGELOG.md](file:///f:/Coding/factor_pipeline/CHANGELOG.md) | 新版本条目 | ✅ |
-| [README.md](file:///f:/Coding/factor_pipeline/README.md) | 版本摘要 + 版本信息块 + 版本历史表 | ✅ |
-| [README.en.md](file:///f:/Coding/factor_pipeline/README.en.md) | 同上（英文） | ✅ |
-| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 | ✅ |
-| [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | 新 ADR + 路线图 `[ ]`→`[x]` | ✅ |
-| [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) | §2 划掉已完成 + §5 追加执行记录 | 本文档 |
+| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 (Layer 2-3 新增) | ✅ |
+| [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | ADR-028 + 路线图 `[ ]`→`[x]` | ✅ |
+| [DESIGN_DISCUSSION_V3.3.0.md](private/DESIGN_DISCUSSION_V3.3.0.md) | 设计讨论文档 (新建) | ✅ |
+| [EXECUTION_V3.3.0.md](../EXECUTION_V3.3.0.md) | 实施文档 (新建) | ✅ |
+| [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) | §2 划掉已完成 + §5 追加执行记录 | ✅ |
 
 ---
 
@@ -174,6 +182,12 @@ v3.0.0 T2  (远期)  流式处理支持                                         
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-07-15 | bcf2cdc | docs(v3.3.0): architecture docs, ADR-028, changelog for Layer 3 FactorHealthDiagnoser |
+| 2026-07-15 | ca7960c | feat(layer3): FactorHealthDiagnoser — LGMM premium + Bai-Perron breakpoint + multi-state diagnosis |
+| 2026-07-15 | d135827 | feat(task5+6): 真实A股全量消融 + Pipeline中间数据日志 (4/4 tests) |
+| 2026-07-15 | 5fb2516 | feat(task3+4): 跨市场验证 (4市场全dynamic一致性=0) + 12%迁就消除 (DF test + F-test) |
+| 2026-07-15 | c40c8ec | feat(task2): 更多因子测试 — 10因子 StatisticalClassifier 分类验证 |
+| 2026-07-15 | d28082a | feat(task1): P0 L2 Routing 消融修复 — 5 tests (TDD), 127/127 回归, 真实消融 L2 全部通过 |
 | 2026-07-10 | add441b | feat(v3.2.0 Step 4+7): 消融重跑 + Hard Routing (StatisticalClassifier) |
 | 2026-07-10 | 7e6bc08 | feat(v3.2.0 Step 3): Imputer ffill_ts 固定 (TDD) |
 | 2026-07-10 | 480cb3d | feat(v3.2.0 Step 2): Transformer Shapiro-Wilk 形式检验 |
