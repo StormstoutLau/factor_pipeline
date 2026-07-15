@@ -232,7 +232,7 @@ class StateConditionedAnalyzer:
         return y_aligned, X_aligned
 
     def factor_return_regression(self, factor_name: str) -> Dict:
-        """轨道 1: R_factor on state (Ferson 2003 条件因子模型)
+        """轨道 1: R_factor on state (Ferson & Schadt 1996 条件绩效评估, JF 51(2), 425-461)
 
         R_factor,t = alpha + Σ β_k * S_{k,t-1} + ε_t
         Newey-West HAC 标准误

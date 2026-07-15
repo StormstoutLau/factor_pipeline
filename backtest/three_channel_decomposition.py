@@ -8,10 +8,24 @@ log|R_factor| ≈ log|IC| + log(σ_factor) + log(σ_R)
 - σ_factor 通道: 因子截面分散度
 - σ_R 通道: 收益截面分散度
 
+数学基础:
+  R_factor = mean(r_top20%) - mean(r_bottom20%)  (分位数多空组合)
+  IC = Spearman rank correlation(factor, returns)
+  σ_factor = std(factor), σ_R = std(returns)
+  近似关系: log|R| ≈ log|IC| + log(σ_factor) + log(σ_R)  (一阶近似, 非恒等式)
+
 五种发散模式:
-- A 一致 / B 放大 / C 仅 R (Moreira-Muir) / D 仅 IC (Lewellen-Nagel-Shanken) / E 符号翻转 (Lewellen-Nagel)
+- A 一致 / B 放大 / C 仅 R (风险补偿主导) / D 仅 IC (因子误设定) / E 符号翻转 (条件可预测性反转)
 
 异方差检验: White (1980)
+
+文献:
+- Grinold (1989): 基本主动管理法则 IR ≈ IC × √(BR), JPM 15(3)
+- Ferson & Schadt (1996): 条件绩效评估, JF 51(2), 425-461
+- Lewellen & Nagel (2006): 条件 CAPM 无法解释异常, JFE 82(2), 289-314
+- Moreira & Muir (2017): 波动率管理组合 (volatility timing), JF 72(4), 1611-1644
+  (注: 模式 C 的 "仅 R" 现象是通用分解现象, 非 Moreira-Muir 的直接贡献;
+   Moreira-Muir 研究的是波动率择时, 而非 R vs IC 的分解)
 """
 from typing import Dict, Any, Optional, Tuple, List
 import logging
@@ -35,7 +49,7 @@ class ThreeChannelDecomposition:
     - σ_R 通道: 收益截面分散度
 
     五种发散模式:
-    - A 一致 / B 放大 / C 仅 R (Moreira-Muir) / D 仅 IC (Lewellen-Nagel-Shanken) / E 符号翻转 (Lewellen-Nagel)
+    - A 一致 / B 放大 / C 仅 R (风险补偿主导) / D 仅 IC (因子误设定) / E 符号翻转 (条件可预测性反转)
 
     异方差检验: White (1980)
     """
@@ -43,9 +57,9 @@ class ThreeChannelDecomposition:
     PATTERN_NAMES: Dict[str, str] = {
         'A': 'consistent',
         'B': 'amplified',
-        'C': 'R_only_moreira_muir',
-        'D': 'IC_only_lewellen_nagel_shanken',
-        'E': 'sign_flip_lewellen_nagel',
+        'C': 'R_only_risk_premium',
+        'D': 'IC_only_misspecification',
+        'E': 'sign_flip_reversal',
     }
 
     def __init__(
@@ -288,9 +302,9 @@ class ThreeChannelDecomposition:
         interpretations = {
             'A': '一致模式: R/IC/σ 同向变化, 标准因子模型成立',
             'B': '放大模式: R > IC, σ_factor 主导, 因子分散度膨胀',
-            'C': '仅 R 模式 (Moreira-Muir 2017): R 变化但 IC 不变, 风险补偿主导',
-            'D': '仅 IC 模式 (Lewellen-Nagel-Shanken): IC 变化但 R 不变, 因子误设定',
-            'E': '符号翻转模式 (Lewellen-Nagel 2006): R 与 IC 反向, 条件可预测性反转',
+            'C': '仅 R 模式: R 变化但 IC 不变, 风险补偿主导 (非 Moreira-Muir 2017 的直接贡献, 该论文研究波动率择时)',
+            'D': '仅 IC 模式: IC 变化但 R 不变, 因子误设定 (非 Lewellen-Nagel-Shanken 的直接贡献, 该论文研究条件 CAPM)',
+            'E': '符号翻转模式: R 与 IC 反向, 条件可预测性反转 (非 Lewellen-Nagel 2006 的直接贡献, 该论文研究条件 CAPM',
             'unclassified': '未分类: 通道趋势组合不属于已知模式',
         }
         return interpretations.get(pattern, '未知模式')
