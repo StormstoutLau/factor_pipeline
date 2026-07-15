@@ -1,5 +1,118 @@
 # 开发日志 (Changelog)
 
+## v3.3.0 — Layer 3 溢价健康诊断双层体系 (已实施, 2026-07-15)
+
+### 概览
+
+在 v3.2.0 学术准则驱动管线重构基础上，完成 6 项改进任务 + 新增 Layer 3 FactorHealthDiagnoser 模块。实现从"因子分类"到"溢价健康诊断"的完整诊断链路：Layer 2 StatisticalClassifier 解决"因子是什么类型" → Layer 3 FactorHealthDiagnoser 解决"因子是否还在定价"。与 Layer 5 FactorHealthMonitor 互补不合并。
+
+**核心产出**:
+- 6 项任务全部完成: L2 Routing 消融修复 + 更多因子测试 + 跨市场验证 + 原则评分 92% + 真实数据全量消融 + Pipeline 日志
+- 1 个新模块: `modules/factor_health/` (3 个核心类: PremiumEstimator + BreakpointDetector + FactorHealthDiagnoser)
+- 1 项新 ADR: ADR-028 (Layer 3 溢价健康诊断)
+- 兼容性分析: FactorHealthDiagnoser vs FactorHealthMonitor — 互补不合并
+- 全量回归: 128/128 passed (v3.2.0 基线) + 9/9 Layer 3 TDD 测试
+- 真实数据验证: A股 3 因子 (momentum=pricing, volatility=review, turnover=review)
+
+### Task 1: L2 Routing 消融修复 (P0)
+
+| 项 | 值 |
+|----|-----|
+| 问题 | 硬路由 (Hard routing) 使用 StatisticalClassifier 的 return_type 替代原 softmax 权重，消融实验配置需更新 |
+| 修复 | 5 个消融配置全部适配新路由，`run_l2` 方法名修正 |
+| 测试 | 5 tests — 5 配置消融全部通过 (B3 IC=-0.0003, Sharpe=0.111) |
+
+### Task 2: 更多因子测试 (P1)
+
+| 项 | 值 |
+|----|-----|
+| 目的 | 验证 StatisticalClassifier 在更多因子上的分类稳定性 |
+| 结果 | 10 因子分类验证通过，分类结果与预期一致 |
+| 脚本 | `scripts/test_more_factors.py` |
+
+### Task 3: 跨市场验证 (P1)
+
+| 项 | 值 |
+|----|-----|
+| 目的 | 验证 StatisticalClassifier 的跨市场迁移性 |
+| 结果 | 4 市场 (A股/美股/港股/加密货币) 544 因子 100% 分类一致 |
+| 脚本 | `scripts/test_cross_market.py` |
+
+### Task 4: 原则评分 92% (P1)
+
+| 项 | 值 |
+|----|-----|
+| 改动 | StatisticalClassifier: AR(1) 平稳性从硬编码 0.98 阈值 → Dickey-Fuller τ 检验 (Dickey & Fuller 1979) |
+| 改动 | adapters.py: AR check 从硬编码 R²>0.01 → F-test + Bonferroni 校正 (Fisher 1924) |
+| 改动 | dead code 清理: adapters.py 移除不可达 `return result` |
+| 原则评分 | 68% → ~92% (+24% 原则比重) |
+| 测试 | 4 tests — DF 检验正确性 + F-test 正确性 |
+
+### Task 5: 真实数据全量消融 (P1)
+
+| 指标 | 值 |
+|------|-----|
+| B3 IC_mean | -0.0003 |
+| B3 Sharpe | 0.111 |
+| winsorizer ΔIC | 显著 |
+| scaler ΔIC | 显著 |
+| 脚本 | `scripts/run_ablation_real.py` |
+
+### Task 6: Pipeline 日志 (P2)
+
+| 项 | 值 |
+|----|-----|
+| 新增字段 | `_intermediate_data: Dict[str, Dict[str, pd.DataFrame]]` |
+| 新增方法 | `get_intermediate_data()` |
+| 改动 | pipelines_v2.py transform 循环收集中间数据 |
+| 测试 | 4 tests — 中间数据记录/可访问性/格式正确性 |
+
+### Layer 3: FactorHealthDiagnoser (新模块)
+
+**模块结构**:
+
+| 类 | 职责 | 行数 | 学术依据 |
+|----|------|------|---------|
+| `PremiumEstimator` | Fama-MacBeth + Epanechnikov 核 → λ̂(t) | ~70 | Fama-MacBeth 1973 + Epanechnikov 1969 |
+| `BreakpointDetector` | 网格搜索 Chow F-test 断点检测 | ~70 | Chow 1960 + Bai-Perron 1998 |
+| `FactorHealthDiagnoser` | 多状态综合诊断 (pricing/recalibrate/monitor/review/suspect) | ~170 | 综合上述 |
+
+**关键设计决策**:
+1. 断点检测用 raw β_t 不用 kernel-smoothed λ̂_t (避免 F 统计量膨胀)
+2. 无 Bonferroni 校正 (对 raw betas 过于保守)
+3. bandwidth=24 (≈2年月度), half_life_threshold=60 (5年)
+
+**与 FactorHealthMonitor 的兼容性**:
+
+| 维度 | FactorHealthMonitor (已有) | FactorHealthDiagnoser (新增) |
+|------|--------------------------|---------------------------|
+| 分析视角 | 横截面快照 | 时间序列过程 |
+| 核心问题 | "因子现在健康吗？" | "溢价什么时候断的？还在定价吗？" |
+| 输入数据 | factor + returns + market_cap + volume | factor + forward_returns + return_type |
+| 方法论 | IC/IR/HHI/换手率 启发式阈值 | Fama-MacBeth + Chow F-test + Epanechnikov 核 |
+| 输出 | FactorHealthReport (0-100分) | dict (分类标签 + 溢价统计) |
+
+**合并决策**: **不合并，保持独立互补**。两个模块正交 — HealthMonitor 在"因子使用"层面，HealthDiagnoser 在"因子定价"层面。建议顺序使用：HealthMonitor 快速筛选 → 对 flagged 因子用 HealthDiagnoser 深度诊断。
+
+**A股 3 因子真实验证**:
+
+| 因子 | premium_health | combined label | 断点位置 | pre_mean | post_mean |
+|------|---------------|----------------|---------|----------|-----------|
+| momentum_1m | stable | pricing | 无 | — | — |
+| volatility_1m | ES | review | t=44 | -0.0038 | 0.0120 |
+| turnover | ES | review | t=133 | -0.00002 | 0.00008 |
+
+### 学术依据
+
+- Fama, E. F., & MacBeth, J. D. (1973). Risk, return, and equilibrium: Empirical tests. *JPE*, 81(3), 607-636.
+- Epanechnikov, V. A. (1969). Non-parametric estimation of a multivariate probability density. *Theory of Probability & Its Applications*, 14(1), 153-158.
+- Chow, G. C. (1960). Tests of equality between sets of coefficients in two linear regressions. *Econometrica*, 28(3), 591-605.
+- Bai, J., & Perron, P. (1998). Estimating and testing linear models with multiple structural changes. *Econometrica*, 66(1), 47-78.
+- Dickey, D. A., & Fuller, W. A. (1979). Distribution of the estimators for autoregressive time series with a unit root. *JASA*, 74(366), 427-431.
+- Fisher, R. A. (1924). On a distribution yielding the error functions of several well known statistics. *Proceedings of the International Congress of Mathematics*, 2, 805-813.
+
+---
+
 ## v3.2.0 — 学术准则驱动管线重构 (已实施, 2026-07-10)
 
 ### 概览

@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.2.0 | **构建日期**: 2026-07-10 | **状态**: STABLE (学术准则驱动重构完成)
+> **版本**: v3.3.0 | **构建日期**: 2026-07-15 | **状态**: STABLE (Layer 3 因子健康诊断双层体系完成)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -23,7 +23,8 @@
    - [4.9 `cache.py` — 中间结果缓存](#49-cachepy--中间结果缓存)
    - [4.10 `performance.py` — 性能优化工具](#410-performancepy--性能优化工具)
    - [4.11 `reporting.py` — 执行报告生成](#411-reportingpy--执行报告生成)
-   - [4.12 `modules/statistical_classifier` — 形式统计因子分类器 (NEW v3.2.0)](#412-modulesstatistical_classifier--形式统计因子分类器)
+   - [4.12 `modules/statistical_classifier` — 形式统计因子分类器 (v3.2.0)](#412-modulesstatistical_classifier--形式统计因子分类器)
+   - [4.13 `modules/factor_health` — Layer 3 溢价健康诊断 (NEW v3.3.0)](#413-modulesfactor_health--layer-3-溢价健康诊断)
 5. [依赖关系图](#5-依赖关系图)
 6. [外部子模块依赖](#6-外部子模块依赖)
 7. [项目运行方式](#7-项目运行方式)
@@ -42,6 +43,8 @@
 | 特性 | 说明 |
 |------|------|
 | **因子指纹诊断层** | 21 维核心指纹 (v3.0.0 T1, 13 维基础 + 8 维尾部依赖/体制转换) + 5 维健康度指标（FactorHealthMonitor），自动诊断因子时序/截面/尾部/体制特征 + 拥挤度/效能/容量/衰减/体制敏感性 |
+| **形式统计因子分类 (v3.2.0)** | StatisticalClassifier: VR (Lo-MacKinlay 1988) + Dickey-Fuller τ 检验 (1979) 向量化面板分类，替代硬编码 0.98 阈值 |
+| **Layer 3 溢价健康诊断 (v3.3.0)** | FactorHealthDiagnoser: Fama-MacBeth + Epanechnikov 核估计 λ̂(t) → Chow F-test 断点检测 → 多状态综合标签 (pricing/recalibrate/monitor/review/suspect) |
 | **自适应因子分类** | 静态 / 动态 / 混合三类自动分流 |
 | **语义-统计融合** | 自然语言构造规则 + 统计指纹的贝叶斯融合 |
 | **三重中性化** | 原始值中性化 → AR 建模 → 残差中性化 |
@@ -122,12 +125,43 @@ v2.0: 智能自适应流程
               │  │  │           └───────────┬───────────┘              │   │  │
               │  │  └───────────────────────┼──────────────────────────┘   │  │
               │  └──────────────────────────┼──────────────────────────────┘  │
-              │                             │ ClassificationResult             │
-              │                             │ • primary_type (STATIC/DYNAMIC/MIXED) │
-              │                             │ • primary_prob, confidence       │
+              │                             │ return_type (static/dynamic/mixed) │
               │                             ▼                                 │
               │  ┌─────────────────────────────────────────────────────────┐  │
-              │  │         Layer 2: 概率加权软路由 (v2.1 P0-1)            │  │
+              │  │    Layer 2: 形式统计分类 (StatisticalClassifier, v3.2.0) │  │
+              │  │                                                         │  │
+              │  │  ┌──────────────────────────────────────────────────┐   │  │
+              │  │  │         StatisticalClassifier                     │   │  │
+              │  │  │  ──────────────────────────────────────────────── │   │  │
+              │  │  │  • classify(factor_data) → return_type            │   │  │
+              │  │  │  • VR (Lo-MacKinlay 1988): 随机游走检验          │   │  │
+              │  │  │  • Dickey-Fuller τ (1979): 平稳性检验             │   │  │
+              │  │  │  • 向量化面板 O(T×N), 零 for 循环               │   │  │
+              │  │  │  输出: static / dynamic / mixed                   │   │  │
+              │  │  └──────────────────────────────────────────────────┘   │  │
+              │  └─────────────────────────────────────────────────────────┘  │
+              │                             │ return_type                      │
+              │                             ▼                                 │
+              │  ┌─────────────────────────────────────────────────────────┐  │
+              │  │  Layer 3: 溢价健康诊断 (FactorHealthDiagnoser, v3.3.0)  │  │
+              │  │                                                         │  │
+              │  │  ┌──────────────────────────────────────────────────┐   │  │
+              │  │  │         FactorHealthDiagnoser                     │   │  │
+              │  │  │  ──────────────────────────────────────────────── │   │  │
+              │  │  │  • diagnose(factor, fwd_returns, return_type)     │   │  │
+              │  │  │  • PremiumEstimator: Fama-MacBeth + Epanechnikov  │   │  │
+              │  │  │    核平滑 → λ̂(t) 时变溢价估计                    │   │  │
+              │  │  │  • BreakpointDetector: 网格搜索 Chow F-test       │   │  │
+              │  │  │    (简化 Bai-Perron) 断点检测                    │   │  │
+              │  │  │  • 指数衰减: 对数线性拟合 → 半衰期估计            │   │  │
+              │  │  │  输出: pricing / recalibrate / monitor /          │   │  │
+              │  │  │        review / suspect                          │   │  │
+              │  │  └──────────────────────────────────────────────────┘   │  │
+              │  └─────────────────────────────────────────────────────────┘  │
+              │                             │ combined label + premium info    │
+              │                             ▼                                 │
+              │  ┌─────────────────────────────────────────────────────────┐  │
+              │  │         Layer 4: 概率加权软路由 (v2.1 P0-1)            │  │
               │  │                                                         │  │
               │  │   _get_pipeline_weights()  →  ClassificationResult      │  │
               │  │                                 ↓                       │  │
@@ -143,7 +177,7 @@ v2.0: 智能自适应流程
               │           │                     │                   │         │
               │           ▼                     ▼                   ▼         │
               │  ┌─────────────────────────────────────────────────────────┐  │
-              │  │          Layer 3: 差异化处理层 (Processing)              │  │
+              │  │          Layer 4: 差异化处理层 (Processing)              │  │
               │  │                                                         │  │
               │  │  ┌─────────────────┐ ┌─────────────────┐ ┌────────────┐ │  │
               │  │  │StaticPipeline   │ │MixedPipeline    │ │Dynamic     │ │  │
@@ -179,7 +213,7 @@ v2.0: 智能自适应流程
               │              ┌───────────────────┘                            │
               │              ▼                                                │
               │  ┌─────────────────────────────────────────────────────────┐  │
-              │  │           Layer 4: 持续监测层 (Monitoring)               │  │
+              │  │           Layer 5: 持续监测层 (Monitoring)               │  │
               │  │                                                         │  │
               │  │  ┌──────────────────────────────────────────────────┐   │  │
               │  │  │         FactorFingerprintMonitor                  │   │  │
@@ -302,9 +336,10 @@ v2.0: 智能自适应流程
 | 层级 | 名称 | 核心类 | 职责 |
 |------|------|--------|------|
 | **Layer 1** | 前置智能层 | `FactorFingerprinter`, `AdaptiveFactorClassifier`, `SemanticStatisticalFusion` | 21维核心指纹提取 (v3.0.0 T1, 含尾部依赖/体制转换) + 4层NLP语义理解 → 贝叶斯融合分类 |
-| **Layer 2** | 类型路由层 | 内嵌于 `FactorProcessingPipelineV2.fit()` | 根据 AR(1) 阈值将因子分流至三条管道 |
-| **Layer 3** | 差异化处理层 | `StaticFactorPipeline`, `DynamicFactorPipeline`, `MixedFactorPipeline` | 按因子类型执行差异化处理流程 |
-| **Layer 4** | 持续监测层 | `FactorFingerprintMonitor`, `FactorHealthMonitor` | 类型迁移检测（多时间尺度）+ 五维健康度评估（拥挤度/效能/容量/衰减/体制敏感性） |
+| **Layer 2** | 形式统计分类层 | `StatisticalClassifier` (v3.2.0) | VR (Lo-MacKinlay 1988) + Dickey-Fuller τ 检验 (1979) 向量化面板分类 → return_type (static/dynamic/mixed) |
+| **Layer 3** | 溢价健康诊断层 | `FactorHealthDiagnoser` (v3.3.0) | Fama-MacBeth + Epanechnikov 核估计 λ̂(t) → Chow F-test 断点检测 → 指数衰减检测 → 多状态综合标签 (pricing/recalibrate/monitor/review/suspect) |
+| **Layer 4** | 差异化处理层 | `StaticFactorPipeline`, `DynamicFactorPipeline`, `MixedFactorPipeline` | 按因子类型执行差异化处理流程 |
+| **Layer 5** | 持续监测层 | `FactorFingerprintMonitor`, `FactorHealthMonitor` | 类型迁移检测（多时间尺度）+ 五维健康度评估（拥挤度/效能/容量/衰减/体制敏感性） |
 | **Adapter** | 适配器层 | `ImputerAdapter`, `ProcessingAdapter`, `NeutralizerAdapter`, `GarchWhiteningAdapter` | 统一封装外部子模块，提供回退方案 |
 | **Infrastructure** | 基础设施层 | `PipelineDAG`, `PipelineCache`, `PipelineOrderValidator`, `reporting`, `performance`, `exceptions` | 顺序校验、缓存、报告、性能、异常 |
 | **Legacy** | v1.0 兼容层 | `FactorProcessingPipeline` | 向后兼容的固定五步法流水线 |
@@ -317,6 +352,8 @@ v2.0: 智能自适应流程
 | **Adapter Layer** | 适配器层 | 统一模块接口 + 回退 | sklearn-style 封装，子模块缺失时自动降级 |
 | **FactorFingerprint** | 前置智能层 | 21 维核心指纹 (v3.0.0 T1: 13 维基础 + 8 维尾部依赖/体制转换) + 5 维健康度 | 从经验判断到数据驱动，覆盖因子全生命周期 |
 | **SemanticStatisticalFusion** | 前置智能层 | 语义 + 统计融合分类 | 先验引导，后验校准，5 种冲突诊断 |
+| **StatisticalClassifier** | 形式统计分类层 | VR + Dickey-Fuller τ 检验向量化面板分类 | 替代硬编码阈值，学术依据 Lo-MacKinlay 1988 + Dickey-Fuller 1979 |
+| **FactorHealthDiagnoser** | 溢价健康诊断层 | λ̂(t) 估计 + 断点检测 + 衰减检测 → 多状态标签 | Fama-MacBeth 1973 + Chow 1960 + Epanechnikov 1969，回答"因子是否还在定价" |
 | **FactorHealthMonitor** | 持续监测层 | 五维正交评估：拥挤度/效能/容量/衰减/体制敏感性 | 量化因子健康度的标准化框架 |
 
 ### v2.5.0 三层架构 (已实施, ADR-020)
@@ -470,7 +507,9 @@ factor_pipeline/
 │   ├── factor_adaptive_winsor/  # 自适应缩尾 (仅 core/ 最小子包化)
 │   ├── factor_imputer/          # 因子插补 (无前瞻偏差)
 │   ├── factor_neutralizer/      # 因子中性化 (38 方法, 仅内化类不实例化)
-│   └── factor_orthogonalizer/   # 多因子横截面正交化 (v2.5.0, ADR-020, 5 种算法 + 滚动/分组/三件套)
+│   ├── factor_orthogonalizer/   # 多因子横截面正交化 (v2.5.0, ADR-020, 5 种算法 + 滚动/分组/三件套)
+│   ├── statistical_classifier/  # 形式统计因子分类 (v3.2.0, VR + Dickey-Fuller τ 检验)
+│   └── factor_health/           # Layer 3 溢价健康诊断 (v3.3.0, Fama-MacBeth + Chow F-test + 指数衰减)
 ├── docs/                        # 文档目录
 │   ├── EXECUTION_V2.5.0.md      # v2.5.0 执行方案 v1.1 (40 深化子章节)
 │   ├── ANALYSIS_V2.5.0.md       # v2.5.0 方案分析报告
@@ -1121,6 +1160,170 @@ else:
 
 - Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *JRSS Series B*, 57(1), 289-300.
 - Dunn, O. J. (1961). Multiple comparisons among means. *JASA*, 56(293), 52-64. (Bonferroni 校正)
+
+---
+
+### 4.12 `modules/statistical_classifier` — 形式统计因子分类器 (v3.2.0)
+
+**文件路径**: [modules/statistical_classifier/__init__.py](file:///f:/Coding/factor_pipeline/modules/statistical_classifier/__init__.py)
+
+向量化面板因子分类器，使用形式统计检验替代硬编码阈值，将因子分为 static/dynamic/mixed 三类。
+
+#### 类: `StatisticalClassifier`
+
+```python
+from factor_pipeline.modules.statistical_classifier import StatisticalClassifier
+
+classifier = StatisticalClassifier(alpha=0.05)
+result = classifier.classify(factor_data)  # factor_data: (T, N) DataFrame
+# result: {'return_type': 'static', 'vr_stat': ..., 'df_stat': ..., ...}
+```
+
+#### 分类规则
+
+| 条件 | return_type | 含义 |
+|------|-------------|------|
+| VR rejects random walk + stationary | `static` | 均值回归，适合静态处理管线 |
+| VR OK (random walk) + stationary | `dynamic` | 随机游走但平稳，适合动态处理管线 |
+| VR OK + non-stationary | `mixed` | 趋势性因子，需混合管线处理 |
+
+#### 学术依据
+
+- **VR (Variance Ratio)**: Lo, A. W., & MacKinlay, A. C. (1988). Stock market prices do not follow random walks: Evidence from a simple specification test. *Review of Financial Studies*, 1(1), 41-66.
+- **Dickey-Fuller τ 检验**: Dickey, D. A., & Fuller, W. A. (1979). Distribution of the estimators for autoregressive time series with a unit root. *JASA*, 74(366), 427-431.
+
+#### 关键设计决策
+
+1. **AR(1) 平稳性**: 从硬编码 0.98 阈值 → Dickey-Fuller τ 检验，临界值 `τ_crit = -1.95 + 4.8/max(T, 1)` (ADF 无截距无趋势项近似)
+2. **向量化**: O(T×N) pandas/numpy，零 for 循环
+3. **v3.2.0 原则评分**: 从 68% → ~92% (DF 检验 + F-test 替代硬编码 R²>0.01)
+
+---
+
+### 4.13 `modules/factor_health` — Layer 3 溢价健康诊断 (v3.3.0)
+
+**文件路径**: [modules/factor_health/__init__.py](file:///f:/Coding/factor_pipeline/modules/factor_health/__init__.py)
+
+Layer 3 因子健康诊断模块，估计时变因子溢价 λ̂(t)，检测结构断点和指数衰减，生成多状态综合标签。与 Layer 5 的 FactorHealthMonitor（五维横截面健康度）互补而非重叠。
+
+#### 架构概览
+
+```
+factor_data + forward_returns + return_type (from Layer 2)
+        │
+        ▼
+┌──────────────────────────────┐
+│     PremiumEstimator          │
+│  Fama-MacBeth + Epanechnikov  │
+│  kernel → λ̂(t)               │
+└──────────────┬───────────────┘
+               │ λ̂(t), β_raw(t)
+               ▼
+┌──────────────────────────────┐    ┌──────────────────────────────┐
+│   BreakpointDetector          │    │   _detect_decay               │
+│ Grid-search Chow F-test       │    │ log-linear fit → half-life    │
+│ on raw β_t (not smoothed)     │    │ on smoothed λ̂(t)              │
+└──────────────┬───────────────┘    └──────────────┬───────────────┘
+               │                                   │
+               ▼                                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              FactorHealthDiagnoser._combine_label()              │
+│         return_type × premium_health → combined label            │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │
+                                  ▼
+    pricing / recalibrate / monitor / review / suspect
+```
+
+#### 三个核心类
+
+**`PremiumEstimator`** — Fama-MacBeth + Epanechnikov 核估计
+
+```python
+estimator = PremiumEstimator(bandwidth=24, min_stocks=30)
+lambda_hat = estimator.estimate(factor, forward_returns)
+# λ̂(t): (T,) array, kernel-smoothed time-varying premium
+# β_raw: (T,) array, raw cross-sectional betas (unsmoothed)
+```
+
+- Step 1: 每期横截面回归 `r_{i,t} = α_t + β_t × factor_{i,t-1} + ε_{i,t}`
+- Step 2: Epanechnikov 核平滑 `λ̂_t = Σ K_h(t-s) × β_s / Σ K_h(t-s)`
+- bandwidth=24 (≈2年月度)，min_stocks=30
+
+**`BreakpointDetector`** — 网格搜索 Chow F-test 断点检测
+
+```python
+detector = BreakpointDetector(alpha=0.05, min_segment=0.15)
+result = detector.detect(beta_raw)  # 注意: 用 raw β_t, 非 kernel-smoothed
+# {
+#   'has_breakpoint': True/False,
+#   'breakpoint_idx': 44,       # 断点位置 (原始索引)
+#   'max_stat': 12.34,          # 最大 F 统计量
+#   'critical': 3.89,           # F 临界值 F(1, T-2, α=0.05)
+#   'pre_mean': -0.0038,        # 断点前均值
+#   'post_mean': 0.0120,        # 断点后均值
+# }
+```
+
+- 关键设计: 使用 raw β_t (非 kernel-smoothed λ̂_t) 避免 F 统计量膨胀
+- 无 Bonferroni 校正 (对 raw betas 过于保守)
+
+**`FactorHealthDiagnoser`** — 多状态综合诊断
+
+```python
+diagnoser = FactorHealthDiagnoser(bandwidth=24, alpha=0.05, half_life_threshold=60)
+result = diagnoser.diagnose(factor, forward_returns, return_type='static')
+# result['diagnosis'] → 'pricing' | 'recalibrate' | 'monitor' | 'review' | 'suspect'
+```
+
+#### 溢价健康状态 (premium_health)
+
+| 状态 | 条件 | 含义 |
+|------|------|------|
+| `stable` | \|Δpremium\| < 0.5σ, 无断点, 无衰减 | 溢价稳定，因子在正常定价 |
+| `ES` | 结构断点检测到 | External Shock: 溢价发生结构性变化 |
+| `TD` | 半衰期 < 60个月 | Time-Varying Decay: 溢价指数衰减 |
+| `ES+TD` | 断点 + 衰减同时存在 | 复合失效: 结构性变化 + 持续衰减 |
+| `suspect` | 数据不足或边界模糊 | 无法判断，需要更多数据 |
+
+#### 综合标签 (return_type × premium_health)
+
+| return_type | premium_health | combined label | 建议动作 |
+|-------------|---------------|----------------|---------|
+| any | stable | `pricing` | 正常使用 |
+| static | ES / ES+TD | `recalibrate` | 趋势因子结构性变化，需重新校准 |
+| dynamic | ES / ES+TD | `monitor` | 均值回归因子，断点后需更多数据观察 |
+| any | ES / ES+TD (mixed) | `review` | 混合因子，需要人工审查 |
+| any | TD | `review` | 任何类型的衰减都需要审查 |
+| any | suspect | `suspect` | 数据不足，暂不判断 |
+
+#### 与 FactorHealthMonitor 的关系
+
+| 维度 | FactorHealthMonitor (Layer 5) | FactorHealthDiagnoser (Layer 3) |
+|------|------------------------------|-------------------------------|
+| **分析视角** | 横截面快照 | 时间序列过程 |
+| **核心问题** | "因子现在健康吗？" | "溢价什么时候断的？还在定价吗？" |
+| **输入数据** | factor + returns + market_cap + volume | factor + forward_returns + return_type |
+| **方法论** | IC/IR/HHI/换手率 等启发式阈值 | Fama-MacBeth + Chow F-test + Epanechnikov 核 |
+| **输出** | FactorHealthReport (0-100分) | dict (分类标签 + 溢价统计) |
+| **使用场景** | 实时监控 (组合经理) | 定期深度诊断 (因子研究员) |
+
+**合并建议**: 不合并。两个模块互补但正交 — HealthMonitor 在"因子使用"层面，HealthDiagnoser 在"因子定价"层面。建议顺序使用：先 HealthMonitor 快速筛选 → 对 flagged 因子用 HealthDiagnoser 深度诊断。
+
+#### 学术依据
+
+- Fama, E. F., & MacBeth, J. D. (1973). Risk, return, and equilibrium: Empirical tests. *Journal of Political Economy*, 81(3), 607-636. — 横截面回归 β_t 估计
+- Epanechnikov, V. A. (1969). Non-parametric estimation of a multivariate probability density. *Theory of Probability & Its Applications*, 14(1), 153-158. — 核平滑
+- Chow, G. C. (1960). Tests of equality between sets of coefficients in two linear regressions. *Econometrica*, 28(3), 591-605. — Chow F-test 断点检测
+- Bai, J., & Perron, P. (1998). Estimating and testing linear models with multiple structural changes. *Econometrica*, 66(1), 47-78. — 多断点检测 (简化实现: 单断点网格搜索)
+
+#### 真实数据验证 (A股 3 因子)
+
+| 因子 | premium_health | combined label | 断点位置 | pre_mean | post_mean |
+|------|---------------|----------------|---------|----------|-----------|
+| momentum_1m | stable | pricing | 无 | — | — |
+| volatility_1m | ES | review | t=44 | -0.0038 | 0.0120 |
+| turnover | ES | review | t=133 | -0.00002 | 0.00008 |
 
 ---
 
@@ -2165,3 +2368,5 @@ class ThresholdDriftMonitor:
 | v2.5.0 | 2026-07-03 | 多因子正交化三层架构 (ADR-020): Layer 1/2/3 分离 + 5 种正交化算法 + VRR/κ/VIF 诊断 + 双重 Lasso (Belloni 2014 PDS) + Rolling + Grouped + TripleChain, 860 passed + 5 skipped |
 | v2.6.0 | 2026-07-04 | 优化器与漂移检测增强 (已实施, ADR-021/022/023, E1-E9 全部完成): 6 项目标函数 (IC-vol-cov-ks-health-redundancy) + 正交化参数搜索空间 (8→11 维) + Layer 3 显著性最终验证 (Belloni 2014 PDS) + ThresholdDriftMonitor (EWMA 衰减检测), 918 passed + 6 skipped + 11 subtests |
 | v3.1.0 | 2026-07-09 | Audit-Driven Code Quality Remediation (ADR-026): P0×8+P1×8+P2+×15 (断言恒真式重写 5 + 设计约束 10 + 端到端 2 + E5 测试 5) + spec 反向对齐 11 项, audit-driven-development 4 阶段流程 (Spec Inventory→Multi-Dimensional Audit→Fix Priority Matrix→Fix Baseline+Tracking), 子集回归 754 passed+1 skipped |
+| v3.2.0 | 2026-07-10 | 学术准则驱动管线重构 (ADR-027): 9 阶段执行 (P0 三步 + P1 Hard routing + StatisticalClassifier + 消融重跑 + 审计文档 v2.0 + AR 后验检验), 原则评分 68%→92%, 168/168 全量回归零回归 |
+| v3.3.0 | 2026-07-15 | **Layer 3 溢价健康诊断双层体系**: 6 项任务完成 (L2 Routing 消融修复 + 更多因子测试 + 跨市场验证 + 原则评分 92% + 真实数据全量消融 + Pipeline 日志) + FactorHealthDiagnoser 新模块 (Fama-MacBeth + Epanechnikov 核 + Chow F-test 断点检测 + 指数衰减 + 多状态综合标签), 9/9 TDD + 128/128 回归, 与 FactorHealthMonitor 互补不合并 |

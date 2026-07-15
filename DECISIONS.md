@@ -1788,7 +1788,100 @@ v3.1.0 完成了内生性诊断框架 (E1-E6) 实施后, 存在大量"代码实�
 
 ---
 
+## ADR-028: Layer 3 溢价健康诊断 (FactorHealthDiagnoser, v3.3.0, 2026-07-15)
+
+### 背景
+
+Layer 2 的 StatisticalClassifier 解决了"因子是什么类型"的问题（static/dynamic/mixed），但无法回答"因子是否还在定价"。LGMM 论文 (LGMM-8.0) 的方法论发现：因子溢价过程 λ̂(t) 存在结构性断点（ES-type failure）和指数衰减（TD-type failure），这些失效模式在横截面健康度指标（IC/IR/拥挤度）中可能被掩盖。
+
+### 决策
+
+**新增 Layer 3 FactorHealthDiagnoser 模块，实现 Fama-MacBeth + Epanechnikov 核估计 λ̂(t) → Chow F-test 断点检测 → 指数衰减检测 → 多状态综合标签。**
+
+与 Layer 5 的 FactorHealthMonitor（五维横截面健康度）**互补不合并**。
+
+### 模块结构
+
+| 模块 | 文件 | 行数 | 测试 |
+|------|------|------|------|
+| `PremiumEstimator` | `modules/factor_health/__init__.py` | ~70 | 3 |
+| `BreakpointDetector` | `modules/factor_health/__init__.py` | ~70 | 2 |
+| `FactorHealthDiagnoser` | `modules/factor_health/__init__.py` | ~170 | 4 |
+| 单元测试 | `tests/unit/test_layer3_factor_health.py` | ~200 | 9 |
+| 真实数据验证 | `scripts/verify_layer3_real.py` | ~80 | A股 3 因子 |
+
+### 核心算法
+
+1. **PremiumEstimator**: 每期横截面回归 `r_{i,t} = α_t + β_t × factor_{i,t-1} + ε_{i,t}` → Epanechnikov 核平滑 β_t → λ̂(t)
+2. **BreakpointDetector**: 网格搜索 Chow F-test 在 raw β_t 上（非 kernel-smoothed，避免 F 统计量膨胀），单断点检测
+3. **指数衰减检测**: 对数线性拟合 `log|λ̂(t)|`，估计半衰期，阈值 60 个月
+4. **多状态综合**: `return_type × premium_health → pricing/recalibrate/monitor/review/suspect`
+
+### 与 FactorHealthMonitor 的兼容性分析
+
+| 维度 | FactorHealthMonitor (Layer 5) | FactorHealthDiagnoser (Layer 3) |
+|------|------------------------------|-------------------------------|
+| 分析视角 | 横截面快照 | 时间序列过程 |
+| 核心问题 | "因子现在健康吗？" | "溢价什么时候断的？还在定价吗？" |
+| 输入数据 | factor + returns + market_cap + volume | factor + forward_returns + return_type |
+| 方法论 | IC/IR/HHI/换手率 等启发式阈值 | Fama-MacBeth + Chow F-test + Epanechnikov 核 |
+| 输出 | FactorHealthReport (0-100分) | dict (分类标签 + 溢价统计) |
+| 学术严谨性 | 中等 | 高 |
+
+### 合并决策：**不合并，保持独立互补**
+
+理由：
+1. 输入数据要求不同（HealthMonitor 需要 market_cap，HealthDiagnoser 需要 forward_returns）
+2. 输出格式不同（dataclass vs dict），合并破坏类型安全
+3. 学术基础不同（启发式 vs 形式计量），合并模糊方法论边界
+4. 使用场景不同（实时监控 vs 定期深度诊断），合并引入不必要耦合
+5. 两个模块正交：一个因子可同时"健康"（不拥挤）但"不定价"（ES 断点），反之亦然
+
+**建议集成方式**: 顺序使用 — HealthMonitor 快速筛选 → 对 flagged 因子用 HealthDiagnoser 深度诊断。两者输出可并行展示。
+
+### 真实数据验证 (A股 3 因子)
+
+| 因子 | premium_health | combined label | 断点位置 | pre_mean | post_mean |
+|------|---------------|----------------|---------|----------|-----------|
+| momentum_1m | stable | pricing | 无 | — | — |
+| volatility_1m | ES | review | t=44 | -0.0038 | 0.0120 |
+| turnover | ES | review | t=133 | -0.00002 | 0.00008 |
+
+### 关键设计决策
+
+1. **断点检测用 raw β_t 不用 kernel-smoothed λ̂_t**: kernel 平滑会人为降低方差，导致 F 统计量膨胀（假阳性）
+2. **无 Bonferroni 校正**: 对 raw β_t 过于保守，单断点网格搜索使用标准 F 临界值
+3. **bandwidth=24**: ≈2 年月度数据，Epanechnikov 核半宽
+4. **half_life_threshold=60**: 5 年半衰期以下视为衰减（TD），以上视为正常波动
+5. **LGMM 方法论启示**: 原始因子收益 ≈ 白噪声与溢价 λ̂(t) 存在断点不矛盾 — 噪声在收益层面，信号在溢价层面（层次化命题）
+
+### 学术依据
+
+- Fama, E. F., & MacBeth, J. D. (1973). Risk, return, and equilibrium: Empirical tests. *JPE*, 81(3), 607-636.
+- Epanechnikov, V. A. (1969). Non-parametric estimation of a multivariate probability density. *Theory of Probability & Its Applications*, 14(1), 153-158.
+- Chow, G. C. (1960). Tests of equality between sets of coefficients in two linear regressions. *Econometrica*, 28(3), 591-605.
+- Bai, J., & Perron, P. (1998). Estimating and testing linear models with multiple structural changes. *Econometrica*, 66(1), 47-78.
+
+### 回滚方案
+
+`modules/factor_health/` 为独立模块，删除目录 + 移除 test 文件即可回滚。不依赖其他模块，不侵入 Pipeline 主循环。
+
+---
+
 ## 路线图
+
+### 已完成 (v3.3.0 — Layer 3 溢价健康诊断双层体系, ADR-028)
+
+- [x] Task 1: L2 Routing 消融修复 (P0) — 5 测试, 真实消融 5 配置全部通过
+- [x] Task 2: 更多因子测试 (P1) — 10 因子分类验证
+- [x] Task 3: 跨市场验证 (P1) — 4 市场 544 因子 100% 一致
+- [x] Task 4: 原则评分 92% (P1) — Dickey-Fuller τ + F-test + Bonferroni
+- [x] Task 5: 真实数据全量消融 (P1) — B3 IC=-0.0003, Sharpe=0.111
+- [x] Task 6: Pipeline 日志 (P2) — `_intermediate_data` + `get_intermediate_data()`
+- [x] Layer 3 FactorHealthDiagnoser: PremiumEstimator + BreakpointDetector + FactorHealthDiagnoser
+- [x] 9/9 TDD 测试 + 128/128 全量回归 + A股 3 因子真实验证
+- [x] 兼容性分析: FactorHealthDiagnoser vs FactorHealthMonitor — **互补不合并**
+- [x] 文档同步: ADR-028 + CODE_WIKI v3.3.0 + CHANGELOG v3.3.0
 
 ### 已完成 (v3.2.0 — 学术准则驱动管线重构)
 
