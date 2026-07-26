@@ -10,7 +10,7 @@ class StatisticalClassifier:
     ┌────────────────────────────────────────────────────────────┐
     │ Test                           │ H₀          │ Reject →   │
     ├────────────────────────────────────────────────────────────┤
-    │ Panel Variance Ratio (q=5)     │ random walk │ predictable│
+    │ Panel Variance Ratio (q=5)     │ uncorrelated│ predictable│
     │ Panel AR(1) stationarity       │ unit root   │ stationary │
     └────────────────────────────────────────────────────────────┘
 
@@ -57,16 +57,16 @@ class StatisticalClassifier:
 
         vr_rejects = p_vr < self.alpha  # (N,) bool
 
-        # ── Step 2: Panel AR(1) stationarity (Dickey-Fuller formal test) ──
-        # 替代硬编码 threshold 0.98 → DF τ-statistic (Dickey & Fuller 1979)
-        ar1 = self._compute_panel_ar1(arr)  # (N,)
-        se_ar1 = np.sqrt(np.maximum(1 - ar1**2, 1e-6) / T)  # (N,) Bartlett 1946 SE
-        tau_df = (ar1 - 1.0) / se_ar1  # (N,) DF τ-statistic: H₀: ρ=1
+        # ── Step 2: Panel AR(1) stationarity (Dickey-Fuller τ test) ──
+        # DF τ = (ρ̂ - 1) / SE(ρ̂), where SE(ρ̂) = sqrt(σ̂² / Σ(x_{t-1}²))
+        # NOT Bartlett (1946) SE = sqrt((1-ρ̂²)/T).
+        # Reference: Dickey & Fuller (1979), JASA, 74(366), 427-431.
+        # Critical values: Fuller (1976) Table 8.5.2, no-intercept case.
+        tau_df = self._compute_panel_df_tau(arr)  # (N,) DF τ
 
-        # DF critical value: approximate via Fuller (1976) Table 8.5.2
-        # For no-intercept, no-trend: τ_crit(T) ≈ -1.95 + 4.8/T
-        # Large T approximation (>100): -1.95
-        tau_crit = -1.95 + 4.8 / np.maximum(T, 1)
+        # Fuller (1976) Table 8.5.2: no-intercept, no-trend
+        # τ_c(0.01)≈-2.58, τ_c(0.05)≈-1.95, τ_c(0.10)≈-1.62
+        tau_crit = self._df_critical_value(T, self.alpha)
         is_stationary = tau_df < tau_crit  # (N,) reject unit root if τ < τ_crit
 
         # ── Step 3: Majority vote ──
@@ -82,17 +82,69 @@ class StatisticalClassifier:
             return 'mixed'
 
     @staticmethod
-    def _compute_panel_ar1(arr: np.ndarray) -> np.ndarray:
-        """向量化面板 AR(1) — OLS: x_t = ρ x_{t-1} + ε_t.
+    def _compute_panel_df_tau(arr: np.ndarray, demean: bool = True) -> np.ndarray:
+        """Vectorized panel Dickey-Fuller τ statistic (no-intercept).
 
-        Returns (N,) ρ per stock.
+        DF regression: Δy_t = γ·y_{t-1} + ε_t, H₀: γ = 0 (ρ = 1).
+        τ = (ρ̂ - 1) / SE(ρ̂), where SE(ρ̂) = sqrt(σ̂² / Σ(x_{t-1}²)).
+
+        This is NOT Bartlett (1946) SE = sqrt((1-ρ̂²)/T).
+        The DF SE uses the actual residual variance, not the asymptotic
+        approximation, and yields the correct DF τ distribution.
+
+        Reference: Dickey & Fuller (1979), JASA, 74(366), 427-431.
+
+        Args:
+            arr: (T, N) panel of factor values.
+            demean: if True, demean each column before computing.
+
+        Returns:
+            tau: (N,) DF τ statistics. H₀: ρ=1 rejected when τ < τ_crit.
         """
         T, N = arr.shape
-        x_t = arr[1:]    # (T-1, N)
-        x_tm1 = arr[:-1]  # (T-1, N)
+        if demean:
+            arr = arr - np.nanmean(arr, axis=0)
+
+        x_t = arr[1:]      # (T-1, N)
+        x_tm1 = arr[:-1]   # (T-1, N)
         valid = ~np.isnan(x_t) & ~np.isnan(x_tm1)
 
+        # ρ̂ = Σ(x_t·x_{t-1}) / Σ(x_{t-1}²) — vectorized, (N,)
         num = np.nansum(x_t * x_tm1 * valid, axis=0)
         den = np.nansum(x_tm1 * x_tm1 * valid, axis=0)
         den = np.maximum(den, 1e-12)
-        return num / den
+        rho = num / den  # (N,)
+
+        # σ̂² = Σ(x_t - ρ̂·x_{t-1})² / (T_eff - 1) — vectorized, (N,)
+        T_eff = np.sum(valid, axis=0)
+        residuals = x_t - rho * x_tm1  # (T-1, N)
+        sigma2 = np.nansum(residuals * residuals * valid, axis=0)
+        sigma2 = sigma2 / np.maximum(T_eff - 1, 1)
+
+        # SE(ρ̂) = sqrt(σ̂² / Σ(x_{t-1}²)) — vectorized, (N,)
+        se_rho = np.sqrt(sigma2 / den)  # (N,)
+
+        # DF τ = (ρ̂ - 1) / SE(ρ̂) — vectorized, (N,)
+        tau = (rho - 1.0) / np.maximum(se_rho, 1e-12)
+        return tau
+
+    @staticmethod
+    def _df_critical_value(T: int, alpha: float = 0.05) -> float:
+        """DF τ critical value for no-intercept, no-trend case.
+
+        Source: Fuller (1976), Introduction to Statistical Time Series,
+        Table 8.5.2, p. 373 (τ̂_μ quantiles).
+
+        Large-T approximations:
+        - α = 0.01: τ_c ≈ -2.58
+        - α = 0.05: τ_c ≈ -1.95
+        - α = 0.10: τ_c ≈ -1.62
+        """
+        if alpha <= 0.01:
+            return -2.58
+        elif alpha <= 0.05:
+            return -1.95
+        elif alpha <= 0.10:
+            return -1.62
+        else:
+            return -1.95  # default to 5%

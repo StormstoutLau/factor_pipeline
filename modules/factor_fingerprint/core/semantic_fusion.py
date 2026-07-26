@@ -23,7 +23,7 @@ import logging
 
 from .fingerprint import FactorFingerprint, FactorType
 from .classifier import ClassificationResult, AdaptiveFactorClassifier, ClassificationConfig
-from .semantic import ExtractedRule, FactorSemanticUnderstanding
+from .semantic import ExtractedRule  # FactorSemanticUnderstanding 延迟导入 (jieba 依赖)
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,7 @@ class SemanticPrior:
         SemanticPrior
             语义先验对象
         """
+        from .semantic import FactorSemanticUnderstanding
         analyzer = FactorSemanticUnderstanding()
         rule = analyzer.understand(description)
         return cls.from_extracted_rule(rule)
@@ -432,10 +433,18 @@ class SemanticStatisticalFusion:
     """
     
     def __init__(self):
-        self.semantic_analyzer = FactorSemanticUnderstanding()
+        self._semantic_analyzer = None  # lazy-loaded (jieba 依赖)
         self.classifier = BayesianFactorClassifier()
         self.arbitrator = ConflictArbitrator()
         logger.info("SemanticStatisticalFusion initialized")
+
+    def _get_semantic_analyzer(self):
+        """Lazy load FactorSemanticUnderstanding to defer jieba import."""
+        if self._semantic_analyzer is not None:
+            return self._semantic_analyzer
+        from .semantic import FactorSemanticUnderstanding
+        self._semantic_analyzer = FactorSemanticUnderstanding()
+        return self._semantic_analyzer
     
     def classify(self,
                  description: str,

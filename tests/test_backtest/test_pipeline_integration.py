@@ -6,6 +6,14 @@ P6: pipeline_integration.py — TDD 测试套件
 """
 
 import unittest
+
+import pytest
+
+# 可选依赖: Factor_Trading_v3_0 (pyproject.toml [backtest] extra)
+# PipelineBacktestRunner.run() 通过 DataBridge.create_dataloader 间接依赖 DataLoaderV3,
+# 未安装 Factor_Trading_v3_0 时跳过整个文件.
+pytest.importorskip("Factor_Trading_v3_0")
+
 import numpy as np
 import pandas as pd
 

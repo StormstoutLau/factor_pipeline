@@ -25,6 +25,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_PARENT = _PROJECT_ROOT.parent  # F:/Coding (避免 types.py 遮蔽 stdlib)
+if str(_PROJECT_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_PARENT))
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -87,9 +90,9 @@ class TestHardcodedPathsConfigurable(unittest.TestCase):
 
         手工验证:
           - data_bridge 模块不再有 _FACTOR_TRADING_PATH 属性 (已删除)
-          - DataLoaderV3 通过 from Factor_Trading_v3_0.core.data_v3 import 直接获取
+          - DataLoaderV3 通过 lazy import 机制获取 (P1.2 重构后)
         """
-        from backtest import data_bridge
+        from factor_pipeline.backtest import data_bridge
 
         # TD-1.4: _FACTOR_TRADING_PATH 已删除 (子包化后不再需要)
         self.assertFalse(
@@ -97,13 +100,20 @@ class TestHardcodedPathsConfigurable(unittest.TestCase):
             "TD-1.4 后 data_bridge 不应有 _FACTOR_TRADING_PATH 属性 (已子包化)"
         )
 
-        # DataLoaderV3 应可通过直接导入获取
+        # P1.2 重构后: DataLoaderV3 改为 lazy import, 通过 _ensure_dataloader 获取
+        # DataBridge 实例化后 _DataLoaderV3 应为 None (尚未 lazy load)
+        bridge = data_bridge.DataBridge()
+        self.assertIsNone(
+            bridge._DataLoaderV3,
+            "lazy import 架构: DataBridge 实例化时 _DataLoaderV3 应为 None"
+        )
+        # _ensure_dataloader 方法应存在
         self.assertTrue(
-            hasattr(data_bridge, 'DataLoaderV3'),
-            "data_bridge 应通过直接导入提供 DataLoaderV3"
+            callable(getattr(bridge, '_ensure_dataloader', None)),
+            "data_bridge 应提供 _ensure_dataloader 方法 (lazy import 机制)"
         )
 
-        print(f"[PASS] data_bridge 直接导入 DataLoaderV3 (TD-1.4, ADR-016)")
+        print(f"[PASS] data_bridge lazy import DataLoaderV3 (P1.2 + TD-1.4, ADR-016)")
 
     # ==================================================================
     # 测试 3: data_bridge 环境变量覆盖 (子进程)
@@ -145,8 +155,8 @@ class TestHardcodedPathsConfigurable(unittest.TestCase):
                 sys.executable, "-c",
                 f"""
 import sys
-sys.path.insert(0, r'{_PROJECT_ROOT}')
-from backtest import cached_data_loader
+sys.path.insert(0, r'{_PROJECT_PARENT}')
+from factor_pipeline.backtest import cached_data_loader
 import inspect
 src = inspect.getsource(cached_data_loader._default_price_query_factory)
 # P1.2: 应使用直接导入

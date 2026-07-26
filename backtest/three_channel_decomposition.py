@@ -341,13 +341,15 @@ class ThreeChannelDecomposition:
 
         residual = series['log_residual']
 
-        # White 检验: 残差的方差是否随时间变化
+        # White (1980) 检验: 残差平方对原始回归量及其平方回归
+        # H₀: 同方差, H₁: 异方差
+        residual_sq = residual.values ** 2
         x = np.arange(len(residual))
         X = sm.add_constant(np.column_stack([x, x ** 2]))
         white_stat = 0.0
         white_pvalue = 1.0
         try:
-            model = sm.OLS(residual.values, X).fit()
+            model = sm.OLS(residual_sq, X).fit()
             n = len(residual)
             r_squared = model.rsquared
             white_stat = n * r_squared

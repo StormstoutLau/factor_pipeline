@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from modules.factor_fingerprint import FactorFingerprint
-from backtest.fingerprint_performance_logger import (
+from factor_pipeline.backtest.fingerprint_performance_logger import (
     FingerprintPerformanceLogger,
     FINGERPRINT_FIELDS,
     PERFORMANCE_FIELDS,

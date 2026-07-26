@@ -16,7 +16,7 @@ TDD Red 阶段: 测试先于实现 (本测试是 Monte Carlo 验证, 实现即 C
 import pytest
 import numpy as np
 
-from backtest.cusum_drift_monitor import CUSUMDriftMonitor
+from factor_pipeline.backtest.cusum_drift_monitor import CUSUMDriftMonitor
 
 
 # ============================================================

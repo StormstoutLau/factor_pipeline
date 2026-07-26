@@ -23,7 +23,7 @@ from unittest.mock import patch, MagicMock
 
 def make_synthetic_state_df(n_obs: int = 300, seed: int = 42) -> pd.DataFrame:
     """生成 12 列合成状态变量 DataFrame (用于 MarkovRegimeIdentifier 测试)"""
-    from backtest.state_data_loader import StateDataLoader
+    from factor_pipeline.backtest.state_data_loader import StateDataLoader
     rng = np.random.default_rng(seed)
     dates = pd.date_range('2020-01-01', periods=n_obs, freq='B')
     data = {}
@@ -41,7 +41,7 @@ class TestStateDataLoader:
 
     def test_01_disabled_no_op(self):
         """enable=False 时 fit 是 no-op, load 返回空 DataFrame"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(enable=False)
         result = loader.fit('2020-01-01', '2020-12-31')
         assert result is loader  # fit returns self
@@ -54,7 +54,7 @@ class TestStateDataLoader:
 
     def test_02_variable_categories_complete(self):
         """5 类共 12 变量"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         assert len(StateDataLoader.ALL_VARIABLES) == 12
         assert len(StateDataLoader.VARIABLE_CATEGORIES) == 5
         expected_cats = {
@@ -67,7 +67,7 @@ class TestStateDataLoader:
 
     def test_03_get_variable_metadata_structure(self):
         """元数据含 category/definition/source"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(
             enable=True, source='synthetic', min_observations=100,
         )
@@ -82,7 +82,7 @@ class TestStateDataLoader:
 
     def test_04_missing_rate_threshold(self):
         """缺失率 > 5% 标记为不可靠"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(
             enable=True, source='synthetic',
             min_observations=100, max_missing_rate=0.05,
@@ -99,7 +99,7 @@ class TestStateDataLoader:
 
     def test_05_get_diagnostics_structure(self):
         """诊断含 n_observations/missing_rates/unreliable_variables"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(
             enable=True, source='synthetic', min_observations=100,
         )
@@ -117,7 +117,7 @@ class TestStateDataLoader:
 
     def test_06_min_observations_enforced(self):
         """观测不足时报错 (min_observations 太大)"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(
             enable=True, source='synthetic',
             min_observations=10000,  # far exceeds synthetic data length
@@ -127,7 +127,7 @@ class TestStateDataLoader:
 
     def test_07_akshare_unavailable_fallback(self):
         """akshare 不可用时降级为合成数据"""
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(
             enable=True, source='akshare', min_observations=100,
         )
@@ -155,7 +155,7 @@ class TestStateDataLoader:
         - _fallback_used 为 True
         - 数据完整 (12 列, 无 NaN, 因为合成数据本身就是完整的)
         """
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
         loader = StateDataLoader(
             enable=True, source='akshare', min_observations=100,
         )
@@ -183,7 +183,7 @@ class TestStateDataLoader:
         - _fallback_used 为 False (因为至少 1 个成功)
         - 12 列完整, 无全 NaN 列
         """
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
 
         fake_ak = MagicMock()
         dates = pd.bdate_range('2020-01-01', '2020-12-31')
@@ -250,7 +250,7 @@ class TestStateDataLoader:
         - _fallback_used 为 False
         - 12 列完整, 全为真实数据 (== 42.0)
         """
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
 
         fake_ak = MagicMock()
         dates = pd.bdate_range('2020-01-01', '2020-12-31')
@@ -291,7 +291,7 @@ class TestStateDataLoader:
         - _fallback_used 为 True (因为没有任何成功列)
         - 12 列合成数据完整
         """
-        from backtest.state_data_loader import StateDataLoader
+        from factor_pipeline.backtest.state_data_loader import StateDataLoader
 
         fake_ak = MagicMock()
 

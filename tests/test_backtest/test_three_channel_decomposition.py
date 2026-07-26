@@ -88,7 +88,7 @@ class TestThreeChannelDecomposition:
 
     def test_01_fit_returns_self(self):
         """fit 返回 self"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         result = decomposer.fit(fr, fwd)
@@ -97,7 +97,7 @@ class TestThreeChannelDecomposition:
 
     def test_02_compute_channel_series_length(self):
         """四通道序列长度一致"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -109,7 +109,7 @@ class TestThreeChannelDecomposition:
 
     def test_03_decompose_returns_all_channels(self):
         """decompose 返回 9 个序列 (4 原始 + 4 对数 + 1 残差)"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -127,7 +127,7 @@ class TestThreeChannelDecomposition:
 
         用构造的精确乘法关系 R = IC * σ_f * σ_R 验证 log 线性化数学.
         """
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -147,7 +147,7 @@ class TestThreeChannelDecomposition:
 
     def test_05_classify_pattern_A_consistent(self):
         """构造一致模式 (R↑, IC↑, σ_f↑, σ_R↑) → pattern A"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -163,7 +163,7 @@ class TestThreeChannelDecomposition:
 
     def test_06_classify_pattern_B_amplified(self):
         """构造放大模式 (R↑, IC→, σ_f↑) → pattern B"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -178,7 +178,7 @@ class TestThreeChannelDecomposition:
 
     def test_07_classify_pattern_C_R_only(self):
         """构造仅 R 模式 (R↑, IC→, σ_f→, σ_R↑) → pattern C (Moreira-Muir)"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -193,7 +193,7 @@ class TestThreeChannelDecomposition:
 
     def test_08_classify_pattern_D_IC_only(self):
         """构造仅 IC 模式 (R→, IC↑, σ_f↓) → pattern D (Lewellen-Nagel-Shanken)"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -208,7 +208,7 @@ class TestThreeChannelDecomposition:
 
     def test_09_classify_pattern_E_sign_flip(self):
         """构造符号翻转 (R↑, IC↓) → pattern E (Lewellen-Nagel)"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -223,7 +223,7 @@ class TestThreeChannelDecomposition:
 
     def test_10_test_heteroskedasticity_returns_pvalue(self):
         """异方差检验返回 p 值 ∈ [0, 1]"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -235,7 +235,7 @@ class TestThreeChannelDecomposition:
 
     def test_11_get_diagnostics_fields(self):
         """诊断含 n_factors/n_decompositions"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=True)
         decomposer.fit(fr, fwd)
@@ -247,7 +247,7 @@ class TestThreeChannelDecomposition:
 
     def test_12_disabled_no_op(self):
         """enable=False 时 decompose 返回空"""
-        from backtest.three_channel_decomposition import ThreeChannelDecomposition
+        from factor_pipeline.backtest.three_channel_decomposition import ThreeChannelDecomposition
         fr, fwd = make_e9_data()
         decomposer = ThreeChannelDecomposition(enable=False)
         decomposer.fit(fr, fwd)

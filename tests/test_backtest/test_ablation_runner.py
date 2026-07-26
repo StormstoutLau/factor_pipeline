@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-from backtest.ablation_runner import (
+from factor_pipeline.backtest.ablation_runner import (
     ledoit_wolf_hac_test,
     mean_diff_hac_statsmodels,
     circular_block_bootstrap,
@@ -31,7 +31,7 @@ from backtest.ablation_runner import (
     AblationComparison,
     AblationRunner,
 )
-from backtest.multiple_testing import apply_bh_fdr
+from factor_pipeline.backtest.multiple_testing import apply_bh_fdr
 
 
 # =============================================================================
@@ -805,7 +805,7 @@ class TestAblationCompare:
         results = [_make_synthetic_result(name=f'r{i}', seed=i) for i in range(3)]
         reference = _make_synthetic_result(name='ref', seed=99)
 
-        with patch('backtest.ablation_runner.apply_bh_fdr',
+        with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
                    wraps=apply_bh_fdr) as mock_bh:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called, "compare_all should call apply_bh_fdr"
@@ -1051,7 +1051,7 @@ class TestL1Ablation:
             for i in range(5)
         ]
 
-        with patch('backtest.ablation_runner.apply_bh_fdr',
+        with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
                    wraps=apply_bh_fdr) as mock_bh:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called, "compare_all should call apply_bh_fdr"
@@ -1186,7 +1186,7 @@ class TestL2Ablation:
             _make_layer_result('L2_random_routing', 'L2', seed=4),
         ]
 
-        with patch('backtest.ablation_runner.apply_bh_fdr',
+        with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
                    wraps=apply_bh_fdr) as mock_bh:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called
@@ -1347,7 +1347,7 @@ class TestL4OAT:
             for i, m in enumerate(['3sigma', 'mad', 'winsorize_1pct', 'winsorize_5pct'])
         ]
 
-        with patch('backtest.ablation_runner.apply_bh_fdr',
+        with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
                    wraps=apply_bh_fdr) as mock_bh:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called
@@ -1422,7 +1422,7 @@ class TestL4OAT:
             results.append(_make_layer_result(f'L4_nontrivial_{i}', 'L4',
                                                seed=i + 10))
 
-        with patch('backtest.ablation_runner.apply_bh_fdr',
+        with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
                    wraps=apply_bh_fdr) as mock_bh:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called
@@ -1481,7 +1481,7 @@ class TestL3Ablation:
         """correction_method 覆盖 benjamini_hochberg / bonferroni / none"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
         # 直接验证 apply_correction 的检测力差异
-        from backtest.multiple_testing import (
+        from factor_pipeline.backtest.multiple_testing import (
             apply_bh_fdr, apply_bonferroni, apply_correction,
         )
         p_values = [0.01, 0.02, 0.03, 0.04, 0.50]
@@ -1541,7 +1541,7 @@ class TestL3Ablation:
             for i in range(6)
         ]
 
-        with patch('backtest.ablation_runner.apply_bh_fdr',
+        with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
                    wraps=apply_bh_fdr) as mock_bh:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called

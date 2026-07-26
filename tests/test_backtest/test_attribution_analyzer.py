@@ -11,7 +11,7 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from backtest.attribution_analyzer import (
+from factor_pipeline.backtest.attribution_analyzer import (
     AttributionAnalyzer,
     FINGERPRINT_FIELDS,
 )

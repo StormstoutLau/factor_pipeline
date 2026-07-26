@@ -23,6 +23,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
+# 可选依赖: optuna (pyproject.toml [optimizer] extra)
+# 所有测试均依赖 EndToEndThresholdOptimizer, 未安装 optuna 时跳过整个文件.
+pytest.importorskip("optuna")
+
 from factor_pipeline.optimizer import EndToEndThresholdOptimizer, DEFAULT_SEARCH_SPACE
 
 

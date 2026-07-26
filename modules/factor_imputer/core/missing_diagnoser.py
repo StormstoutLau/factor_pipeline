@@ -149,8 +149,8 @@ class MissingTypeDiagnoser(BaseDiagnoser):
         """检测缺失机制"""
         missing_mask = data.isnull()
 
-        # 1. Little's MCAR检验（简化版本）
-        mcar_test = self._little_mcar_test(data, missing_mask)
+        # 1. Little's MCAR检验 (EM-based χ²)
+        mcar_test = self._little_mcar_test(data.values)
 
         # 2. 观察数据与缺失模式的相关性
         correlation_analysis = self._missing_data_correlation(data, missing_mask)
@@ -321,46 +321,170 @@ class MissingTypeDiagnoser(BaseDiagnoser):
             "is_random_missing": random_score > 0.7,
         }
 
-    def _little_mcar_test(self, data: pd.DataFrame, missing_mask: pd.DataFrame) -> Dict[str, Any]:
-        """Little's MCAR检验（简化版本）"""
-        # 这里实现简化版本的Little检验
-        # 完整的Little检验需要更复杂的计算
+    def _little_mcar_test(self, data: np.ndarray) -> Dict[str, Any]:
+        """Little (1988) MCAR test: EM-based chi-squared test.
 
-        # 计算观察数据的均值和协方差
-        observed_data = data.dropna()
+        Little, R. J. A. (1988). "A Test of Missing Completely at Random
+        for Multivariate Data with Missing Values."
+        JASA, 83(404), 1198-1202.
 
-        if len(observed_data) < 10:
-            return {"test_statistic": np.nan, "p_value": np.nan, "is_mcar": False}
+        Algorithm:
+        1. EM estimation of μ̂, Σ̂
+        2. Group observations by missingness pattern (optimized: pattern grouping)
+        3. For each pattern g, d²_g = n_g · (ȳ_g - μ̂_g)′ Σ̂_g⁻¹ (ȳ_g - μ̂_g)
+        4. d² = Σ_g d²_g ~ χ²(Σ_g k_g - k) under MCAR
 
-        # 简化的检验：检查不同缺失模式的组间均值差异
-        missing_patterns = self._identify_missing_patterns(missing_mask)
+        Args:
+            data: (T, N) numpy array with NaN for missing values.
 
-        if len(missing_patterns) < 2:
-            return {"test_statistic": 0, "p_value": 1.0, "is_mcar": True}
+        Returns:
+            dict with 'statistic', 'p_value', 'df', 'patterns', 'is_mcar'
+        """
+        from scipy.stats import chi2
 
-        # ANOVA检验
-        group_means = []
-        group_sizes = []
+        T, N = data.shape
+        if N < 2:
+            return {'statistic': np.nan, 'p_value': np.nan, 'df': 0, 'patterns': 0, 'is_mcar': False}
 
-        for pattern in missing_patterns:
-            pattern_data = data[pattern]
-            if len(pattern_data) > 0:
-                group_means.append(pattern_data.mean().mean())
-                group_sizes.append(len(pattern_data))
+        # Step 1: EM estimation of μ, Σ
+        mu, sigma = self._em_estimate(data)
 
-        if len(group_means) < 2:
-            return {"test_statistic": 0, "p_value": 1.0, "is_mcar": True}
+        # Step 2: Identify missingness patterns (optimized: group by pattern)
+        patterns = self._group_by_missingness(data)
 
-        # 简单的F检验
-        overall_mean = np.mean(group_means)
-        between_group_var = np.sum(group_sizes * (np.array(group_means) - overall_mean) ** 2)
+        if len(patterns) < 2:
+            return {'statistic': 0.0, 'p_value': 1.0, 'df': 0, 'patterns': 1, 'is_mcar': True}
 
-        f_statistic = between_group_var / (len(group_means) - 1) if between_group_var > 0 else 0
+        # Step 3: d² statistic
+        d2 = 0.0
+        total_df = 0
+        for mask_tuple, indices in patterns.items():
+            if len(indices) < 2:
+                continue
+            group_data = data[indices]
+            nan_mask = np.array(mask_tuple)  # True = NaN (missing)
+            observed_cols = np.where(~nan_mask)[0]  # not NaN
+            if len(observed_cols) == 0:
+                continue
 
-        # 简化的p值计算
-        p_value = 1 / (1 + f_statistic)  # 简化版本
+            mu_g = mu[observed_cols]
+            sigma_g = sigma[np.ix_(observed_cols, observed_cols)]
 
-        return {"test_statistic": f_statistic, "p_value": p_value, "is_mcar": p_value > 0.05}
+            # Group mean of observed variables
+            y_bar_g = np.nanmean(group_data[:, observed_cols], axis=0)
+
+            # Mahalanobis distance
+            try:
+                sigma_inv = np.linalg.inv(sigma_g)
+                diff = y_bar_g - mu_g
+                d2 += len(indices) * diff @ sigma_inv @ diff
+            except np.linalg.LinAlgError:
+                d2 += 0  # Skip singular covariance
+
+            total_df += len(observed_cols)
+
+        total_df -= N  # Subtract total parameters
+        total_df = max(total_df, 1)
+
+        p_value = float(1 - chi2.cdf(d2, total_df))
+        return {
+            'statistic': float(d2),
+            'p_value': p_value,
+            'df': total_df,
+            'patterns': len(patterns),
+            'is_mcar': p_value > 0.05,
+        }
+
+    def _em_estimate(
+        self, data: np.ndarray, max_iter: int = 100, tol: float = 1e-6
+    ):
+        """EM algorithm for multivariate normal mean and covariance
+        with missing data. Optimized with missingness pattern grouping.
+
+        Complexity: O(max_iter × P × N³) where P = number of distinct
+        missingness patterns (typically P << T).
+
+        Args:
+            data: (T, N) numpy array with NaN for missing values.
+            max_iter: maximum EM iterations.
+            tol: convergence tolerance for mean change.
+
+        Returns:
+            mu: (N,) estimated mean vector.
+            sigma: (N, N) estimated covariance matrix.
+        """
+        T, N = data.shape
+        # Initialize with complete-case estimates
+        mu = np.nanmean(data, axis=0)
+        # Handle all-NaN columns
+        mu = np.where(np.isnan(mu), 0.0, mu)
+        sigma = np.ma.cov(np.ma.masked_invalid(data), rowvar=False).data
+        sigma = np.nan_to_num(sigma, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # 识别缺失模式 → 分组 (优化: 避免逐观测求逆)
+        pattern_groups = self._group_by_missingness(data)
+
+        for iteration in range(max_iter):
+            mu_old = mu.copy()
+
+            # E-step: 按模式分组计算，非逐观测
+            data_imputed = data.copy()
+            for mask_tuple, indices in pattern_groups.items():
+                nan_mask = np.array(mask_tuple)  # True = NaN (missing)
+                observed = ~nan_mask  # True = observed (not NaN)
+                missing = nan_mask   # True = missing (NaN)
+
+                if not observed.any() or not missing.any():
+                    continue
+
+                sigma_oo = sigma[np.ix_(observed, observed)]
+                sigma_mo = sigma[np.ix_(missing, observed)]
+
+                try:
+                    sigma_oo_inv = np.linalg.inv(sigma_oo)
+                    beta = sigma_mo @ sigma_oo_inv  # 一次求逆，全体复用
+                except np.linalg.LinAlgError:
+                    beta = np.zeros((missing.sum(), observed.sum()))
+
+                # 对所有同模式观测批量计算
+                group_data = data[indices]
+                diff = group_data[:, observed] - mu[observed]  # (n_group, n_obs)
+                imputed = mu[missing] + diff @ beta.T  # (n_group, n_miss)
+                data_imputed[np.ix_(indices, np.where(missing)[0])] = imputed
+
+            # M-step: update μ, Σ
+            mu_new = np.mean(data_imputed, axis=0)
+            sigma_new = np.cov(data_imputed, rowvar=False)
+
+            # 收敛检查
+            if np.max(np.abs(mu_new - mu_old)) < tol:
+                mu, sigma = mu_new, sigma_new
+                break
+            mu, sigma = mu_new, sigma_new
+
+        return mu, sigma
+
+    @staticmethod
+    def _group_by_missingness(data: np.ndarray) -> dict:
+        """Group observations by missingness pattern.
+
+        Maps each distinct missingness pattern (tuple of booleans) to
+        the indices of observations sharing that pattern.
+
+        Args:
+            data: (T, N) numpy array with NaN values.
+
+        Returns:
+            dict mapping pattern tuple → numpy array of indices.
+        """
+        pattern_map = {}
+        mask = np.isnan(data)
+        for i in range(data.shape[0]):
+            pattern = tuple(mask[i].tolist())
+            if pattern not in pattern_map:
+                pattern_map[pattern] = []
+            pattern_map[pattern].append(i)
+        return {k: np.array(v) for k, v in pattern_map.items()}
 
     def _missing_data_correlation(self, data: pd.DataFrame, missing_mask: pd.DataFrame) -> Dict[str, Any]:
         """分析观察数据与缺失模式的相关性"""

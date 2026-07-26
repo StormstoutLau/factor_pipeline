@@ -18,8 +18,8 @@ import inspect
 import pytest
 import numpy as np
 
-from backtest.multiple_testing import apply_bh_fdr, apply_by_fdr
-from backtest.specification_logger import (
+from factor_pipeline.backtest.multiple_testing import apply_bh_fdr, apply_by_fdr
+from factor_pipeline.backtest.specification_logger import (
     SpecificationLogger,
     PreRegistration,
     SpecificationCurve,

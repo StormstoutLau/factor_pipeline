@@ -11,7 +11,7 @@
 """
 import pytest
 import numpy as np
-from backtest.multiple_testing import PowerCurveAnalyzer
+from factor_pipeline.backtest.multiple_testing import PowerCurveAnalyzer
 
 
 class TestPowerCurveAnalyzer:

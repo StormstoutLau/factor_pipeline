@@ -10,6 +10,13 @@ P3 Phase 4: 集成测试 + 手工校验 — 端到端阈值优化
 """
 
 import unittest
+
+import pytest
+
+# 可选依赖: optuna (pyproject.toml [optimizer] extra)
+# 所有测试均依赖 EndToEndThresholdOptimizer, 未安装 optuna 时跳过整个文件.
+pytest.importorskip("optuna")
+
 import numpy as np
 import pandas as pd
 

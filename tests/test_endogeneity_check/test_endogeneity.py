@@ -66,22 +66,26 @@ class TestS1MissingnessMechanism:
         assert result['missingness_mechanism'] == 'MCAR'
         assert 0.0 <= result['mnar_risk_prior'] <= 1.0
 
-    def test_E3_T02_missingness_mnar(self):
-        """E3-T02: MNAR 数据 → mechanism='MNAR'."""
+    def test_E3_T02_missingness_mar(self):
+        """E3-T02: MAR 数据 (缺失依赖可观测值) → mechanism='MAR'.
+
+        P1-7 fix: 缺失概率依赖因子值本身是 MAR (Missing At Random),
+        而非 MNAR。MNAR 需要缺失依赖不可观测的缺失值本身。
+        """
         rng = np.random.default_rng(7)
         n_t, n_n = 60, 80
         f = rng.standard_normal((n_t, n_n))
-        # 缺失概率依赖因子值本身 (MNAR: 高值更易缺失)
+        # 缺失概率依赖因子值 (MAR: 缺失依赖可观测的因子值)
         p_missing = 1 / (1 + np.exp(-(f - 0.5)))  # sigmoid, 高值缺失概率高
         mask = rng.random(f.shape) < p_missing
-        df_mnar = pd.DataFrame(f).mask(mask)
-        # 收益与缺失比例强相关 (制造 MNAR 信号)
+        df_mar = pd.DataFrame(f).mask(mask)
+        # 收益与缺失比例强相关 (MAR 信号: 缺失依赖可观测变量)
         missing_ratio = pd.DataFrame(f).mask(mask).isna().mean(axis=0)
         r = pd.DataFrame(np.outer(np.ones(n_t), missing_ratio.values * 5) +
                          0.1 * rng.standard_normal((n_t, n_n)))
         checker = MissingnessMechanismChecker()
-        result = checker.diagnose(df_mnar, r)
-        assert result['missingness_mechanism'] == 'MNAR'
+        result = checker.diagnose(df_mar, r)
+        assert result['missingness_mechanism'] == 'MAR'
 
     def test_E3_T03_missingness_mnar_risk_prior_range(self):
         """E3-T03: mnar_risk_prior ∈ [0, 1]."""

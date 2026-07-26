@@ -94,12 +94,26 @@ class TestDataBridgeIsolation:
         )
 
     def test_data_bridge_functional(self):
-        """data_bridge 功能正常"""
-        from factor_pipeline.backtest.data_bridge import DataBridge, DataLoaderV3
+        """data_bridge 功能正常
+
+        P1.2 重构后: DataLoaderV3 改为 lazy import, 通过 _ensure_dataloader 获取.
+        - 未安装 Factor_Trading_v3_0: 跳过此测试
+        - 已安装: 验证 lazy import 机制工作正常
+        """
+        # 可选依赖: Factor_Trading_v3_0 (pyproject.toml [backtest] extra)
+        pytest.importorskip("Factor_Trading_v3_0")
+        from Factor_Trading_v3_0.core.data_v3 import DataLoaderV3
+
+        from factor_pipeline.backtest.data_bridge import DataBridge
         assert DataBridge is not None
         assert DataLoaderV3 is not None
         bridge = DataBridge()
         assert bridge is not None
+        # lazy import 架构: 实例化时 _DataLoaderV3 应为 None
+        assert bridge._DataLoaderV3 is None
+        # _ensure_dataloader 应能成功 lazy load DataLoaderV3
+        loaded = bridge._ensure_dataloader()
+        assert loaded is DataLoaderV3
 
 
 # =============================================================================

@@ -249,6 +249,12 @@ class TestThresholdDriftMonitor(unittest.TestCase):
 
     def test_e8_10_integration_with_optimizer(self):
         """[v2.6.0-E8-10] 集成测试: optimizer.optimize() 后, ThresholdDriftMonitor 可用 best_score."""
+        # 可选依赖: optuna (仅此测试需要 EndToEndThresholdOptimizer)
+        try:
+            import optuna  # noqa: F401
+        except ImportError:
+            self.skipTest("optuna 未安装: pip install optuna")
+
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
         from factor_pipeline.backtest.threshold_drift_monitor import ThresholdDriftMonitor
         import pandas as pd

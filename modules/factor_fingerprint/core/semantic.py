@@ -7,8 +7,6 @@
 """
 
 import re
-import jieba
-import jieba.posseg as pseg
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -69,7 +67,8 @@ class FinancialTokenizer:
     """金融增强分词器"""
 
     def __init__(self):
-        self._init_financial_dict()
+        self._jieba = None
+        self._pseg = None
         self.pos_mapping = {
             'nz': '金融术语', 'n': '名词', 'v': '动词',
             'm': '数量词', 'q': '量词', 't': '时间词',
@@ -77,8 +76,21 @@ class FinancialTokenizer:
             'p': '介词', 'c': '连词', 'u': '助词',
         }
 
-    def _init_financial_dict(self):
-        """初始化金融词典"""
+    def _ensure_jieba(self):
+        """Lazy load jieba on first use. Raises ImportError with install hint."""
+        if self._jieba is not None:
+            return
+        try:
+            import jieba
+            import jieba.posseg as pseg
+            self._jieba = jieba
+            self._pseg = pseg
+        except ImportError:
+            raise ImportError(
+                "jieba is required for Chinese text tokenization. "
+                "Install with: pip install jieba"
+            )
+        # 初始化金融词典
         financial_terms = [
             '市盈率', '市净率', '市销率', 'ROE', 'ROA', 'ROIC',
             '毛利率', '净利率', '资产负债率', '换手率', '波动率',
@@ -95,13 +107,14 @@ class FinancialTokenizer:
             '最大回撤', '波动率', '下行风险', '尾部风险',
         ]
         for term in financial_terms:
-            jieba.add_word(term, freq=10000, tag='nz')
+            self._jieba.add_word(term, freq=10000, tag='nz')
 
     def tokenize(self, text: str) -> List[Token]:
         """分词"""
+        self._ensure_jieba()
         tokens = []
         offset = 0
-        for word, pos in pseg.cut(text):
+        for word, pos in self._pseg.cut(text):
             token = Token(
                 text=word, pos=pos, offset=offset,
                 entity_type=self.pos_mapping.get(pos, '其他')

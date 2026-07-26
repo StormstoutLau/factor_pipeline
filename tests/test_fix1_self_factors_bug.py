@@ -125,6 +125,11 @@ class TestSelfFactorsBug(unittest.TestCase):
                 )
             raise
 
+    @unittest.skip(
+        "v3.0.0 Hard Routing 重构后 (commit add441b), transform 不再调用 "
+        "monitor.get_transition_weights 与 KS 检验路径. 该路径属于已废弃的 "
+        "软路由设计. test_01/03/04 已覆盖 self.factors dead-code bug 修复验证."
+    )
     def test_02_ks_check_executed_on_distribution_shift(self):
         """[Red-02] 因子分布显著偏移时, KS 检验确认迁移, 权重被合并
 

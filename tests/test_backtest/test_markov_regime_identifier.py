@@ -43,7 +43,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_01_fit_returns_self(self):
         """fit 返回 self"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -54,7 +54,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_02_predict_returns_int_array(self):
         """predict 返回 int 数组, 值在 {0, 1}"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -68,7 +68,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_03_predict_proba_sums_to_one(self):
         """概率行和为 1"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -85,7 +85,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_04_transition_matrix_shape(self):
         """转移矩阵形状 (2, 2)"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -97,7 +97,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_05_regime_persistence_positive(self):
         """持续期 > 0"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -109,7 +109,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_06_fallback_on_non_convergence(self):
         """Markov 不收敛时降级为硬阈值"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -132,7 +132,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_07_get_diagnostics_fields(self):
         """诊断含 converged/loglikelihood/aic/bic"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=True,
@@ -146,7 +146,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_08_min_observations_enforced(self):
         """观测不足报错"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=50)  # < min_observations
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=252, enable=True,
@@ -156,7 +156,7 @@ class TestMarkovRegimeIdentifier:
 
     def test_09_disabled_no_op(self):
         """enable=False 时 fit 是 no-op"""
-        from backtest.markov_regime_identifier import MarkovRegimeIdentifier
+        from factor_pipeline.backtest.markov_regime_identifier import MarkovRegimeIdentifier
         state_data = make_regime_state_data(n_obs=300)
         ident = MarkovRegimeIdentifier(
             n_regimes=2, min_observations=100, enable=False,

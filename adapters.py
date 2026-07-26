@@ -164,6 +164,7 @@ class ImputerAdapter(PipelineStep):
     """
     
     def __init__(self, strategy: str = 'auto', enabled: bool = True,
+                 lookahead_safe: bool = True,
                  module_path=None, import_path=None, class_name=None, **params):
         super().__init__(
             name="FactorImputer",
@@ -174,6 +175,9 @@ class ImputerAdapter(PipelineStep):
         )
         self.strategy = strategy
         self.enabled = enabled
+        # P1-1 (§5.4): lookahead_safe 默认 True, 强制因果插补.
+        # False 时走 legacy 全样本路径 (DEPRECATED, 含前视偏差).
+        self.lookahead_safe = lookahead_safe
         self._imputer = None
         self._missing_info = None
 
@@ -235,7 +239,10 @@ class ImputerAdapter(PipelineStep):
             logger.info("ImputerAdapter: ffill_ts 模式拟合完成 (无外部依赖)")
             return self
 
-        self._imputer = self._imputer_class(strategy=self.strategy)
+        self._imputer = self._imputer_class(
+            strategy=self.strategy,
+            lookahead_safe=self.lookahead_safe,
+        )
 
         # 检测缺失信息
         if hasattr(self._imputer, 'detect_missing_type'):

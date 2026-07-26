@@ -15,7 +15,7 @@ TDD 流程: Red (本文件) → Green (实现) → Review
 import pytest
 import numpy as np
 
-from backtest.statistical_decision_bridge import (
+from factor_pipeline.backtest.statistical_decision_bridge import (
     StatisticalDecisionBridge,
     StateConditionedPrior,
 )

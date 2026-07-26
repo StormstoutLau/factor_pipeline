@@ -27,6 +27,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
+# 可选依赖: Factor_Trading_v3_0 (pyproject.toml [backtest] extra)
+# 所有测试均通过 DataBridge.create_dataloader 间接依赖 DataLoaderV3,
+# 未安装 Factor_Trading_v3_0 时跳过整个文件.
+pytest.importorskip("Factor_Trading_v3_0")
+
 from factor_pipeline.backtest.engine import FactorBacktestEngine
 from factor_pipeline.backtest.data_bridge import DataBridge
 

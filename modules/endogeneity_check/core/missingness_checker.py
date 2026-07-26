@@ -57,29 +57,29 @@ class MissingnessMechanismChecker:
         else:
             corr, corr_p = float('nan'), float('nan')
 
-        # MNAR 信号优先: 当提供了 returns 且缺失比例与收益强相关时,
-        # 这是比 Little's MCAR 更强的 MNAR 证据 (缺失依赖不可观测的收益).
-        # 否则按 Little's MCAR p-value 判定 MCAR vs MAR.
+        # MAR 信号优先: 当提供了 returns 且缺失比例与收益强相关时,
+        # 这是 MAR 证据 (缺失依赖可观测的收益), 而非 MNAR.
+        # MNAR 需要缺失依赖不可观测的缺失值本身.
         if not np.isnan(corr) and abs(corr) > 0.3 and corr_p < 0.05:
-            mechanism = 'MNAR'
-            mnar_prior = min(1.0, abs(corr))
-            pattern = 'MNAR_candidate'
+            mechanism = 'MAR'
+            mar_prior = min(1.0, abs(corr))
+            pattern = 'MAR_candidate'
         elif not np.isnan(little_pvalue) and little_pvalue > 0.05:
             mechanism = 'MCAR'
-            mnar_prior = 0.1
+            mar_prior = 0.1
             pattern = 'random'
         else:
             mechanism = 'MAR'
-            mnar_prior = 0.3
+            mar_prior = 0.3
             pattern = 'concentrated' if missing_ratio.std() > 0.1 else 'random'
 
         return {
             'missingness_mechanism': mechanism,
-            'mnar_risk_prior': float(mnar_prior),
+            'mnar_risk_prior': float(mar_prior),
             'little_mcar_pvalue': float(little_pvalue) if not np.isnan(little_pvalue) else float('nan'),
             'missing_return_correlation': float(corr) if not np.isnan(corr) else float('nan'),
             'missing_pattern': pattern,
-            'interpretation': f'缺失机制判定为 {mechanism}, MNAR 风险先验={mnar_prior:.2f}',
+            'interpretation': f'缺失机制判定为 {mechanism}, MNAR 风险先验={mar_prior:.2f}',
         }
 
     def _little_mcar_test_simplified(self, data: pd.DataFrame) -> float:
@@ -109,20 +109,13 @@ class MissingnessMechanismChecker:
             # 真实检验返回 nan (如完整案例不足), 回退到启发式
         except Exception:
             pass
-        # 回退启发式: 检查缺失是否与观测值相关 (MNAR 信号)
+        # 回退: 使用缺失率作为启发式信号 (无造假 p 值)
+        # 高缺失率 → 低 MCAR 置信度; 低缺失率 → 高 MCAR 置信度
         missing_indicator = data.isna().astype(float)
         n_missing = missing_indicator.sum().sum()
-        if n_missing == 0:
-            return 1.0
-        filled = data.fillna(data.mean())
-        corrs = []
-        for col in data.columns:
-            mi = missing_indicator[col]
-            if mi.std() > 0 and filled[col].std() > 0:
-                c = abs(np.corrcoef(mi, filled[col])[0, 1])
-                if not np.isnan(c):
-                    corrs.append(c)
-        avg_corr = float(np.mean(corrs)) if corrs else 0.0
-        if avg_corr < 0.05:
-            return 0.5  # MCAR (无值依赖)
-        return 0.01  # 非 MCAR (值依赖 → MAR/MNAR)
+        total = data.shape[0] * data.shape[1]
+        if n_missing == 0 or total == 0:
+            return 1.0  # 无缺失 → MCAR 可信
+        missing_rate = n_missing / total
+        # 缺失率 ≤ 5% → 高置信度; 缺失率 ≥ 50% → 低置信度
+        return max(0.01, 1.0 - missing_rate * 2.0)

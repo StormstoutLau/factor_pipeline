@@ -231,12 +231,24 @@ class TestEdgeCases:
         assert result == {}
 
     def test_single_stock(self, adapter, all_factors):
-        """单只股票"""
+        """单只股票 — 自动找一个有数据的因子测试 stock_codes 过滤生效"""
+        import duckdb
+        # 找一个 000001 + 2024H1 有数据的因子
+        con = duckdb.connect(DB_PATH, read_only=True)
+        r = con.execute(
+            "SELECT DISTINCT factor_name FROM factor_data "
+            "WHERE stock_code='000001' AND trade_date >= '2024-01-01' "
+            "AND trade_date <= '2024-06-30' LIMIT 1"
+        ).fetchone()
+        con.close()
+        if r is None:
+            pytest.skip("数据库中 000001 在 2024H1 无任何因子数据, 跳过单股票测试")
+        factor_with_data = r[0]
         result = adapter.get_pivoted(
-            [all_factors[0]], stock_codes=['000001'],
+            [factor_with_data], stock_codes=['000001'],
             start_date=date(2024, 1, 1), end_date=date(2024, 6, 30),
         )
-        df = result[all_factors[0]]
+        df = result[factor_with_data]
         assert len(df) >= 1
 
     def test_no_data_factor(self, adapter):
@@ -284,6 +296,9 @@ class TestBacktestIntegration:
 
     def test_full_pipeline_with_pivot(self, adapter, all_factors):
         """完整 pipeline: PIVOT → 回测引擎 → ICIR"""
+        # 可选依赖: Factor_Trading_v3_0 (仅此测试通过 DataBridge 间接使用 DataLoaderV3)
+        pytest.importorskip("Factor_Trading_v3_0")
+
         from query.price_query import PriceQuery
         from factor_pipeline.backtest.data_bridge import DataBridge
         from factor_pipeline.backtest.engine import FactorBacktestEngine

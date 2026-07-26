@@ -29,16 +29,8 @@ logger = logging.getLogger(__name__)
 #   1. "绕过 core/__init__.py 的重依赖链" — core/__init__.py 已改为空 (轻量)
 #   2. "避免 core/ 遮蔽 Factor_DB/core" — 子包化后用 Factor_Trading_v3_0.core 命名空间,
 #      不再与 Factor_DB/core 冲突 (ADR-013)
-try:
-    from Factor_Trading_v3_0.core.data_v3 import DataLoaderV3
-except ImportError as e:
-    from factor_pipeline.exceptions import AdapterImportError
-    raise AdapterImportError(
-        f"data_bridge: REQUIRED 依赖 factor-trading-v3 导入失败: {e}. "
-        f"请运行 cd F:/Coding/Factor_Trading_v3.0 && python -m pip install -e . 安装",
-        module_path="Factor_Trading_v3_0.core.data_v3",
-        class_name="DataLoaderV3",
-    ) from e
+# P2-fix (v3.4.0): 改为 lazy import, 仅在 create_dataloader 调用时导入,
+# 避免模块加载时强制依赖 Factor_Trading_v3_0 (41 个测试 collection error 的根因之一).
 
 
 class DataBridge:
@@ -53,6 +45,29 @@ class DataBridge:
     def __init__(self):
         self._n_stocks: int = 0
         self._n_dates: int = 0
+        self._DataLoaderV3 = None  # lazy-loaded
+
+    def _ensure_dataloader(self):
+        """Lazy load DataLoaderV3 on first use.
+
+        Defers the Factor_Trading_v3_0 import to call time so that
+        ``from factor_pipeline.backtest import DataBridge`` works even
+        when the external project is not installed.
+        """
+        if self._DataLoaderV3 is not None:
+            return self._DataLoaderV3
+        try:
+            from Factor_Trading_v3_0.core.data_v3 import DataLoaderV3
+        except ImportError as e:
+            from factor_pipeline.exceptions import AdapterImportError
+            raise AdapterImportError(
+                f"data_bridge: REQUIRED 依赖 factor-trading-v3 导入失败: {e}. "
+                f"请运行 cd F:/Coding/Factor_Trading_v3.0 && python -m pip install -e . 安装",
+                module_path="Factor_Trading_v3_0.core.data_v3",
+                class_name="DataLoaderV3",
+            ) from e
+        self._DataLoaderV3 = DataLoaderV3
+        return DataLoaderV3
 
     # ── 因子数据转置 ──────────────────────────────────
 
@@ -99,7 +114,7 @@ class DataBridge:
         processed_factors: Dict[str, pd.DataFrame],
         price_data: pd.DataFrame,
         min_dates: Optional[Dict[str, int]] = None,
-    ) -> DataLoaderV3:
+    ) -> "DataLoaderV3":
         """从 Pipeline 输出创建 DataLoaderV3。
 
         Args:
@@ -112,6 +127,8 @@ class DataBridge:
         Returns:
             配置好的 DataLoaderV3 实例
         """
+        DataLoaderV3 = self._ensure_dataloader()
+
         # P1: 自适应 min_dates 过滤
         DEFAULT_MIN_DATES = 20
         min_dates = min_dates or {}

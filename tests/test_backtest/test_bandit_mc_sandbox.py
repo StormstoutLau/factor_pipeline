@@ -11,8 +11,8 @@
 import pytest
 import numpy as np
 
-from backtest.bandit_mc_sandbox import BanditMCSandbox
-from backtest.cusum_drift_monitor import CUSUMDriftMonitor
+from factor_pipeline.backtest.bandit_mc_sandbox import BanditMCSandbox
+from factor_pipeline.backtest.cusum_drift_monitor import CUSUMDriftMonitor
 
 
 # ============================================================

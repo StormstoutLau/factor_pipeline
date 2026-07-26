@@ -19,7 +19,7 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from backtest.multiple_testing import (
+from factor_pipeline.backtest.multiple_testing import (
     apply_bh_fdr,
     apply_bonferroni,
     apply_no_correction,

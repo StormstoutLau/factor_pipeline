@@ -331,11 +331,9 @@ for name, factor_data in [
     rejects_rw = p_vr < 0.05
 
     # DF τ 统计量 (Dickey & Fuller 1979)
-    ar1_vals = classifier._compute_panel_ar1(arr)
-    ar1_median = np.nanmedian(ar1_vals)
-    se_ar1 = np.sqrt(max(1 - ar1_median**2, 1e-6) / T)
-    tau_df = (ar1_median - 1.0) / se_ar1
-    tau_crit = -1.95 + 4.8 / max(T, 1)
+    tau_df_all = classifier._compute_panel_df_tau(arr)
+    tau_df = np.nanmedian(tau_df_all)
+    tau_crit = classifier._df_critical_value(T, 0.05)
     is_stationary = tau_df < tau_crit
 
     rt = classifier.classify(factor_data)

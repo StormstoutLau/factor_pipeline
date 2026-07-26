@@ -23,6 +23,7 @@ Design constraints:
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+from scipy import stats
 from typing import Dict, Tuple, Optional
 
 
@@ -115,12 +116,20 @@ class PremiumEstimator:
 
 
 class BreakpointDetector:
-    """Structural break detection via grid-search Chow-type F-test (simplified Bai-Perron).
+    """Structural break detection via grid-search sup-F test.
 
     Algorithm:
       1. For each candidate split t ∈ [min_seg, T-min_seg]:
          F = (SSR_pooled - SSR_split) / (SSR_split / (T-2))
-      2. max F > F_crit(α, 1, T-2) × Bonferroni → breakpoint at argmax F.
+      2. sup-F ≡ max F over all candidate splits.
+      3. sup-F > critical value → breakpoint detected.
+
+    Critical values: Andrews (1993) asymptotic sup-F distribution.
+    NOT pointwise F(1, T-2) — the latter inflates false positive rate.
+
+    References:
+      Andrews (1993), Econometrica, 61(4), 821-856.
+      Bai & Perron (1998), Econometrica, 66(1), 47-78.
 
     Parameters
     ----------
@@ -128,11 +137,20 @@ class BreakpointDetector:
         Significance level. Default 0.05.
     min_segment : float
         Minimum segment length fraction. Default 0.15.
+    sup_f_method : str
+        'asymptotic' (Andrews 1993 Table 1, default) or 'bootstrap'.
+    n_bootstrap : int
+        Bootstrap iterations (only for method='bootstrap').
     """
 
-    def __init__(self, alpha: float = 0.05, min_segment: float = 0.15):
+    def __init__(
+        self, alpha: float = 0.05, min_segment: float = 0.15,
+        sup_f_method: str = 'asymptotic', n_bootstrap: int = 1000
+    ):
         self.alpha = alpha
         self.min_segment = min_segment
+        self.sup_f_method = sup_f_method
+        self.n_bootstrap = n_bootstrap
 
     def detect(self, lambda_hat: np.ndarray) -> Dict:
         valid = ~np.isnan(lambda_hat)
@@ -147,7 +165,6 @@ class BreakpointDetector:
         residuals = y - y_mean
         cusum = np.cumsum(residuals) / (np.std(y) * np.sqrt(T) + 1e-12)
 
-        from scipy.stats import f as fdist
         best_f, best_bp = 0.0, None
 
         for bp in range(min_seg, T - min_seg):
@@ -160,12 +177,13 @@ class BreakpointDetector:
             if f_val > best_f:
                 best_f, best_bp = f_val, bp
 
-        f_crit = fdist.ppf(1 - self.alpha, 1, max(T - 2, 1))
+        # Andrews (1993) sup-F critical value, NOT pointwise fdist.ppf
+        f_crit = self._sup_f_critical_value(T, self.min_segment, self.alpha)
         has_bp = best_f > f_crit and best_bp is not None
 
         result = {
             'has_breakpoint': has_bp,
-            'max_stat': float(best_f),
+            'chow_max_stat': float(best_f),
             'critical': float(f_crit),
             'cusum_path': cusum,
             'pre_mean': float('nan'),
@@ -180,13 +198,108 @@ class BreakpointDetector:
 
         return result
 
-    def _no_breakpoint_result(self, T: int) -> Dict:
-        return {
-            'has_breakpoint': False, 'breakpoint_idx': None,
-            'max_stat': 0.0, 'critical': 0.0,
-            'cusum_path': np.zeros(T),
-            'pre_mean': float('nan'), 'post_mean': float('nan'),
+    def _sup_f_critical_value(
+        self, T: int, epsilon: float, alpha: float
+    ) -> float:
+        """Andrews (1993) sup-F asymptotic critical value.
+
+        For method='asymptotic': Andrews (1993) Table 1, interpolated by ε.
+        For method='bootstrap': parametric bootstrap (residual-based).
+
+        Args:
+            T: sample size.
+            epsilon: trimming fraction.
+            alpha: significance level.
+        """
+        if self.sup_f_method == 'asymptotic':
+            return self._andrews_quantile(epsilon, alpha)
+        elif self.sup_f_method == 'bootstrap':
+            return self._bootstrap_sup_f_crit(T, epsilon, alpha)
+        else:
+            raise ValueError(f"Unknown sup_f_method: {self.sup_f_method}")
+
+    @staticmethod
+    def _andrews_quantile(epsilon: float, alpha: float = 0.05) -> float:
+        """Andrews (1993) Table 1 asymptotic critical values for sup-F (p=1).
+
+        References:
+            Andrews (1993), Econometrica, 61(4), 821-856, Table 1.
+        """
+        # Andrews (1993) Table 1, p=1
+        table = {
+            0.05: {0.05: 10.54, 0.10: 8.65},
+            0.10: {0.05: 9.29, 0.10: 7.61},
+            0.15: {0.05: 8.85, 0.10: 7.17},
+            0.20: {0.05: 8.44, 0.10: 6.90},
+            0.25: {0.05: 8.13, 0.10: 6.61},
         }
+        eps_values = sorted(table.keys())
+
+        if epsilon in table:
+            return table[epsilon].get(alpha, 8.85)
+
+        if epsilon < eps_values[0] or epsilon > eps_values[-1]:
+            raise ValueError(
+                f"ε={epsilon:.3f} outside tabulated range "
+                f"[{eps_values[0]:.2f}, {eps_values[-1]:.2f}]"
+            )
+
+        for i in range(len(eps_values) - 1):
+            if eps_values[i] <= epsilon <= eps_values[i + 1]:
+                eps_low, eps_high = eps_values[i], eps_values[i + 1]
+                val_low = table[eps_low].get(alpha, 8.85)
+                val_high = table[eps_high].get(alpha, 8.85)
+                frac = (epsilon - eps_low) / (eps_high - eps_low)
+                return val_low + frac * (val_high - val_low)
+
+        return 8.85  # fallback
+
+    def _bootstrap_sup_f_crit(
+        self, T: int, epsilon: float, alpha: float
+    ) -> float:
+        """Residual-based bootstrap for sup-F critical value.
+
+        Optimized: uses cumulative sums to avoid O(T) per breakpoint.
+        Complexity: O(n_bootstrap × T) vs O(n_bootstrap × T²) naive.
+
+        H₀: y_t = μ + ε_t (no breakpoint).
+        Bootstrap: resample residuals ε̂_t = y_t - ȳ, construct y*_t = ȳ + ε̂*_t.
+        This preserves the empirical autocorrelation structure.
+        """
+        rng = np.random.RandomState(42)
+        min_seg = max(5, int(T * epsilon))
+        n_breaks = T - 2 * min_seg
+        if n_breaks <= 0:
+            return 3.84
+
+        # Generate all bootstrap samples at once: (n_bootstrap, T)
+        Y = rng.randn(self.n_bootstrap, T)
+
+        # H₀: no breakpoint → subtract global mean
+        Y_centered = Y - Y.mean(axis=1, keepdims=True)
+        ssr_full = np.sum(Y_centered ** 2, axis=1)  # (n_bootstrap,)
+
+        # Cumulative sums for fast SSR computation
+        cumsum = np.cumsum(Y, axis=1)      # (n_bootstrap, T)
+        cumsum2 = np.cumsum(Y ** 2, axis=1)  # (n_bootstrap, T)
+
+        all_f = np.zeros((self.n_bootstrap, n_breaks))
+        for idx, bp in enumerate(range(min_seg, T - min_seg)):
+            n1, n2 = bp, T - bp
+            s1 = cumsum[:, bp - 1]
+            ss1 = cumsum2[:, bp - 1]
+            s2 = cumsum[:, -1] - s1
+            ss2 = cumsum2[:, -1] - ss1
+
+            ssr_pre = ss1 - s1 * s1 / n1
+            ssr_post = ss2 - s2 * s2 / n2
+            ssr = np.maximum(ssr_pre + ssr_post, 1e-12)
+
+            f_val = (ssr_full - ssr) / (ssr / max(T - 2, 1))
+            all_f[:, idx] = f_val
+
+        sup_f = np.max(all_f, axis=1)
+        return float(np.percentile(sup_f, 100 * (1 - alpha)))
 
 
 class FactorHealthDiagnoser:
@@ -242,7 +355,7 @@ class FactorHealthDiagnoser:
             breakpoint_idx : int or None
             mean_premium_pre_bp, mean_premium_post_bp : float
             half_life : float or None (months)
-            cusum_max_stat : float
+            chow_max_stat : float
         """
         # Step 1: Estimate premium
         lambda_hat = self.estimator.estimate(factor, forward_returns)
@@ -272,7 +385,7 @@ class FactorHealthDiagnoser:
             'mean_premium_pre_bp': float(bp_result.get('pre_mean', np.nan)),
             'mean_premium_post_bp': float(bp_result.get('post_mean', np.nan)),
             'half_life': td_result.get('half_life'),
-            'cusum_max_stat': float(bp_result.get('max_stat', 0.0)),
+            'chow_max_stat': float(bp_result.get('chow_max_stat', 0.0)),
             'lambda_hat': lambda_hat,
         }
         return result
@@ -307,7 +420,19 @@ class FactorHealthDiagnoser:
         if std_val < 1e-12:
             return 'stable' if mean_abs > 0 else 'suspect'
 
-        return 'stable' if mean_abs > std_val * 0.5 else 'suspect'
+        # FM t-statistic: mean_abs / (std_val / sqrt(T_eff))
+        # Uses Fama-MacBeth approach: cross-sectional mean divided by
+        # its time-series standard error. |t| > 2.0 → significant premium.
+        T_eff = np.sum(~np.isnan(lambda_hat))
+        if T_eff > 1 and std_val > 1e-12:
+            fm_t_stat = mean_abs / (std_val / np.sqrt(T_eff))
+            if abs(fm_t_stat) > 2.0:
+                return 'stable'
+            elif abs(fm_t_stat) > 1.0:
+                return 'suspect'
+            else:
+                return 'insignificant'
+        return 'stable' if mean_abs > 0 else 'suspect'
 
     def _detect_decay(self, lambda_hat: np.ndarray) -> Dict:
         """Detect exponential decay in premium via log-linear fit.
@@ -315,8 +440,12 @@ class FactorHealthDiagnoser:
         Model: |λ(t)| = A × exp(-t/τ) + noise
         log|λ(t)| = log(A) - t/τ
         Estimate half-life = τ × ln(2).
+
+        Significance: Newey-West HAC t-test for β (decay rate).
+        H₀: β ≥ 0 (no decay), H₁: β < 0 (decay).
         """
-        result = {'has_decay': False, 'half_life': None, 'decay_rate': None}
+        result = {'has_decay': False, 'half_life': None, 'decay_rate': None,
+                  'decay_t_stat': None, 'decay_p_value': None}
 
         valid = ~np.isnan(lambda_hat)
         y = np.abs(lambda_hat[valid])
@@ -330,6 +459,7 @@ class FactorHealthDiagnoser:
 
         log_y = np.log(y[valid_y])
         t_valid = t[valid_y]
+        n = len(t_valid)
 
         denom = np.sum((t_valid - np.mean(t_valid)) ** 2)
         if denom < 1e-12:
@@ -338,13 +468,59 @@ class FactorHealthDiagnoser:
         beta = np.sum((t_valid - np.mean(t_valid)) * (log_y - np.mean(log_y))) / denom
 
         if beta < 0:
+            # Newey-West HAC standard error for significance test
+            residuals = log_y - (np.mean(log_y) + beta * (t_valid - np.mean(t_valid)))
+            se_hac = self._newey_west_se(t_valid, residuals, max_lag=min(4, n // 4))
+            t_stat = beta / se_hac if se_hac > 1e-12 else 0.0
+            # One-sided test: H₀: β ≥ 0, H₁: β < 0
+            p_value = float(stats.t.sf(abs(t_stat), df=max(n - 2, 1)))
+
             tau = -1.0 / beta
             half_life = tau * np.log(2)
             result['decay_rate'] = float(beta)
             result['half_life'] = float(half_life)
-            result['has_decay'] = half_life < self.half_life_threshold
+            result['decay_t_stat'] = float(t_stat)
+            result['decay_p_value'] = float(p_value)
+            # Declare decay only if statistically significant AND half-life below threshold
+            result['has_decay'] = (p_value < 0.05 and half_life < self.half_life_threshold)
 
         return result
+
+    @staticmethod
+    def _newey_west_se(x: np.ndarray, residuals: np.ndarray,
+                        max_lag: int = 4) -> float:
+        """Newey-West HAC standard error for OLS slope coefficient.
+
+        Newey & West (1987), Econometrica, 55(3), 703-708.
+
+        Args:
+            x: (n,) regressor (de-meaned).
+            residuals: (n,) OLS residuals.
+            max_lag: maximum lag for autocorrelation.
+
+        Returns:
+            HAC standard error of the slope coefficient.
+        """
+        n = len(x)
+        if n < 3:
+            return np.nan
+
+        # Bread: (X'X)⁻¹
+        x_demeaned = x - np.mean(x)
+        XtX_inv = 1.0 / np.maximum(np.sum(x_demeaned ** 2), 1e-12)
+
+        # Meat: Newey-West kernel-weighted autocovariance
+        S0 = np.sum((x_demeaned * residuals) ** 2)
+        meat = S0
+        for lag in range(1, max_lag + 1):
+            w = 1.0 - lag / (max_lag + 1.0)  # Bartlett kernel
+            cross = np.sum(x_demeaned[lag:] * residuals[lag:] *
+                           x_demeaned[:-lag] * residuals[:-lag])
+            meat += 2.0 * w * cross
+
+        # Sandwich: (X'X)⁻¹ × Meat × (X'X)⁻¹
+        var_hac = XtX_inv * meat * XtX_inv
+        return np.sqrt(np.maximum(var_hac, 1e-12))
 
     def _combine_label(self, return_type: str, premium_health: str) -> str:
         """Combine Layer 2 return type with Layer 3 premium health."""

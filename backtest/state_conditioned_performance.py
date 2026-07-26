@@ -20,7 +20,7 @@ import pandas as pd
 import statsmodels.api as sm
 from scipy import stats as sps
 
-from backtest.multiple_testing import apply_bh_fdr
+from .multiple_testing import apply_bh_fdr
 
 logger = logging.getLogger(__name__)
 

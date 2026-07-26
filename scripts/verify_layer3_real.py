@@ -60,7 +60,7 @@ for name in sorted(factors.keys()):
         print(f"  Post-BP mean:        {result['mean_premium_post_bp']:.6f}")
     if result.get('half_life'):
         print(f"  Half-life:           {result['half_life']:.1f} months")
-    print(f"  F_max:               {result['cusum_max_stat']:.1f}")
+    print(f"  F_max:               {result['chow_max_stat']:.1f}")
 
 print(f"\n{'='*75}")
 print("Verification complete.")

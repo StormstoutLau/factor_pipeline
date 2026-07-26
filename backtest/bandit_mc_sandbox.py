@@ -29,7 +29,7 @@ import logging
 
 import numpy as np
 
-from backtest.cusum_drift_monitor import CUSUMDriftMonitor
+from .cusum_drift_monitor import CUSUMDriftMonitor
 
 logger = logging.getLogger(__name__)
 

@@ -531,10 +531,11 @@ class FactorFingerprinter:
             return np.nan
 
         # 偏度和峰度的波动越大，说明分布越不稳定，越需要复杂处理
+        js_term = 0.2 * np.clip(js_mean / 0.5, 0, 1) if not np.isnan(js_mean) else 0.0
         complexity = (
             0.4 * np.clip(skew_std / 2, 0, 1) +
             0.4 * np.clip(kurt_std / 5, 0, 1) +
-            0.2 * np.clip(js_mean / 0.5, 0, 1) if not np.isnan(js_mean) else 0
+            js_term
         )
 
         return float(min(complexity, 1.0))

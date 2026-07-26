@@ -120,11 +120,11 @@ class TestBreakpointDetector:
 
         detector = BreakpointDetector(alpha=0.05)
         result = detector.detect(beta_raw)
-        print(f"  F_max={result['max_stat']:.1f}, F_crit={result['critical']:.1f}, "
+        print(f"  F_max={result['chow_max_stat']:.1f}, F_crit={result['critical']:.1f}, "
               f"has_breakpoint={result['has_breakpoint']}")
         # Stable premium → raw β_t should NOT have significant break
         assert not result['has_breakpoint'], (
-            f"false positive: max_F={result['max_stat']:.1f} > "
+            f"false positive: max_F={result['chow_max_stat']:.1f} > "
             f"F_crit={result['critical']:.1f} on raw betas"
         )
 
@@ -138,10 +138,10 @@ class TestBreakpointDetector:
 
         detector = BreakpointDetector(alpha=0.05)
         result = detector.detect(beta_raw)
-        print(f"  F_max={result['max_stat']:.1f}, F_crit={result['critical']:.1f}, "
+        print(f"  F_max={result['chow_max_stat']:.1f}, F_crit={result['critical']:.1f}, "
               f"breakpoint_idx={result.get('breakpoint_idx')}")
         assert result['has_breakpoint'], (
-            f"failed to detect breakpoint (max_F={result['max_stat']:.1f} < "
+            f"failed to detect breakpoint (max_F={result['chow_max_stat']:.1f} < "
             f"F_crit={result['critical']:.1f})"
         )
         if result.get('breakpoint_idx') is not None:

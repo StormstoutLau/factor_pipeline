@@ -11,7 +11,7 @@ TDD: 测试验证修复后的行为.
 import pytest
 import numpy as np
 
-from backtest.unified_drift import UnifiedDriftReporter as UnifiedDriftDetector
+from factor_pipeline.backtest.unified_drift import UnifiedDriftReporter as UnifiedDriftDetector
 
 
 class TestRollingStructureDriftBHFD:

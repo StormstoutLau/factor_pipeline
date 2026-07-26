@@ -11,6 +11,13 @@ P3 Phase 3: EndToEndThresholdOptimizer — TDD 测试套件
 """
 
 import unittest
+
+import pytest
+
+# 可选依赖: optuna (pyproject.toml [optimizer] extra)
+# 所有测试均依赖 EndToEndThresholdOptimizer, 未安装 optuna 时跳过整个文件.
+pytest.importorskip("optuna")
+
 import numpy as np
 import pandas as pd
 

@@ -29,7 +29,7 @@ def make_e8_data(n_obs: int = 300, n_stocks: int = 100, seed: int = 42):
         regime_labels: np.ndarray — (T,) 体制标签
         fwd_returns: pd.DataFrame — (T, N_stocks) 前向收益
     """
-    from backtest.state_data_loader import StateDataLoader
+    from factor_pipeline.backtest.state_data_loader import StateDataLoader
     rng = np.random.default_rng(seed)
     dates = pd.date_range('2020-01-01', periods=n_obs, freq='B')
     stocks = [f'S{i:03d}' for i in range(n_stocks)]
@@ -66,7 +66,7 @@ def make_state_dependent_data(n_obs: int = 300, n_stocks: int = 100, seed: int =
     r_{i,t} = beta * market_turnover[t] * f_{i,t} + noise
     => R_factor ∝ market_turnover, 回归 beta 应显著
     """
-    from backtest.state_data_loader import StateDataLoader
+    from factor_pipeline.backtest.state_data_loader import StateDataLoader
     rng = np.random.default_rng(seed)
     dates = pd.date_range('2020-01-01', periods=n_obs, freq='B')
     stocks = [f'S{i:03d}' for i in range(n_stocks)]
@@ -104,7 +104,7 @@ class TestStateConditionedAnalyzer:
 
     def test_01_fit_returns_self(self):
         """fit 返回 self"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, alpha=0.05)
         result = analyzer.fit(fr, sd, rl, fwd)
@@ -113,7 +113,7 @@ class TestStateConditionedAnalyzer:
 
     def test_02_compute_performance_matrix_shape(self):
         """性能矩阵形状 == (n_factors, n_regimes)"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True)
         analyzer.fit(fr, sd, rl, fwd)
@@ -124,7 +124,7 @@ class TestStateConditionedAnalyzer:
 
     def test_03_compute_performance_matrix_ic_metric(self):
         """IC 指标在 [-1, 1]"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30)
         analyzer.fit(fr, sd, rl, fwd)
@@ -135,7 +135,7 @@ class TestStateConditionedAnalyzer:
 
     def test_04_compute_performance_matrix_min_obs(self):
         """观测不足的格为 NaN"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         # Set min_obs_per_cell higher than any regime's count
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=10000)
@@ -146,7 +146,7 @@ class TestStateConditionedAnalyzer:
 
     def test_05_factor_return_regression_fields(self):
         """R_factor 回归含必要字段: alpha/betas/r_squared"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30)
         analyzer.fit(fr, sd, rl, fwd)
@@ -160,7 +160,7 @@ class TestStateConditionedAnalyzer:
 
     def test_06_ic_on_state_regression_fields(self):
         """IC 回归含必要字段: alpha_ic/gammas/r_squared"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30)
         analyzer.fit(fr, sd, rl, fwd)
@@ -173,7 +173,7 @@ class TestStateConditionedAnalyzer:
 
     def test_07_newey_west_lags_applied(self):
         """Newey-West 滞后应用"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30, n_lags=5)
         analyzer.fit(fr, sd, rl, fwd)
@@ -182,7 +182,7 @@ class TestStateConditionedAnalyzer:
 
     def test_08_test_all_factors_returns_dict(self):
         """test_all_factors 返回字典"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30)
         analyzer.fit(fr, sd, rl, fwd)
@@ -196,7 +196,7 @@ class TestStateConditionedAnalyzer:
 
     def test_09_bh_fdr_correction_applied(self):
         """BH-FDR 校正应用"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(
             enable=True, min_obs_per_cell=30,
@@ -211,7 +211,7 @@ class TestStateConditionedAnalyzer:
 
     def test_10_get_diagnostics_fields(self):
         """诊断含 n_factors/n_state_variables"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30)
         analyzer.fit(fr, sd, rl, fwd)
@@ -225,7 +225,7 @@ class TestStateConditionedAnalyzer:
 
     def test_11_disabled_no_op(self):
         """enable=False 时返回空"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_e8_data()
         analyzer = StateConditionedAnalyzer(enable=False)
         analyzer.fit(fr, sd, rl, fwd)
@@ -236,7 +236,7 @@ class TestStateConditionedAnalyzer:
 
     def test_12_known_state_dependency(self):
         """构造已知状态依赖, beta 应显著非零"""
-        from backtest.state_conditioned_performance import StateConditionedAnalyzer
+        from factor_pipeline.backtest.state_conditioned_performance import StateConditionedAnalyzer
         fr, sd, rl, fwd = make_state_dependent_data(n_obs=300, n_stocks=100)
         analyzer = StateConditionedAnalyzer(enable=True, min_obs_per_cell=30, n_lags=3)
         analyzer.fit(fr, sd, rl, fwd)

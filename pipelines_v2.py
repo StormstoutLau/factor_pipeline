@@ -1148,17 +1148,23 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         return X
 
     def _compute_winsorize_params(self, X: pd.DataFrame) -> Dict:
-        """计算 1%/99% 分位数缩尾参数 (Bali et al. 2016 行业标准)"""
-        arr = X.values
-        lo = np.nanpercentile(arr, 1.0, axis=0)
-        hi = np.nanpercentile(arr, 99.0, axis=0)
+        """计算 sigma 倍数缩尾参数 (P3-Phase2: 消费 mixed_winsor_sigma 配置)
+
+        lower = mean - sigma * std;  upper = mean + sigma * std
+        sigma 来自 self.mixed_winsor_sigma (默认 3.0).
+        """
+        sigma = self.mixed_winsor_sigma
+        mean = X.mean(axis=0)
+        std = X.std(axis=0)
+        lo = (mean - sigma * std)
+        hi = (mean + sigma * std)
         return {
-            'lower': pd.Series(lo, index=X.columns),
-            'upper': pd.Series(hi, index=X.columns),
+            'lower': lo,
+            'upper': hi,
         }
 
     def _apply_winsorize(self, X: pd.DataFrame) -> pd.DataFrame:
-        """应用 1%/99% 分位数缩尾"""
+        """应用 sigma 倍数缩尾"""
         return X.clip(lower=self._winsorize_params['lower'],
                       upper=self._winsorize_params['upper'],
                       axis=1)
@@ -1434,11 +1440,15 @@ class FactorProcessingPipelineV2:
             factor_pipes = self.factor_pipelines.get(name, {})
             pipe_keys = list(factor_pipes.keys())
             if not pipe_keys:
-                logger.warning(f"因子 {name} 无可用管线, 跳过")
-                continue
-
-            pipe_type = pipe_keys[0]  # exactly one pipeline (hard routing)
-            pipe = factor_pipes[pipe_type]
+                # P0-1 fallback: 当 fit() 未填充 factor_pipelines 时 (如测试场景
+                # 直接 mock 静态/动态/混合扁平属性), 按 primary_type 取扁平属性.
+                pipe = self._get_pipeline(classification.primary_type)
+                if pipe is None:
+                    logger.warning(f"因子 {name} 无可用管线, 跳过")
+                    continue
+            else:
+                pipe_type = pipe_keys[0]  # exactly one pipeline (hard routing)
+                pipe = factor_pipes[pipe_type]
             try:
                 processed = pipe.transform(data)
             except (ValueError, TypeError, RuntimeError) as e:

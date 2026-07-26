@@ -377,6 +377,9 @@ class TestEndToEndWithEngine:
     def test_01_cached_loader_works_with_engine(self, cache_dir, sample_factor_data,
                                                   sample_price_matrix):
         """CachedDataLoader 与 FactorBacktestEngine 端到端集成"""
+        # 可选依赖: Factor_Trading_v3_0 (仅此测试通过 DataBridge 间接使用 DataLoaderV3)
+        pytest.importorskip("Factor_Trading_v3_0")
+
         from factor_pipeline.backtest.data_bridge import DataBridge
         from factor_pipeline.backtest.engine import FactorBacktestEngine
 

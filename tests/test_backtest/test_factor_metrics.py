@@ -447,6 +447,12 @@ class TestICSeries(unittest.TestCase):
 
     def test_e3_07_optimizer_compute_ic_ewma_integration(self):
         """[v2.6.0-E3-07] optimizer._compute_ic(weighting='ewma') 返回标量."""
+        # 可选依赖: optuna (仅此测试需要 EndToEndThresholdOptimizer)
+        try:
+            import optuna  # noqa: F401
+        except ImportError:
+            self.skipTest("optuna 未安装: pip install optuna")
+
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         np.random.seed(42)

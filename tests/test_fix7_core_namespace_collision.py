@@ -70,8 +70,11 @@ class TestDataLoaderV3StillWorks:
     """修复后 DataLoaderV3 仍能正常导入和使用"""
 
     def test_data_loader_v3_class_available(self):
-        """DataLoaderV3 类可从 data_bridge 导入"""
-        from factor_pipeline.backtest.data_bridge import DataLoaderV3
+        """DataLoaderV3 通过 lazy import 可用 (需安装 Factor_Trading_v3_0)"""
+        # 可选依赖: Factor_Trading_v3_0 (pyproject.toml [backtest] extra)
+        # 未安装时跳过此测试, 仅在已安装环境下验证 DataLoaderV3 类可用性.
+        pytest.importorskip("Factor_Trading_v3_0")
+        from Factor_Trading_v3_0.core.data_v3 import DataLoaderV3
         assert DataLoaderV3 is not None
         assert hasattr(DataLoaderV3, "from_pandas_dataframes")
 

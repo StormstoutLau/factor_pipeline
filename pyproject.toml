@@ -39,6 +39,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 可选: 语义理解模块 (jieba 中文分词)
+semantic = ["jieba>=0.42.0"]
+# 可选: 回测引擎 (DataLoaderV3, 需外部安装 Factor_Trading_v3.0)
+backtest = ["factor-trading-v3"]
 # 可选: GARCH 白化
 garch = ["arch>=5.0.0"]
 # 可选: 优化器超参搜索
@@ -49,7 +53,7 @@ dev = [
     "pytest-cov>=4.0.0",
 ]
 # 全量安装
-all = ["arch>=5.0.0", "optuna>=3.0.0", "pytest>=7.0.0"]
+all = ["arch>=5.0.0", "optuna>=3.0.0", "pytest>=7.0.0", "jieba>=0.42.0"]
 
 [project.urls]
 Homepage = "https://github.com/StormstoutLau/factor_pipeline"
