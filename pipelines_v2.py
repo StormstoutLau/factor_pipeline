@@ -689,11 +689,11 @@ class PipelineV2Config:
     dynamic_max_ar_order: int = 5
     # 动态因子AR阶数选择准则
     dynamic_ar_criterion: str = 'aic'
-    # 混合因子是否条件性变换
-    mixed_conditional_transform: bool = True
-    # 混合因子变换阈值
-    mixed_skew_threshold: float = 2.0
-    mixed_kurt_threshold: float = 5.0
+    # 变换配置 (Static / Mixed 共用一套, PL-02)
+    static_transformation_method: str = 'rank'
+    static_target_distribution: str = 'normal'
+    mixed_transformation_method: str = 'rank'
+    mixed_target_distribution: str = 'normal'
     # 静态因子是否启用GARCH白化（默认关闭）
     static_enable_garch: bool = False
     # GARCH白化参数
@@ -875,15 +875,25 @@ class StaticFactorPipeline(_BaseFactorPipeline):
     理由: 先剥离行业暴露 (原始值), 再对纯净 alpha 做 transform.
     旧顺序下 Box-Cox 可能放大行业信号, neutralize 虽然数学上能移除但
     transform 的扭曲已经锁定到值空间中, 影响下游多因子组合的信号结构.
+
+    PL-02: 变换默认 rank (逐日截面 PIT), 方法由 transformation_params 固定.
     """
 
     def __init__(self,
                  neutralizer_params: Optional[Dict] = None,
+                 transformation_params: Optional[Dict] = None,
                  enable_garch: bool = False,
                  garch_params: Optional[Dict] = None,
                  module_enabled: Optional[Dict[str, bool]] = None):
         super().__init__()
         me = module_enabled or {}
+        tp = transformation_params or {}
+        transform_method = tp.get('method', 'rank')
+        transform_target = tp.get('target_distribution', 'normal')
+        transform_extra = {
+            k: v for k, v in tp.items()
+            if k not in ('method', 'target_distribution')
+        }
         self.steps = [
             ('imputer', ImputerAdapter(strategy='ffill_ts', enabled=me.get('imputer', True))),
             ('outlier', ProcessingAdapter(process_type='outlier', method='percentile',
@@ -892,7 +902,12 @@ class StaticFactorPipeline(_BaseFactorPipeline):
             # P1: neutralize before transform — 先剥离行业暴露再变换
             ('neutralize', NeutralizerAdapter(enabled=me.get('neutralizer', True),
                                               **(neutralizer_params or {}))),
-            ('transform', ProcessingAdapter(process_type='transformation', method='auto')),
+            ('transform', ProcessingAdapter(
+                process_type='transformation',
+                method=transform_method,
+                target_distribution=transform_target,
+                **transform_extra,
+            )),
         ]
 
         # 可选：GARCH白化（默认关闭）
@@ -1044,28 +1059,23 @@ class MixedFactorPipeline(_BaseFactorPipeline):
     典型代表：1个月动量、3个月动量
 
     处理流程：
-        缺失插补 → 温和去极值(3σ缩尾) → 条件性非线性变换 → 原始值中性化 → 线性Z-Score
+        缺失插补 → 温和去极值(3σ缩尾) → 原始值中性化 → 固定 rank 变换 → 线性Z-Score
 
     为何这样处理：
         这类因子介于两者之间，最保守的策略是降级处理。
-        只做温和缩尾和中性化，条件性做非线性变换。
+        只做温和缩尾和中性化，固定做 rank 变换（I-INT：先中性化再 rank）。
         宁可保留一些原始噪声，也不冒险破坏其信号结构。
     """
 
     def __init__(self,
-                 conditional_transform: bool = True,
-                 skew_threshold: float = 2.0,
-                 kurt_threshold: float = 5.0,
                  mixed_winsor_sigma: float = 3.0,
+                 transformation_params: Optional[Dict] = None,
                  neutralizer_params: Optional[Dict] = None,
                  module_enabled: Optional[Dict[str, bool]] = None):
         super().__init__()
-        self.conditional_transform = conditional_transform
-        self.skew_threshold = skew_threshold
-        self.kurt_threshold = kurt_threshold
         self.mixed_winsor_sigma = mixed_winsor_sigma
+        self._transformation_params = transformation_params or {}
         self.neutralizer_params = neutralizer_params or {}
-        self._needs_transform = False  # 是否需要进行非线性变换
         self._transformer = None  # 显式初始化，避免状态不一致
 
         # ABLATION E1: 模块级 enabled 开关 (默认全 True, 向后兼容)
@@ -1085,41 +1095,46 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         X = self._imputer.transform(X, **kwargs)
         self._intermediate_data['imputation'] = X.copy()
 
-        # ABLATION E1: winsorizer 关闭时跳过 (identity)
+        # Step 2: 温和缩尾 (PL-06 未修, 仍为全样本参数)
         if self._winsorizer_enabled:
             logger.info("[MixedPipeline] Applying gentle winsorization...")
             self._winsorize_params = self._compute_winsorize_params(X)
-            X_winsor = self._apply_winsorize(X)
+            X = self._apply_winsorize(X)
         else:
             logger.info("[MixedPipeline] winsorizer disabled, 跳过去极值 (identity)")
             self._winsorize_params = None
-            X_winsor = X
-        self._intermediate_data['outlier'] = X_winsor.copy()
+        self._intermediate_data['outlier'] = X.copy()
 
-        # Step 3: 诊断是否需要非线性变换
-        if self.conditional_transform:
-            self._needs_transform = self._diagnose_transform_need(X)
-            if self._needs_transform:
-                logger.info("[MixedPipeline] Distribution extreme, will apply gentle transform")
-                self._transformer = ProcessingAdapter(process_type='transformation', method='yeo_johnson')
-                self._transformer.fit(X, **kwargs)
-            else:
-                logger.info("[MixedPipeline] Distribution normal, skipping transform")
-        else:
-            self._needs_transform = False
-
-        # Step 4: 中性化
+        # Step 3: 中性化 (I-INT: 先剥离暴露)
         logger.info("[MixedPipeline] Fitting neutralizer...")
         self._neutralizer = NeutralizerAdapter(enabled=self._neutralizer_enabled,
                                                **self.neutralizer_params)
         self._neutralizer.fit(X, **kwargs)
+        X = self._neutralizer.transform(X, **kwargs)
+        self._intermediate_data['neutralize'] = X.copy()
+
+        # Step 4: 变换 (fit 与 transform 使用同一输入)
+        logger.info("[MixedPipeline] Fitting transformer...")
+        tp = self._transformation_params
+        extra = {
+            k: v for k, v in tp.items()
+            if k not in ('method', 'target_distribution')
+        }
+        self._transformer = ProcessingAdapter(
+            process_type='transformation',
+            method=tp.get('method', 'rank'),
+            target_distribution=tp.get('target_distribution', 'normal'),
+            **extra,
+        )
+        self._transformer.fit(X, **kwargs)
+        X = self._transformer.transform(X, **kwargs)
+        self._intermediate_data['transform'] = X.copy()
 
         # Step 5: 标准化
         logger.info("[MixedPipeline] Fitting standardizer...")
         self._standardizer = ProcessingAdapter(process_type='standardization', method='z_score',
                                                enabled=self._scaler_enabled)
-        X_neutral = self._neutralizer.transform(X, **kwargs)
-        self._standardizer.fit(X_neutral, **kwargs)
+        self._standardizer.fit(X, **kwargs)
 
         self.is_fitted = True
         return self
@@ -1135,12 +1150,11 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         if self._winsorizer_enabled:
             X = self._apply_winsorize(X)
 
-        # Step 3: 条件性变换
-        if self._needs_transform:
-            X = self._transformer.transform(X, **kwargs)
-
-        # Step 4: 中性化
+        # Step 3: 中性化
         X = self._neutralizer.transform(X, **kwargs)
+
+        # Step 4: 固定变换
+        X = self._transformer.transform(X, **kwargs)
 
         # Step 5: 标准化
         X = self._standardizer.transform(X, **kwargs)
@@ -1168,12 +1182,6 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         return X.clip(lower=self._winsorize_params['lower'],
                       upper=self._winsorize_params['upper'],
                       axis=1)
-
-    def _diagnose_transform_need(self, X: pd.DataFrame) -> bool:
-        """诊断是否需要进行非线性变换"""
-        skew = X.skew().median()
-        kurt = X.kurtosis().median()
-        return abs(skew) > self.skew_threshold or kurt > self.kurt_threshold
 
 
 class FactorProcessingPipelineV2:
@@ -1503,6 +1511,10 @@ class FactorProcessingPipelineV2:
         if pipe_type == 'static':
             return StaticFactorPipeline(
                 neutralizer_params=neutralizer_params,
+                transformation_params={
+                    'method': self.config.static_transformation_method,
+                    'target_distribution': self.config.static_target_distribution,
+                },
                 enable_garch=self.config.static_enable_garch,
                 garch_params={
                     'p': self.config.static_garch_p,
@@ -1522,10 +1534,11 @@ class FactorProcessingPipelineV2:
             )
         elif pipe_type == 'mixed':
             return MixedFactorPipeline(
-                conditional_transform=self.config.mixed_conditional_transform,
-                skew_threshold=self.config.mixed_skew_threshold,
-                kurt_threshold=self.config.mixed_kurt_threshold,
                 mixed_winsor_sigma=self.config.mixed_winsor_sigma,
+                transformation_params={
+                    'method': self.config.mixed_transformation_method,
+                    'target_distribution': self.config.mixed_target_distribution,
+                },
                 neutralizer_params=neutralizer_params,
                 module_enabled=module_enabled,
             )

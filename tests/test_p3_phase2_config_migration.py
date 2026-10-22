@@ -64,11 +64,11 @@ class TestPipelineV2ConfigNewFields(unittest.TestCase):
 
         config = PipelineV2Config(
             dynamic_decorrelation_strength=0.7,
-            mixed_skew_threshold=2.5,
+            mixed_transformation_method='identity',
         )
 
         self.assertEqual(config.dynamic_decorrelation_strength, 0.7)
-        self.assertEqual(config.mixed_skew_threshold, 2.5)
+        self.assertEqual(config.mixed_transformation_method, 'identity')
         self.assertEqual(config.hard_routing_prob, 0.90)
         self.assertEqual(config.merge_alpha, 0.50)
         self.assertEqual(config.ks_alpha, 0.05)

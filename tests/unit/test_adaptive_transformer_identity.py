@@ -1,131 +1,102 @@
-"""TDD: _select_optimal_transform identity 回退 + kurtosis threshold 修复"""
+# -*- coding: utf-8 -*-
+"""PL-02: AdaptiveTransformer 无状态 rank 与先验参数模式.
+
+旧文件围绕已删除的 `auto` 选型链 (skew/kurt/Shapiro 特征 + identity 回退).
+新契约:
+- rank 为无状态 PIT 映射, `target_distribution` 控制输出分布
+- identity 为 no-op
+- 显式方法 (boxcox/yeojohnson/power/log) 只读先验参数, fit 不估计
+"""
 import numpy as np
-from scipy import stats
 import pytest
+from scipy.stats import norm
 
-from factor_pipeline.modules.factor_adaptive_winsor.core.transformers import AdaptiveTransformer
-
-
-def _make(kurt_val=0.0, skew_val=0.0, is_positive=True):
-    features = {
-        'is_normal': abs(skew_val) < 0.5 and abs(kurt_val - 3) < 1,
-        'is_positive': is_positive,
-        'is_heavy_tailed': kurt_val > 3,
-        'is_skewed': abs(skew_val) > 0.5,
-    }
-    return features
+from factor_pipeline.modules.factor_adaptive_winsor.core.transformers import (
+    AdaptiveTransformer,
+)
 
 
-class TestSelectOptimalTransform:
-    """_select_optimal_transform 决策表"""
+def _ranked(target, n=2000, seed=0):
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal(n)
+    t = AdaptiveTransformer(method='rank', target_distribution=target)
+    t.fit(X)
+    return X, t.transform(X)
 
-    def test_normal_positive_now_returns_identity(self):
-        """is_normal=True → identity (修复后)"""
-        t = AdaptiveTransformer(method='auto')
-        # kurtosis=3 在旧逻辑中意味着 abs(3-3)=0 < 1 → is_normal
-        methods = set()
-        for _ in range(10):
-            X = np.random.randn(1000) + 100  # shift to positive
-            t.fit(X)
-            methods.add(t.fitted_params.get('method'))
-        # 至少有一次 identity (修复后)
-        assert 'identity' in methods, f"正常数据应选 identity, 实际: {methods}"
 
-    def test_skewed_negative_selects_yeojohnson(self):
-        """偏态+负值 → yeojohnson"""
-        t = AdaptiveTransformer(method='auto')
-        X = np.random.exponential(2, 2000) - 0.5  # skewed, partly negative
+class TestRankMoments:
+    def test_rank_uniform_moments(self):
+        """归一化秩: E[u]=0, std→1/√3."""
+        _, out = _ranked('uniform')
+        assert abs(float(np.mean(out))) < 1e-12
+        assert abs(float(np.std(out)) - 1.0 / np.sqrt(3.0)) < 1e-6
+
+    def test_rank_normal_moments(self):
+        """Blom 正态分数: 有限样本 std 精确, skew≈0."""
+        _, out = _ranked('normal')
+        n = len(out)
+        scores = norm.ppf((np.arange(1, n + 1) - 0.375) / (n + 0.25))
+        assert abs(float(np.std(out)) - float(np.std(scores))) < 1e-12
+        assert abs(float(np.mean(out))) < 1e-12
+        assert abs(float(np.mean(out ** 3))) < 1e-3
+
+
+class TestRankNaN:
+    def test_rank_nan_preserved(self):
+        """NaN 保持且不参与排名."""
+        X = np.array([1.0, np.nan, 2.0, 3.0, np.nan, 4.0, 5.0])
+        t = AdaptiveTransformer(method='rank')
         t.fit(X)
-        assert t.fitted_params['method'] != 'identity', "非正态不应选 identity"
+        out = t.transform(X)
+        assert np.isnan(out[1]) and np.isnan(out[4])
+        assert np.all(np.isfinite(out[[0, 2, 3, 5, 6]]))
+        # 非 NaN 位置的排序与无 NaN 输入一致
+        ok = ~np.isnan(X)
+        t2 = AdaptiveTransformer(method='rank')
+        out2 = t2.fit(X[ok]).transform(X[ok])
+        np.testing.assert_allclose(out[ok], out2, atol=1e-12, rtol=0)
 
-    def test_heavy_tailed_positive_selects_boxcox(self):
-        """重尾+正值 → 不应选 identity"""
-        np.random.seed(42)
-        t = AdaptiveTransformer(method='auto')
-        X = np.random.standard_t(2, 5000) + 10
+
+class TestIdentity:
+    def test_identity_noop(self):
+        """identity 返回输入, 不改数值也不复制 NaN."""
+        X = np.array([np.nan, -1.0, 0.0, 2.0])
+        t = AdaptiveTransformer(method='identity')
         t.fit(X)
-        method = t.fitted_params['method']
-        feat = t.fitted_params['data_features']
-        print(f"heavy_tailed={feat['is_heavy_tailed']}, positive={feat['is_positive']}, method={method}")
-        assert method != 'identity', f"重尾数据不应选 identity, 实际: {method}"
+        out = t.transform(X)
+        np.testing.assert_array_equal(out, X)
 
 
-class TestAnalyzeFeaturesKurtosisFix:
-    """_analyze_features 的 kurtosis 阈值修复"""
-
-    def test_normal_data_is_normal(self):
-        """N(0,1) 应被识别为 is_normal (修复后)"""
-        t = AdaptiveTransformer(method='auto')
-        X = np.random.randn(5000)
+class TestPriorParams:
+    def test_boxcox_lam_zero_equals_log(self):
+        """boxcox(lam=0) == log(x), 不估计 λ."""
+        rng = np.random.default_rng(7)
+        X = rng.uniform(0.1, 10.0, 500)
+        t = AdaptiveTransformer(method='boxcox', lam=0.0)
         t.fit(X)
-        feat = t.fitted_params['data_features']
-        k = stats.kurtosis(X)  # excess kurtosis
-        print(f"skew={feat['skewness']:.3f} kurt={feat['kurtosis']:.3f} (excess≈{k:.3f})")
-        print(f"is_normal(old_check(abs(k-3)<1))={abs(feat['kurtosis'] - 3) < 1}")
-        # 修复后 is_normal 应使用 excess kurtosis (< 1)
-        # 当前代码用 abs(kurtosis-3)<1 → 对 N(0,1) 恒为 False
-        # 这个测试验证修复是否生效
-        assert feat['is_normal'], (
-            f"N(0,1) 应 is_normal=True, 实际={feat['is_normal']}, "
-            f"kurtosis(excess)={k:.3f}"
-        )
+        out = t.transform(X)
+        np.testing.assert_allclose(out, np.log(X), atol=1e-12, rtol=0)
 
-    def test_heavy_tailed_not_normal(self):
-        """t(2) 不应被识别为 normal"""
-        t = AdaptiveTransformer(method='auto')
-        X = np.random.standard_t(2, 5000)
-        t.fit(X)
-        feat = t.fitted_params['data_features']
-        assert not feat['is_normal'], f"t(2) 不应 is_normal, 实际={feat['is_normal']}"
-        assert feat['is_heavy_tailed'], f"t(2) 应 is_heavy_tailed"
+    def test_lam_required_for_boxcox(self):
+        with pytest.raises(ValueError, match='lam'):
+            AdaptiveTransformer(method='boxcox')
 
 
-class TestIdentityNoChange:
-    """identity 变换不改变数据"""
+class TestMethodResolution:
+    def test_alias_resolution(self):
+        auto = AdaptiveTransformer(method='auto')
+        assert auto.method == 'rank'
+        assert auto.requested_method == 'auto'
+        assert auto.target_distribution == 'normal'
 
-    def test_identity_transform_is_noop(self):
-        """identity 应返回原始数据"""
-        t = AdaptiveTransformer(method='auto')
-        X = np.random.randn(2000) + 100
-        t.fit(X)
-        if t.fitted_params.get('method') == 'identity':
-            X_out = t.transform(X)
-            diff = (X - X_out).std()
-            # identity 应不改变数据 (允许 < 1e-12 浮点误差)
-            assert diff < 1e-12, f"identity 不应改变数据, diff_std={diff}"
+        none = AdaptiveTransformer(method='none')
+        assert none.method == 'identity'
+        assert none.requested_method == 'none'
 
+    def test_invalid_method_raises(self):
+        with pytest.raises(ValueError, match='未知'):
+            AdaptiveTransformer(method='not_a_method')
 
-class TestShapiroWilkNormality:
-    """Step 2: Shapiro-Wilk 形式检验替代启发式 is_normal"""
-
-    def test_normal_data_shapiro_p_gt_005_selects_identity(self):
-        """N(0,1) — Shapiro-Wilk p≥0.05 → is_normal=True → identity"""
-        from scipy.stats import shapiro
-        np.random.seed(42)
-        for _ in range(10):
-            X = np.random.randn(3000)  # large enough for Shapiro-Wilk
-            t = AdaptiveTransformer(method='auto')
-            t.fit(X)
-            feat = t.fitted_params['data_features']
-            # ensure Shapiro-Wilk p-value was computed
-            assert 'normality_p_value' in feat, "expected normality_p_value in features"
-            p_val = feat['normality_p_value']
-            print(f"  SW p={p_val:.4f}, is_normal={feat['is_normal']}")
-            if p_val >= 0.05:  # normal at α=0.05
-                assert feat['is_normal'], f"p={p_val:.4f}≥0.05 should be is_normal=True"
-                assert t.fitted_params['method'] == 'identity', \
-                    f"normal data should select identity, got {t.fitted_params['method']}"
-                return  # test passes on first normal sample
-        pytest.skip("no sample passed Shapiro-Wilk at α=0.05 (rare but possible)")
-
-    def test_skewed_data_shapiro_p_lt_005_selects_transform(self):
-        """exp(λ=2) 偏态 — Shapiro-Wilk p<0.05 → need transform"""
-        np.random.seed(42)
-        X = np.random.exponential(2, 3000)
-        t = AdaptiveTransformer(method='auto')
-        t.fit(X)
-        feat = t.fitted_params['data_features']
-        print(f"  SW p={feat.get('normality_p_value', 'N/A'):}, method={t.fitted_params['method']}")
-        assert not feat['is_normal'], f"skewed exp(2) should NOT be is_normal"
-        assert t.fitted_params['method'] != 'identity', \
-            f"skewed data should NOT select identity, got {t.fitted_params['method']}"
+    def test_invalid_target_raises(self):
+        with pytest.raises(ValueError, match='target_distribution'):
+            AdaptiveTransformer(method='rank', target_distribution='cauchy')

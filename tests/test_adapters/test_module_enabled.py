@@ -106,6 +106,7 @@ class TestProcessingAdapterEnabled:
 
         transformation 不参与消融 — 即使传 enabled=False, 也强制 enabled=True,
         并在实际 transform 中生效 (不会被跳过).
+        PL-02 后 rank 为无状态变换: fit 不实例化 _processor, 但 transform 仍生效.
         """
         df = pd.DataFrame({'A': [1.0, 2.0, 3.0], 'B': [4.0, 5.0, 6.0]})
         adapter = ProcessingAdapter(process_type='transformation', method='auto', enabled=False)
@@ -113,11 +114,12 @@ class TestProcessingAdapterEnabled:
         assert adapter.enabled is True
         # 且 _processor_class 不为 None (确实初始化了内部处理器)
         assert adapter._processor_class is not None
-        # fit 应初始化 _processor
         adapter.fit(df)
-        assert adapter._processor is not None, (
-            "transformation 即使传 enabled=False 也实际启用, "
-            "fit 应创建 _processor"
+        # PL-02: rank 无状态, fit 不创建 _processor
+        assert adapter._processor is None
+        out = adapter.transform(df)
+        assert not out.equals(df), (
+            "transformation 即使传 enabled=False 也实际启用, transform 应改变数值"
         )
 
 

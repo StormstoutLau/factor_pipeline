@@ -38,7 +38,8 @@
 | ADR-035 | E6 估计层方法 — opt-in + 与决策层互补 | v3.1.0 决策, 2026-10 补记 |
 | ADR-036 | 消融对照机制 — 四层架构 + Baseline 阶梯 | v3.0.0 决策, 2026-10 补记 |
 | ADR-037 | 去极值统一为逐日横截面 (因果性修复) | v3.3.3, 2026-10-22 |
-| ADR-038 起 | 未占用 | — |
+| ADR-038 | 变换统一为逐日截面 rank→正态 (因果性修复) | v3.3.4, 2026-10-22 |
+| ADR-039 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -2519,6 +2520,123 @@ Ledoit & Wolf (2008)（HAC）；Benjamini & Hochberg (1995)（BH-FDR）。
 2. `CacheManager.verify`：不一致返回 `is_valid=False`，reason 为 `code_version mismatch`；
 3. 3 项 `TestCodeVersionGeneration` 单测 + `test_07` 五处默认值一致性测试；
 4. 修正本 ADR 的配置 `TypeError` 发生位置、Arnott 等作者名单、性能实测口径。
+
+---
+
+## ADR-038: 变换统一为逐日截面 rank→正态 (因果性修复)
+
+**日期**: 2026-10-22
+**状态**: 已实施
+**优先级**: P0
+**关联缺陷**: DEFECT-PL-02 (隔离) / DEFECT-PL-04 (Static 端到端残留)
+**关联测试**: `tests/unit/test_transform_rank_cross_sectional.py`、`tests/unit/test_adaptive_transformer_identity.py`、`tests/integration/test_pipeline_truncation_invariance.py`
+**调研/设计**: [PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md](docs/analysis/PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md) / [PL02_TRANSFORM_LOOKAHEAD_DESIGN.md](docs/analysis/PL02_TRANSFORM_LOOKAHEAD_DESIGN.md)
+
+### 背景
+
+管线级截断不变式测试（ADR-029 引入）在 PL-01 修复后仍有残留：`ProcessingAdapter(process_type='transformation')` 的前 t 期输出依赖 t 之后的数据。实测 `T=100, N=30, t=60`：隔离步骤 1800 格差异、`max_abs_diff=8.51e-04`；Static 端到端 4.72e-05（残留全由变换构成）。
+
+根因四层叠加：
+
+1. **池化拟合**：`fit()` 用 `X.values.flatten()` 在全 panel 上估计 Box-Cox/Yeo-Johnson 的 λ、log 的 offset、经验 CDF。
+2. **选型前视**：`auto_optimize=True` 覆盖显式方法；`_select_optimal_transform` 依赖全样本 skew/kurt/Shapiro p 选择方法，且 Shapiro 子采样未设随机种子。
+3. **Mixed 条件变换**：`MixedFactorPipeline.fit` 用全样本 `skew().median()` / `kurtosis().median()` 判断是否变换，属于基于同一数据的 pre-test 式切换。
+4. **配置未接线**：`TransformationConfig.method` 默认 `auto`，但 v2 管线未消费该字段，`mixed_conditional_transform` 等三个字段独立控制行为。
+
+变换是**保序**的（对逐元素方法），因此排序类指标（IC 的 Spearman 版本）对前视不敏感；只有值相等的截断不变式能暴露。
+
+### 决策
+
+**变换统一为逐日截面 rank → 目标分布；方法在构造期固定，`fit()` 不估计任何参数。**
+
+1. **D1 估计轴**：每个交易日独立对当日有效值排名；数据布局 index=日期、columns=股票，故按行（axis=1）即逐日截面。
+2. **D2 输出分布**：`normal` 用 Blom 正态分数 `Φ⁻¹((R−3/8)/(N+1/4))`；`uniform` 用归一化秩 `(2R−N−1)/N`。由 `target_distribution` 控制，默认 `normal`。
+3. **D3 方法解析**：`auto` → `rank`；`quantile` → `rank`；`none` → `identity`；`box_cox` / `yeo_johnson` 映射到实现名。删除 `auto_optimize` 与整条选型链（`_analyze_features` / `_select_optimal_transform` / `_fit_*`）。
+4. **D4 显式方法先验参数化**：`log` / `boxcox` / `yeojohnson` / `power` 保留，但 `fit` 不再估计——`boxcox` / `yeojohnson` 必须提供 `lam`，`power` 必须提供 `power_param`，`log` 使用 `offset`（默认 0）。缺失时构造期 `ValueError`。
+5. **D5 N 下限**：`rank_transform_1d` 是纯算法入口，不做小样本保护；`ProcessingAdapter` 在截面有效观测 `N<10` 时回落逐日截面 z-score，`N<2` 时原样返回。该保护只依赖 N，不依赖分布统计量，属于确定性保护而非 pre-test 切换。
+6. **D6 identity 短路**：`identity` 的 `fit` 为 no-op、`transform` 直接返回输入，避免落入 `X.values.flatten()` 与逐列调用。
+7. **D7 配置接线**：`TransformationConfig` 增加 `target_distribution`、默认 `method='rank'`，并映射到 `PipelineV2Config.static_transformation_method / static_target_distribution / mixed_*`；删除 `mixed_conditional_transform` / `mixed_skew_threshold` / `mixed_kurt_threshold`。
+8. **D8 Mixed 顺序**：切为 neutralize → transform（I-INT：先剥离暴露再 rank），`fit` 与 `transform` 使用同一口径。
+9. **D9 版本与缓存**：项目版本 **v3.3.4**；缓存 `CODE_VERSION` **v2.2.2-cache**（变换输出数值改变，旧缓存读取时 MISS 并自愈删除）。
+
+### 备选方案 (拒绝)
+
+| 方案 | 拒绝理由 |
+|------|---------|
+| 固定方法 + 全样本参数 | 参数仍前视，只把“选型前视”降为“参数前视” |
+| 扩展窗口 λ 调度 | regime 差异不显著（调研 §3.2），收益低于复杂度 |
+| 逐日截面 λ 估计 | 日间波动大，只增加噪声 |
+| 在线条件变换（按 skew/kurt 决定是否变换） | 无学术/社区实践支持；输出为 mixture；基于同一数据的 pre-test 估计量分布不可一致估计（Leeb & Pötscher 2006/2008） |
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| 无状态 rank 映射 / 别名常量 | `modules/factor_adaptive_winsor/core/transformers.py` 模块级 `rank_transform_1d` / `TRANSFORMATION_METHOD_ALIASES` |
+| `AdaptiveTransformer` 构造期校验与无状态 `fit` | `transformers.py` 的 `__init__` / `fit` / `transform` |
+| 截面 rank 与 N 下限 | `adapters.py` 的 `ProcessingAdapter._transform_rank_cross_sectional` |
+| 配置字段与桥接 | `config_v2.py` 的 `TransformationConfig` / `to_pipeline_v2_config()` |
+| 管线接线与 Mixed 顺序 | `pipelines_v2.py` 的 `StaticFactorPipeline` / `MixedFactorPipeline` / `_create_pipeline` |
+
+### 实测证据
+
+截断不变式（`T=100, N=30, t=60, atol=1e-12`，Python 3.12）：
+
+| 层级 | 对象 | 修复前 | 修复后 |
+|------|------|--------|--------|
+| step | transform `auto`（隔离） | 1800 格, 8.51e-04 | **0 格, 0** |
+| pipeline | Static 端到端 | 4.72e-05 | **0 格, 0** |
+| pipeline | Mixed 端到端 | 2.91e-01 | 6.98e-01（**剩余仅 PL-06 全样本缩尾**） |
+| pipeline | Dynamic 端到端 | 8.05e-01 / 8 NaN | 不变（PL-05，不含变换步骤） |
+| top | FactorProcessingPipelineV2 | 1.84e+00 / 1650 格 | 1.84e+00 / 1650 格（PL-05/06 + 指纹路由） |
+
+性能（`T=2500, N=3000, t(3), NaN 5%`，单机 Python 3.12）：
+
+| 实现 | 耗时 | 对照 |
+|------|------|------|
+| `rankdata` 逐行（纯 helper） | 1.040 s | 设计基准 1.071 s（−2.9%） |
+| `ProcessingAdapter.transform`（生产路径） | 1.075 s | 相对 helper +3.4% |
+| `normal` 中位列 std | 0.9991712 | 设计基准 0.9989543 |
+| `uniform` 中位列 std | 0.5773502 | 理论 `1/√3 = 0.5773503` |
+
+`ProcessingAdapter` 与纯 helper 输出 `max |diff| = 0`（逐行 rankdata 为唯一算法路径）。
+
+### 测试契约
+
+| 测试 | 覆盖 |
+|------|------|
+| `tests/unit/test_transform_rank_cross_sectional.py`（28 函数 / 32 例） | 别名解析；normal/uniform 对拍；有限样本矩；ties；NaN；截断不变式；无状态；辅助 N<10/N<2；非 DataFrame/重复轴/空表；先验参数必填；identity 短路；YJ λ=1/2 与 Box-Cox λ=0；`get_stats` |
+| `tests/unit/test_adaptive_transformer_identity.py`（9 例） | rank 矩；NaN；identity no-op；先验参数；方法解析；非法输入 |
+| `tests/integration/...::test_transform_auto_is_causal` | 隔离步骤 0 格 / 0 |
+| `tests/integration/...::test_static_pipeline_is_truncation_invariant` | Static 端到端 0 格 / 0 |
+| `tests/test_fix2_config_unification.py::test_09/test_11` | 嵌套 `transformation.method/target_distribution` → 扁平字段 |
+| `tests/test_fix3_version_unification.py` | 4 处版本一致 + 5 处缓存代际一致 |
+
+### 不覆盖范围
+
+- **PL-05 / PL-06 / PL-07**：保持 `xfail` 登记。
+- **死 rank 实现**：`EnhancedRankPreservingScaler` 与 `StandardizationConfig.method='rank'` 无生产路径，仅在调研文档登记。
+- **旧 transform 逐列路径**：对显式非 rank 方法仍按列调用（逐元素方法无害）。
+- **因子级 `identity` 配置**：`AdaptiveTransformer` 已支持，但未暴露到 `PipelineV2Config`。
+
+### 后果
+
+- **正面**：变换步骤结构上无拟合参数可泄漏；Static 端到端归零；`auto` 行为可复现；Mixed 与 Static 共用同一套配置；删除约 200 行选型/拟合死代码。
+- **负面**：Static/Mixed 变换输出全部改变，历史 IC/Sharpe 与缓存需重建；rank 丢失量纲（需要原始单位的因子用 `identity`）；ties 输出相同值（排序不受影响）；非 rank 显式方法需人工提供先验参数，不能再“自动拟合”。
+- **风险**：若未来需要数据自适应变换，必须显式新增估计轴并证明可复现性，不得恢复基于同一数据的 pre-test 切换。
+
+### 学术与工业依据
+
+- 秩变换/正态分数：Blom 正态分数约定（`k=0.375`，SAS PROC RANK / RNOmni 默认）；van der Waerden 分数（NIST Dataplot / SPSS）。
+- Ordered Quantile Normalization：Peterson & Cavanaugh (2019, *Journal of Applied Statistics*)。
+- pre-test 估计量不可一致估计：Leeb & Pötscher (2006, *Annals of Statistics*; 2008, *Econometric Theory*)。
+- 全样本预处理导致信息泄漏：Kaufman, Rosset, Perlich & Stitelman (2012)；Kapoor & Narayanan (2023)。
+- 工业实践：Qlib `CSRankNorm`（逐日截面）；Gu, Kelly & Xiu (2020) 的 rank 预处理；bestNormalize 的 ORQ 选型为一次性建模决策、预测阶段不重选。
+- 详细检索记录与证据等级见调研文档；未核验项不作为本 ADR 的论据。
+
+### 回滚方案
+
+恢复 `AdaptiveTransformer` 的选型链与 `ProcessingAdapter` 的 else 分支；恢复 `MixedFactorPipeline` 的条件变换与 fit 顺序；恢复 `TransformationConfig` / `MixedPipelineConfig` / `PipelineV2Config` 字段；`CODE_VERSION` 回退至 `v2.2.1-cache` 并重建缓存；项目版本回退至 v3.3.3。回滚会使 PL-02/PL-04 的截断测试重新失败，应同时恢复其 `xfail` 登记。
 
 ---
 

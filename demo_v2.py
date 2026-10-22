@@ -179,7 +179,6 @@ def demo_pipeline_v2(factor_dict, industry_data=None):
         classification=ClassificationConfig(soft_boundary=True),
         monitor=MonitorConfig(),
         dynamic_decorrelation_strength=0.8,  # 80%解耦
-        mixed_conditional_transform=True,
     )
 
     pipeline = FactorProcessingPipelineV2(config)
@@ -217,7 +216,6 @@ def demo_semantic_fusion(factor_dict, industry_data=None):
         classification=ClassificationConfig(soft_boundary=True),
         monitor=MonitorConfig(),
         dynamic_decorrelation_strength=0.8,
-        mixed_conditional_transform=True,
     )
 
     pipeline = FactorProcessingPipelineV2(config)

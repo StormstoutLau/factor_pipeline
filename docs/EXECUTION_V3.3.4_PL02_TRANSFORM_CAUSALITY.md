@@ -1,9 +1,9 @@
 # v3.3.4 PL-02 变换因果性修复 — 实施文档
 
-**文档版本**: v1.0
+**文档版本**: v1.1 (v1.0 + 设计 v1.1 对齐: uniform 回落尺度限定)
 **日期**: 2026-10-22
 **缺陷**: DEFECT-PL-02
-**设计依据**: [docs/analysis/PL02_TRANSFORM_LOOKAHEAD_DESIGN.md](analysis/PL02_TRANSFORM_LOOKAHEAD_DESIGN.md) v1.0
+**设计依据**: [docs/analysis/PL02_TRANSFORM_LOOKAHEAD_DESIGN.md](analysis/PL02_TRANSFORM_LOOKAHEAD_DESIGN.md) v1.1
 **调研依据**: [docs/analysis/PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md](analysis/PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md) v1.10
 **目标版本**: v3.3.4
 **变更性质**: 数值行为变更 + 配置字段删除 (`auto_optimize` 参数移除)
@@ -79,7 +79,7 @@ C:\Users\Peng\AppData\Local\Programs\Python\Python312\python.exe -m pytest `
 | 3 | `config_v2.py` | `TransformationConfig` 字段收敛; `MixedPipelineConfig.conditional_transform` 删除; `to_pipeline_v2_config()` 映射改 | 中 |
 | 4 | `pipelines_v2.py` | `PipelineV2Config` 字段; Static/Mixed 入参; Mixed 顺序; 删除 `_diagnose_transform_need`; `_create_pipeline` | 高 |
 | 5 | `demo_v2.py` | 删除 2 处 `mixed_conditional_transform=True` | 低 |
-| 6 | `tests/unit/test_transform_rank_cross_sectional.py` | **新增** 24 个测试 | 低 |
+| 6 | `tests/unit/test_transform_rank_cross_sectional.py` | **新增** 28 函数 / 32 例 (参数化) | 低 |
 | 7 | `tests/unit/test_adaptive_transformer_identity.py` | **重写** 为 rank/先验方法行为测试 | 低 |
 | 8 | `tests/test_fix2_config_unification.py` | `test_09` 重写; `test_11` (嵌套→扁平全字段) 改用 `transformation.method/target_distribution` | 低 |
 | 9 | `tests/test_pipelines_v2.py` | `test_mixed_pipeline_processing` 删除 `conditional_transform` / `skew_threshold` / `kurt_threshold` 三个构造参数 | 低 |
@@ -719,12 +719,14 @@ from scipy.stats import norm, rankdata
 
 from factor_pipeline.adapters import (
     ProcessingAdapter,
+    _MIN_RANK_CROSS_SECTION_OBS,
     _TRANSFORMATION_ALIASES as ADAPTER_ALIASES,
     _TRANSFORMATION_METHODS as ADAPTER_METHODS,
 )
 from factor_pipeline.modules.factor_adaptive_winsor.core.transformers import (
     AdaptiveTransformer, rank_transform_1d,
-    TRANSFORMATION_ALIASES, TRANSFORMATION_METHODS,
+    TRANSFORMATION_METHOD_ALIASES as TRANSFORMATION_ALIASES,
+    TRANSFORMATION_METHODS,
 )
 
 
@@ -1008,18 +1010,53 @@ PL-05 / PL-06 / PL-07; 死 rank 实现 (`EnhancedRankPreservingScaler`,
 
 ## §7 验收记录 (实施后填写)
 
+### 7.1 基线 (实施前, 2026-10-22 实测)
+
+| 组 | 命令 | 预期 | 实测 |
+|----|------|------|------|
+| 集成 | `test_pipeline_truncation_invariance.py` | 7 passed / 5 xfailed | **7 passed, 5 xfailed (8.03s)** |
+| 适配器 | `test_adapters_mock.py` + `test_module_enabled.py` | 38 passed / 2 skipped | **38 passed, 2 skipped (1.58s)** |
+| 管线+配置 | `test_pipelines_v2.py` + `test_fix2_config_unification.py` + `test_config_v2.py` | 全绿 | **47 passed (7.88s)** |
+| 修复回归 | `test_p0_fixes.py` + `test_p1_fixes.py` + `test_p3_phase2_config_migration.py` + `test_adaptive_transformer_identity.py` + `test_outlier_cross_sectional.py` | — | **78 passed, 11 subtests passed (1.63s)** |
+| 版本 | `test_fix3_version_unification.py` | — | **7 passed (0.25s)** |
+| 配置脚本 | `python -m factor_pipeline.tests.test_backtest.verify_fix2_manual` | 全绿 | **全绿** (pytest 收集 0 项, 需直接 `-m` 运行) |
+
+**与 §1.2 预期一致**, 无偏差.
+
+**修复前登记值** (来自 PL-01 CHANGELOG 与集成测试 xfail reason, `T=100, N=30, t=60, atol=1e-12`):
+
+| 对象 | max_abs_diff | 说明 |
+|------|-------------|------|
+| transform `auto` (隔离) | 8.51e-04 | 1800 格 |
+| Static 端到端 | 4.72e-05 | 残留全由 PL-02 构成 |
+| Mixed 端到端 | 2.91e-01 | 全样本缩尾 (PL-06) + 变换 (PL-02) |
+
+### 7.2 实施后
+
 | 项 | 预期 | 实测 | 状态 |
 |----|------|------|------|
-| 集成套件 | 9 passed / 3 xfailed | | |
-| PL-02 隔离 `max_abs_diff` | 0 | | |
-| PL-04 Static `max_abs_diff` | 0 | | |
-| PL-06 Mixed `max_abs_diff` | 仍 > 0 (缩尾) | | |
-| 新单测 | 24 passed | | |
-| 适配器回归 | 38 passed / 2 skipped | | |
-| 版本测试 | 全绿 | | |
-| rank 性能 (T2500×N3000) | ≈1.07 s | | |
-| `normal` std | 0.9989543 | | |
-| `uniform` std | 0.5773950 | | |
+| 集成套件 | 9 passed / 3 xfailed | **9 passed, 3 xfailed (5.39s)** | 通过 |
+| PL-02 隔离 `max_abs_diff` | 0 | **0 格, 0** | 通过 |
+| PL-04 Static `max_abs_diff` | 0 | **0 格, 0** | 通过 |
+| PL-06 Mixed `max_abs_diff` | 仍 > 0 (缩尾) | **257 格, 6.98e-01** | 符合预期 |
+| 新单测 | 24 passed | **32 passed (28 函数, 参数化后 32 例)** | 通过 (超出预期 8 例) |
+| 适配器回归 | 38 passed / 2 skipped | **38 passed, 2 skipped (1.12s)** | 通过 |
+| 版本测试 | 全绿 | **7 passed (0.24s)**; `verify_fix3_manual` 5/5 | 通过 |
+| rank 性能 (T2500×N3000) | ≈1.07 s | **1.040s (helper) / 1.075s (adapter)** | 通过 (−2.9% / +3.4%) |
+| `normal` std | 0.9989543 | **0.9991712** | 通过 (差 2.2e-4) |
+| `uniform` std | 0.5773950 | **0.5773502** | 通过 (理论值 `1/√3`) |
+| 全靶向回归 | — | **212 passed, 2 skipped, 3 xfailed, 11 subtests (10.64s)** | 通过 |
+
+**性能偏差说明**: helper 与设计基准差 −2.9%（<20% 阈值）；`normal` / `uniform` 的中位列 std 与设计登记值差异分别 2.2e-4 / 4.5e-5，属统计口径（NaN 抽样与行内有效 N）差异，非实现差异；helper 与 `ProcessingAdapter` 输出 `max |diff| = 0`。
+
+**实施偏差** (详见 CHANGELOG v3.3.4「实施偏差记录」):
+
+1. `test_module_enabled.py::test_transformation_enabled_ignored_in_processing`：断言从 `_processor is not None` 改为 `_processor is None` + `transform` 改变数值（rank 无状态）。
+2. `test_pipelines_v2.py` 顺序测试阈值 `+0.005` → `+0.02`：旧顺序 OLS 残差构造性正交，新顺序 `neutralize→rank` 实测 0.0057。
+3. 有限样本矩断言改用精确公式（`uniform` `sqrt((N+1)/(3N))`；`normal` 取 Blom 样本矩），不写极限值。
+4. `test_adaptive_transformer_identity.py` 重写为 9 例（文档表格列 6 项，实际拆分为 9 个测试函数）。
+
+**设计澄清 (v1.1, 不涉及代码)**: §5.3.2 明确 "std≈1" 契约只对 `target_distribution='normal'` 成立。`uniform` 的 N<10 回落 z-score 与 rank 输出尺度不同（实测 ddof=1：N=5 回落 `std=1.0`；N=10 rank `std=0.60553`），该差异在完整管线内被后续逐日 z-score 统一，仅影响单独使用 adapter 的场景。
 
 ---
 
@@ -1030,7 +1067,7 @@ PL-05 / PL-06 / PL-07; 死 rank 实现 (`EnhancedRankPreservingScaler`,
 | 风险 | 影响 | 缓解 |
 |------|------|------|
 | Static/Mixed 输出变化 | 历史 IC/Sharpe 不可比 | ADR-038 + CHANGELOG; 重跑 |
-| 配置字段删除 | 旧 YAML/JSON 反序列化失败 | `MixedPipelineConfig.conditional_transform` 删除属破坏性变更; 迁移说明写入 CHANGELOG |
+| 配置字段删除 | 旧 YAML/JSON 不报错 (pydantic `extra='ignore'`), 但字段被静默忽略; `conditional_transform=False` 不再禁用变换 | `MixedPipelineConfig.conditional_transform` 删除属行为变更; 迁移说明写入 CHANGELOG (`transformation.method='identity'`) |
 | `auto_optimize` 传参 | `AdaptiveTransformer(auto_optimize=True)` → `TypeError` | 只出现在 `config.py L121`; 同步删除该键 |
 | rank 丢量纲 | 需要原始单位的因子不可用 | `method='identity'` opt-out |
 | ties 12.27% | 大量相等值 | `average` 保序; 文档声明 |
@@ -1057,7 +1094,7 @@ PL-05 / PL-06 / PL-07; 死 rank 实现 (`EnhancedRankPreservingScaler`,
 |------|------|
 | 代码 | `transformers.py` / `adapters.py` / `config_v2.py` / `pipelines_v2.py` / `demo_v2.py` / `cache_manager.py` |
 | 测试 | 新增 1 / 重写 1 / 修改 3 |
-| 文档 | ADR-038 / CHANGELOG v3.3.4 / 本文件 / 设计 v1.0 / 调研 v1.10 |
+| 文档 | ADR-038 / CHANGELOG v3.3.4 / 本文件 / 设计 v1.1 / 调研 v1.10 |
 | 版本 | 5 处声明 + 缓存 `v2.2.2-cache` |
 
 ---

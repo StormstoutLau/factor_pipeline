@@ -65,17 +65,13 @@ class OutlierConfig(BaseModel):
 
 class TransformationConfig(BaseModel):
     """变换步骤配置"""
-    
-    method: Literal['auto', 'box_cox', 'yeo_johnson', 'quantile', 'log', 'none'] = \
-        Field(default='auto', description="变换方法")
-    skew_threshold: float = Field(
-        default=2.0, ge=0.0, 
-        description="偏度阈值（超过则变换）"
-    )
-    kurt_threshold: float = Field(
-        default=5.0, ge=0.0, 
-        description="峰度阈值（超过则变换）"
-    )
+
+    method: Literal[
+        'auto', 'rank', 'identity', 'none', 'log',
+        'box_cox', 'yeo_johnson', 'power', 'quantile',
+    ] = Field(default='rank', description="变换方法")
+    target_distribution: Literal['uniform', 'normal'] = \
+        Field(default='normal', description="PIT 目标分布")
 
 
 class StandardizationConfig(BaseModel):
@@ -183,10 +179,6 @@ class MixedPipelineConfig(BaseModel):
     neutralization: NeutralizationConfig = Field(default_factory=NeutralizationConfig)
     
     # 混合管道条件性参数
-    conditional_transform: bool = Field(
-        default=True,
-        description="是否条件性变换（根据偏度/峰度判断）"
-    )
     mild_winsorization: bool = Field(
         default=True,
         description="是否使用温和缩尾（3σ 而非 5σ）"
@@ -376,7 +368,7 @@ class PipelineV2ConfigUnified(BaseModel):
     """
     
     name: str = Field(default="factor_pipeline_v2", description="流水线名称")
-    version: str = Field(default="3.3.3", description="版本")
+    version: str = Field(default="3.3.4", description="版本")
     description: str = Field(default="", description="描述")
     
     # 全局设置
@@ -489,8 +481,8 @@ class PipelineV2ConfigUnified(BaseModel):
           - 嵌套 → 扁平:
               static.garch.enabled/p/q/vol/min_obs → static_enable_garch/static_garch_p/q/vol/min_obs
               dynamic.decorrelation_strength/max_ar_order/ar_criterion → dynamic_*
-              mixed.conditional_transform                  → mixed_conditional_transform
-              mixed.transformation.skew_threshold/kurt_threshold → mixed_skew_threshold/mixed_kurt_threshold
+              static.transformation.method/target_distribution → static_transformation_method/static_target_distribution
+              mixed.transformation.method/target_distribution → mixed_transformation_method/mixed_target_distribution
 
         Returns:
             PipelineV2Config (dataclass) — 可被 optimizer 和 pipeline 运行时消费
@@ -524,10 +516,11 @@ class PipelineV2ConfigUnified(BaseModel):
             dynamic_decorrelation_strength=self.dynamic.decorrelation_strength,
             dynamic_max_ar_order=self.dynamic.max_ar_order,
             dynamic_ar_criterion=self.dynamic.ar_criterion,
-            # 混合管道字段 (嵌套 → 扁平)
-            mixed_conditional_transform=self.mixed.conditional_transform,
-            mixed_skew_threshold=self.mixed.transformation.skew_threshold,
-            mixed_kurt_threshold=self.mixed.transformation.kurt_threshold,
+            # 变换配置 (嵌套 → 扁平)
+            static_transformation_method=self.static.transformation.method,
+            static_target_distribution=self.static.transformation.target_distribution,
+            mixed_transformation_method=self.mixed.transformation.method,
+            mixed_target_distribution=self.mixed.transformation.target_distribution,
             # 静态管道 GARCH 字段 (嵌套 → 扁平)
             static_enable_garch=self.static.garch.enabled,
             static_garch_p=self.static.garch.p,

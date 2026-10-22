@@ -118,7 +118,7 @@ class PipelineConfig:
                     step_type=StepType.TRANSFORMATION,
                     module_path="factor_pipeline.modules.factor_adaptive_winsor",
                     class_name="AdaptiveTransformer",
-                    params={'method': 'auto', 'auto_optimize': True}
+                    params={'method': 'rank'}
                 ),
                 StepConfig(
                     step_type=StepType.STANDARDIZATION,

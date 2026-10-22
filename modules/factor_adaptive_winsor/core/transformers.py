@@ -7,9 +7,8 @@
 import pandas as pd
 import numpy as np
 from scipy import stats
-from scipy.optimize import minimize_scalar, OptimizeResult
-from sklearn.preprocessing import PowerTransformer, QuantileTransformer
-from typing import Dict, Any, Union, Optional, Tuple, Literal, cast
+from sklearn.preprocessing import QuantileTransformer
+from typing import Dict, Any, Union, Optional, Tuple, Literal
 import warnings
 import logging
 
@@ -495,363 +494,181 @@ class SmartOutlierDetector(BaseTransformer):
         return np.clip(X, lo, hi)
 
 
-class AdaptiveTransformer(BaseTransformer):
-    """自适应变换器 - 基于诊断结果自动选择变换方法"""
-    
-    def __init__(self, method='auto', auto_optimize=True, target_distribution: Literal['uniform', 'normal'] = 'normal', power_param=None):
-        super().__init__(
-            method=method, auto_optimize=auto_optimize, 
-            target_distribution=target_distribution
+# PL-02: 变换方法解析与逐日截面 rank (DEFECT-PL-02)
+TRANSFORMATION_METHOD_ALIASES = {
+    'auto': 'rank',
+    'none': 'identity',
+    'box_cox': 'boxcox',
+    'yeo_johnson': 'yeojohnson',
+    'quantile': 'rank',
+}
+TRANSFORMATION_METHODS = frozenset(
+    {'rank', 'identity', 'log', 'boxcox', 'yeojohnson', 'power'}
+)
+
+_RANK_BLOM_K = 3.0 / 8.0
+_RANK_BLOM_D = 1.0 / 4.0
+
+
+def rank_transform_1d(values: np.ndarray, target: str = 'normal') -> np.ndarray:
+    """无状态 PIT 映射: 1-D 秩 -> 目标分布.
+
+    NaN 保持 NaN 且不参与排名. 无任何拟合参数, 截断不变性结构成立.
+    """
+    out = np.full(values.shape, np.nan, dtype=float)
+    ok = ~np.isnan(values)
+    n = int(ok.sum())
+    if n < 2:
+        return out
+    ranks = stats.rankdata(values[ok], method='average')
+    if target == 'normal':
+        out[ok] = stats.norm.ppf((ranks - _RANK_BLOM_K) / (n + _RANK_BLOM_D))
+    elif target == 'uniform':
+        out[ok] = (2.0 * ranks - n - 1.0) / n
+    else:
+        raise ValueError(
+            f"未知 target_distribution: {target!r}; 合法值: 'normal' / 'uniform'"
         )
+    return out
+
+
+class AdaptiveTransformer(BaseTransformer):
+    """变换器 — PL-02 起固定为无状态 PIT 映射或先验参数方法.
+
+    支持方法: rank / identity / log / boxcox / yeojohnson / power.
+    所有方法均不在 fit 阶段估计参数; 截断不变性结构成立.
+    """
+
+    def __init__(self, method: str = 'rank',
+                 target_distribution: Literal['uniform', 'normal'] = 'normal',
+                 lam: Optional[float] = None,
+                 offset: float = 0.0,
+                 power_param: Optional[float] = None):
+        requested = method
+        method = TRANSFORMATION_METHOD_ALIASES.get(method, method)
+        if method not in TRANSFORMATION_METHODS:
+            raise ValueError(
+                f"未知的变换方法: {requested!r}; 合法值: "
+                f"{sorted(TRANSFORMATION_METHODS)} 或 "
+                f"{sorted(TRANSFORMATION_METHOD_ALIASES)}"
+            )
+        if target_distribution not in ('normal', 'uniform'):
+            raise ValueError(
+                f"未知 target_distribution: {target_distribution!r}; "
+                "合法值: 'normal' / 'uniform'"
+            )
+        if method in ('boxcox', 'yeojohnson') and lam is None:
+            raise ValueError(
+                f"method={method!r} 需要先验参数 lam (禁止 fit 估计)"
+            )
+        if method == 'power' and power_param is None:
+            raise ValueError(
+                "method='power' 需要先验参数 power_param (禁止 fit 估计)"
+            )
+
+        super().__init__(
+            method=method,
+            target_distribution=target_distribution,
+        )
+        self.requested_method = requested
         self.method = method
-        self.auto_optimize = auto_optimize
         self.target_distribution = target_distribution
+        self.lam = lam
+        self.offset = float(offset)
         self.power_param = power_param
         
     def fit(self, X: Union[pd.Series, pd.DataFrame, np.ndarray]) -> 'AdaptiveTransformer':
-        """拟合变换参数"""
-        X_array = self._to_array(X)
-        X_clean = X_array[~np.isnan(X_array)]
-        
-        if len(X_clean) < 3:
-            logger.warning("样本数不足，跳过变换")
-            self.fitted_params = {
-                'method': 'identity',
-                'data_features': {'skewness': 0, 'kurtosis': 0},
-                'success': False
-            }
-            self.is_fitted = True
-            return self
-        
-        # 分析数据特征
-        data_features = self._analyze_features(X_clean)
-        
-        # 选择变换方法
-        if self.method == 'auto' or self.auto_optimize:
-            selected_method = self._select_optimal_transform(data_features)
-        else:
-            selected_method = self.method
-        
-        # 拟合变换参数
-        if selected_method == 'identity':
-            params = {'success': True}
-        elif selected_method == 'yeojohnson':
-            params = self._fit_yeojohnson(X_clean)
-        elif selected_method == 'boxcox':
-            params = self._fit_boxcox(X_clean)
-        elif selected_method == 'quantile':
-            params = self._fit_quantile(X_clean)
-        elif selected_method == 'power':
-            params = self._fit_power(X_clean)
-        elif selected_method == 'log':
-            params = self._fit_log(X_clean)
-        else:
-            raise ValueError(f"未知的变换方法: {selected_method}")
-        
-        self.fitted_params = {
-            'method': selected_method,
-            'data_features': data_features,
-            **params
-        }
-        
+        """无状态: 先验参数已在 __init__ 校验, 不估计任何统计量."""
+        self.fitted_params = {'method': self.method}
         self.is_fitted = True
         return self
     
     def transform(self, X: Union[pd.Series, pd.DataFrame, np.ndarray]) -> Union[pd.Series, pd.DataFrame, np.ndarray]:
-        """应用变换"""
+        """应用无状态变换.
+
+        rank 是截面语义, 必须经由 ProcessingAdapter._cross_sectional_rank 使用;
+        直接传 DataFrame 会被 BaseTransformer._to_array 展平为全局池化.
+        """
         if not self.is_fitted:
             raise ValueError("请先调用fit方法")
-        
+
+        if self.method == 'identity':
+            return X
+
+        if self.method == 'rank':
+            if isinstance(X, pd.DataFrame):
+                raise TypeError(
+                    "AdaptiveTransformer(method='rank') 是截面语义, "
+                    "必须经由 ProcessingAdapter._cross_sectional_rank 使用; "
+                    "直接传 DataFrame 会被展平为全局池化"
+                )
+            arr = self._to_array(X)
+            out = rank_transform_1d(arr, self.target_distribution)
+            if isinstance(X, pd.Series):
+                return self._restore_format(out, X)
+            return out
+
+        original_format = X if isinstance(X, pd.Series) else None
         X_array = self._to_array(X)
-        original_format = X if isinstance(X, (pd.Series, pd.DataFrame)) else None
-        
-        method = self.fitted_params['method']
-        
-        if method == 'identity' or not self.fitted_params.get('success', True):
-            transformed = X_array
-        elif method == 'yeojohnson':
+
+        if self.method == 'yeojohnson':
             transformed = self._apply_yeojohnson(X_array)
-        elif method == 'boxcox':
+        elif self.method == 'boxcox':
             transformed = self._apply_boxcox(X_array)
-        elif method == 'quantile':
-            transformed = self._apply_quantile(X_array)
-        elif method == 'power':
+        elif self.method == 'power':
             transformed = self._apply_power(X_array)
-        elif method == 'log':
+        elif self.method == 'log':
             transformed = self._apply_log(X_array)
         else:
-            raise ValueError(f"未知的变换方法: {method}")
-        
+            raise ValueError(f"未知的变换方法: {self.method}")
+
         if original_format is not None:
             return self._restore_format(transformed, original_format)
         return transformed
     
-    def _analyze_features(self, X: np.ndarray) -> Dict[str, Any]:
-        """分析数据特征"""
-        features = {}
-        
-        # 基础统计
-        features['mean'] = np.mean(X)
-        features['median'] = np.median(X)
-        features['std'] = np.std(X)
-        features['min'] = np.min(X)
-        features['max'] = np.max(X)
-        features['skewness'] = stats.skew(X)
-        features['kurtosis'] = stats.kurtosis(X)
-        
-        # 分布特征
-        # Step 2: Shapiro-Wilk 形式正态性检验 (替代启发式边界)
-        from scipy.stats import shapiro
-        sample = X if len(X) <= 5000 else np.random.choice(X, 5000, replace=False)
-        try:
-            stat_sw, p_sw = shapiro(sample)
-            features['normality_p_value'] = float(p_sw)
-            features['normality_test'] = 'shapiro_wilk'
-            features['is_normal'] = (p_sw >= 0.05)
-        except (ValueError, RuntimeError):
-            # fallback: heuristic (Shapiro-Wilk fails for degenerate data)
-            features['is_normal'] = abs(features['skewness']) < 0.5 and abs(features['kurtosis']) < 1
-            features['normality_p_value'] = float('nan')
-            features['normality_test'] = 'heuristic_fallback'
-
-        features['is_positive'] = np.all(X >= 0)
-        features['is_heavy_tailed'] = features['kurtosis'] > 3
-        features['is_skewed'] = abs(features['skewness']) > 0.5
-        
-        return features
-    
-    def _select_optimal_transform(self, features: Dict[str, Any]) -> str:
-        """选择最优变换方法 — 已修复: 正态数据返回 identity"""
-        if not features['is_normal']:
-            if not features['is_positive']:
-                return 'yeojohnson'
-            elif features['is_heavy_tailed']:
-                return 'boxcox'
-            elif features['is_skewed']:
-                return 'log' if features['is_positive'] else 'yeojohnson'
-            else:
-                return 'quantile'
-        else:
-            return 'identity'
-    
-    def _fit_yeojohnson(self, X: np.ndarray) -> Dict[str, Any]:
-        """拟合Yeo-Johnson变换"""
-        try:
-            # 检查数据有效性
-            X_clean = X[~np.isnan(X)]
-            if len(X_clean) < 2:
-                logger.warning("Yeo-Johnson变换: 有效样本不足，跳过变换")
-                return {'transformer': None, 'success': False}
-            
-            # 检查数据是否全部相同
-            if np.allclose(X_clean, X_clean[0]):
-                logger.warning("Yeo-Johnson变换: 数据为常数，跳过变换")
-                return {'transformer': None, 'success': False}
-            
-            transformer = PowerTransformer(method='yeo-johnson', standardize=False)
-            transformer.fit(X_clean.reshape(-1, 1))
-            
-            return {
-                'transformer': transformer,
-                'success': True
-            }
-        except Exception as e:
-            logger.warning(f"Yeo-Johnson变换拟合失败: {e}")
-            return {
-                'transformer': None,
-                'success': False
-            }
-    
-    def _fit_boxcox(self, X: np.ndarray) -> Dict[str, Any]:
-        """拟合Box-Cox变换"""
-        try:
-            # 检查数据有效性
-            X_clean = X[~np.isnan(X)]
-            if len(X_clean) < 2:
-                logger.warning("Box-Cox变换: 有效样本不足，跳过变换")
-                return {'transformer': None, 'offset': 0, 'success': False}
-            
-            # 检查数据是否全部相同
-            if np.allclose(X_clean, X_clean[0]):
-                logger.warning("Box-Cox变换: 数据为常数，跳过变换")
-                return {'transformer': None, 'offset': 0, 'success': False}
-            
-            # Box-Cox需要正数
-            if np.any(X_clean <= 0):
-                offset = -np.min(X_clean) + 1e-8
-            else:
-                offset = 0
-            
-            transformer = PowerTransformer(method='box-cox', standardize=False)
-            transformer.fit((X_clean + offset).reshape(-1, 1))
-            
-            return {
-                'transformer': transformer,
-                'offset': offset,
-                'success': True
-            }
-        except Exception as e:
-            logger.warning(f"Box-Cox变换拟合失败: {e}")
-            return {
-                'transformer': None,
-                'offset': 0,
-                'success': False
-            }
-    
-    def _fit_quantile(self, X: np.ndarray) -> Dict[str, Any]:
-        """拟合分位数变换"""
-        try:
-            # 检查数据有效性
-            X_clean = X[~np.isnan(X)]
-            if len(X_clean) < 2:
-                logger.warning("分位数变换: 有效样本不足，跳过变换")
-                return {'transformer': None, 'success': False}
-            
-            # 检查数据是否全部相同
-            if np.allclose(X_clean, X_clean[0]):
-                logger.warning("分位数变换: 数据为常数，跳过变换")
-                return {'transformer': None, 'success': False}
-            
-            transformer = QuantileTransformer(
-                output_distribution=cast(Literal['uniform', 'normal'], self.target_distribution),
-                n_quantiles=min(1000, len(X_clean)),
-                random_state=42
-            )
-            transformer.fit(X_clean.reshape(-1, 1))
-            
-            return {
-                'transformer': transformer,
-                'success': True
-            }
-        except Exception as e:
-            logger.warning(f"分位数变换拟合失败: {e}")
-            return {
-                'transformer': None,
-                'success': False
-            }
-    
-    def _fit_power(self, X: np.ndarray) -> Dict[str, Any]:
-        """拟合幂变换"""
-        try:
-            # 检查数据有效性
-            X_clean = X[~np.isnan(X)]
-            if len(X_clean) < 3:
-                logger.warning("幂变换: 有效样本不足，跳过变换")
-                return {'power_param': 1.0, 'success': False}
-            
-            # 检查数据是否全部相同
-            if np.allclose(X_clean, X_clean[0]):
-                logger.warning("幂变换: 数据为常数，跳过变换")
-                return {'power_param': 1.0, 'success': False}
-            
-            # 寻找最优幂参数
-            def objective(power):
-                transformed = np.sign(X_clean) * np.power(np.abs(X_clean), power)
-                # 计算偏度
-                skewness = abs(stats.skew(transformed))
-                return skewness
-            
-            result: OptimizeResult = minimize_scalar(objective, bounds=(-2, 2), method='bounded')
-            
-            return {
-                'power_param': result.x,
-                'success': result.success
-            }
-        except Exception as e:
-            logger.warning(f"幂变换拟合失败: {e}")
-            return {
-                'power_param': 1.0,
-                'success': False
-            }
-    
-    def _fit_log(self, X: np.ndarray) -> Dict[str, Any]:
-        """拟合对数变换"""
-        try:
-            # 检查数据有效性
-            X_clean = X[~np.isnan(X)]
-            if len(X_clean) < 1:
-                logger.warning("对数变换: 有效样本不足，跳过变换")
-                return {'offset': 0, 'success': False}
-            
-            # 对数变换需要正数
-            if np.any(X_clean <= 0):
-                offset = -np.min(X_clean) + 1e-8
-            else:
-                offset = 0
-            
-            return {
-                'offset': offset,
-                'success': True
-            }
-        except Exception as e:
-            logger.warning(f"对数变换拟合失败: {e}")
-            return {
-                'offset': 0,
-                'success': False
-            }
-    
-    def _apply_yeojohnson(self, X: np.ndarray) -> np.ndarray:
-        """应用Yeo-Johnson变换"""
-        if not self.fitted_params['success']:
-            return X
-        
-        transformer = self.fitted_params['transformer']
-        try:
-            transformed = transformer.transform(X.reshape(-1, 1)).flatten()
-            return transformed
-        except:
-            return X
-    
-    def _apply_boxcox(self, X: np.ndarray) -> np.ndarray:
-        """应用Box-Cox变换"""
-        if not self.fitted_params['success']:
-            return X
-        
-        transformer = self.fitted_params['transformer']
-        offset = self.fitted_params['offset']
-        
-        try:
-            X_shifted = X + offset
-            transformed = transformer.transform(X_shifted.reshape(-1, 1)).flatten()
-            return transformed
-        except:
-            return X
-    
-    def _apply_quantile(self, X: np.ndarray) -> np.ndarray:
-        """应用分位数变换"""
-        if not self.fitted_params['success']:
-            return X
-        
-        transformer = self.fitted_params['transformer']
-        try:
-            transformed = transformer.transform(X.reshape(-1, 1)).flatten()
-            return transformed
-        except:
-            return X
-    
-    def _apply_power(self, X: np.ndarray) -> np.ndarray:
-        """应用幂变换"""
-        if not self.fitted_params['success']:
-            return X
-        
-        power = self.fitted_params['power_param']
-        try:
-            transformed = np.sign(X) * np.power(np.abs(X), power)
-            return transformed
-        except:
-            return X
-    
     def _apply_log(self, X: np.ndarray) -> np.ndarray:
-        """应用对数变换"""
-        if not self.fitted_params['success']:
-            return X
-        
-        offset = self.fitted_params['offset']
-        try:
-            transformed = np.log(X + offset)
-            return transformed
-        except:
-            return X
+        """应用对数变换 (先验 offset, 不做拟合)."""
+        shifted = X + self.offset
+        valid = shifted[~np.isnan(shifted)]
+        if np.any(valid <= 0):
+            raise ValueError(
+                f"log 变换: X + offset 含非正值 (offset={self.offset}); "
+                "请提供更大的 offset"
+            )
+        return np.log(shifted)
+
+    def _apply_boxcox(self, X: np.ndarray) -> np.ndarray:
+        """应用 Box-Cox 变换 (先验 lam, 不做拟合)."""
+        valid = X[~np.isnan(X)]
+        if np.any(valid <= 0):
+            raise ValueError("boxcox 变换: 需要严格正值")
+        lam = self.lam
+        if abs(lam) < 1e-12:
+            return np.log(X)
+        return (np.power(X, lam) - 1.0) / lam
+
+    def _apply_yeojohnson(self, X: np.ndarray) -> np.ndarray:
+        """应用 Yeo-Johnson 变换 (先验 lam, 不做拟合)."""
+        lam = self.lam
+        out = np.full(X.shape, np.nan, dtype=float)
+        pos = (X >= 0) & ~np.isnan(X)
+        neg = (X < 0) & ~np.isnan(X)
+        with np.errstate(invalid='ignore', over='ignore', divide='ignore'):
+            if abs(lam) < 1e-12:
+                out[pos] = np.log1p(X[pos])
+            else:
+                out[pos] = (np.power(X[pos] + 1.0, lam) - 1.0) / lam
+            if abs(lam - 2.0) < 1e-12:
+                out[neg] = -np.log1p(-X[neg])
+            else:
+                out[neg] = -(
+                    np.power(1.0 - X[neg], 2.0 - lam) - 1.0
+                ) / (2.0 - lam)
+        return out
+
+    def _apply_power(self, X: np.ndarray) -> np.ndarray:
+        """应用幂变换 (先验 power_param, 不做拟合)."""
+        return np.sign(X) * np.power(np.abs(X), self.power_param)
 
 
 class AdaptiveStandardizer(BaseTransformer):

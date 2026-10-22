@@ -46,9 +46,8 @@ def main():
             ar_criterion='bic',
         ),
         mixed=MixedPipelineConfig(
-            conditional_transform=False,
             transformation=TransformationConfig(
-                skew_threshold=1.8, kurt_threshold=4.5,
+                method='yeo_johnson', target_distribution='normal',
             ),
         ),
     )
@@ -74,9 +73,8 @@ def main():
         'dynamic_max_ar_order': 7,
         'dynamic_ar_criterion': 'bic',
         # 嵌套 → 扁平 (mixed.*)
-        'mixed_conditional_transform': False,
-        'mixed_skew_threshold': 1.8,
-        'mixed_kurt_threshold': 4.5,
+        'mixed_transformation_method': 'yeo_johnson',
+        'mixed_target_distribution': 'normal',
     }
 
     # ── 调用程序转换 ──
@@ -125,9 +123,8 @@ def main():
 
     print("\n[5] 嵌套 → 扁平 (mixed.* → mixed_*):")
     mix_fields = [
-        ('mixed_conditional_transform', dc.mixed_conditional_transform, False),
-        ('mixed_skew_threshold', dc.mixed_skew_threshold, 1.8),
-        ('mixed_kurt_threshold', dc.mixed_kurt_threshold, 4.5),
+        ('mixed_transformation_method', dc.mixed_transformation_method, 'yeo_johnson'),
+        ('mixed_target_distribution', dc.mixed_target_distribution, 'normal'),
     ]
     for name, actual, exp in mix_fields:
         ok = (abs(actual - exp) < 1e-9) if isinstance(exp, float) else (actual == exp)

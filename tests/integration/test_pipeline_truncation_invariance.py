@@ -35,10 +35,8 @@ reason 携带缺陷编号与实测数值. 作用: 套件保持绿; 一旦某缺�
 
     | 编号         | 位置                                  | 实测 max_abs_diff |
     |-------------|--------------------------------------|------------------|
-    | DEFECT-PL-02 | 变换 flatten 全panel 拟合 λ             | 8.51e-04 (普遍)   |
-    | DEFECT-PL-04 | Static 端到端 (残留仅 02)               | 4.72e-05          |
     | DEFECT-PL-05 | Dynamic 端到端 (+ AR 样本内 fitted_values) | 8.05e-01 (8 NaN) |
-    | DEFECT-PL-06 | Mixed 端到端 (自身 winsorizer + 02)       | 2.91e-01          |
+    | DEFECT-PL-06 | Mixed 端到端 (自身全样本缩尾)            | 6.98e-01          |
     | DEFECT-PL-07 | 顶层端到端 (全链路放大)                 | 1.84e+00 (1650 格) |
 
 已修复:
@@ -53,10 +51,15 @@ reason 携带缺陷编号与实测数值. 作用: 套件保持绿; 一旦某缺�
       ``auto_select=False``; 非 percentile 方法逐行复用 detector,
       保留原截断语义. 修复前 1.68e-01 (187 格) → 修复后 0 (隔离测试);
       连带效果: Static 端到端由 1.33e-02 降至 4.72e-05, 残留为 PL-02.
+    - DEFECT-PL-02 / PL-04 (2026-10, v3.3.4): ``ProcessingAdapter`` 的
+      transformation 由 "全 panel flatten 拟合 λ + auto 选型" 改为
+      "逐日截面 rank→正态, 构造期固定方法". 修复前 8.51e-04 (1800 格)
+      → 隔离测试 0; Static 端到端 4.72e-05 → 0.
 
-已确认**满足**不变式 (5 项, 作为回归基线勿改):
+已确认**满足**不变式 (6 项, 作为回归基线勿改):
     - 插补 ``ffill_ts``
     - 去极值 ``percentile`` (PL-01 修复后逐日截面, 每行只使用该行数据)
+    - 变换 ``auto``→``rank`` (PL-02 修复后逐日截面无状态)
     - 中性化 (逐日截面 OLS + 静态行业哑变量)
     - 标准化 ``method='z_score'`` (逐日行内计算, 不使用 fit 参数)
     - 标准化 ``method='auto'`` (PL-03 修复后解析为 z_score, 同上)
@@ -255,14 +258,8 @@ class TestIsolatedStepInvariance:
             lambda: NeutralizerAdapter(industry_data=_industry()), x_full, x_trunc)
         _assert_invariant(out_full, out_trunc, 'isolated: neutralize', t)
 
-    @pytest.mark.xfail(
-        raises=AssertionError, strict=True,
-        reason="DEFECT-PL-02: 变换 fit 同样走 flatten 全 panel 拟合 λ, "
-               "'auto' 选型亦依赖全样本. 实测 t=60: 1800 格差异, max_abs_diff=8.5e-04 "
-               "(幅度小但普遍, 因 auto 两路径均选到同一方法)",
-    )
     def test_transform_auto_is_causal(self, inputs):
-        """变换 auto: 全 panel flatten 拟合 λ, 且 'auto' 选型本身可能依赖全样本."""
+        """变换 auto: PL-02 后解析为 rank, 逐日截面无状态."""
         x_full, x_trunc, t = inputs
 
         out_full, out_trunc = self._run_isolated(
@@ -303,11 +300,6 @@ class TestIsolatedStepInvariance:
 class TestSubPipelineInvariance:
     """三条子管线端到端 (含步骤间传播效应)."""
 
-    @pytest.mark.xfail(
-        raises=AssertionError, strict=True,
-        reason="DEFECT-PL-04: PL-03/PL-01 已修, 残留仅由 PL-02(变换 flatten 全panel "
-               "拟合 λ) 构成. 修复前 4.03e-01 → 修 PL-03 后 1.33e-02 → 修 PL-01 后 4.72e-05",
-    )
     def test_static_pipeline_is_truncation_invariant(self):
         df = _panel(n_periods=100, n_stocks=30, seed=21, kind='smooth')
         x_full, x_trunc, t = _split(df)
@@ -336,13 +328,13 @@ class TestSubPipelineInvariance:
 
     @pytest.mark.xfail(
         raises=AssertionError, strict=True,
-        reason="DEFECT-PL-06: Mixed 自有全样本缩尾 (_compute_winsorize_params) + "
-               "PL-02(变换). 注意 standardization 用 'z_score', 该步本身因果正确 "
+        reason="DEFECT-PL-06: Mixed 自有全样本缩尾 (_compute_winsorize_params). "
+               "注意 standardization 用 'z_score', 该步本身因果正确 "
                "(见 PL-03); Mixed 不经 ProcessingAdapter(outlier), 与 PL-01 无关. "
-               "实测 max_abs_diff=2.91e-01",
+               "实测 max_abs_diff=6.98e-01",
     )
     def test_mixed_pipeline_is_truncation_invariant(self):
-        """Mixed: kind='skewed' 使 |skew|>2, 触发条件变换分支."""
+        """Mixed: kind='skewed' 的厚尾数据 + 全样本缩尾参数."""
         df = _panel(n_periods=100, n_stocks=30, seed=23, kind='skewed')
         x_full, x_trunc, t = _split(df)
 
@@ -392,7 +384,7 @@ class TestTopLevelInvariance:
 
     @pytest.mark.xfail(
         raises=AssertionError, strict=True,
-        reason="DEFECT-PL-07: 顶层叠加残留上游缺陷 (PL-02/05/06) + 指纹路由决策依赖全样本. "
+        reason="DEFECT-PL-07: 顶层叠加残留上游缺陷 (PL-05/06) + 指纹路由决策依赖全样本. "
                "实测 max_abs_diff=1.84e+00 (1650 格, 全链路放大最严重)",
     )
     def test_v2_pipeline_is_truncation_invariant(self):

@@ -1,5 +1,84 @@
 # 开发日志 (Changelog)
 
+## v3.3.4 — PL-02 变换因果性修复: 逐日截面 rank→正态 (已实施, 2026-10-22)
+
+### 概览
+
+修复 DEFECT-PL-02 / PL-04: `ProcessingAdapter(process_type='transformation')` 的 `fit()` 用 `X.values.flatten()` 在全 panel 上估计 λ / offset / 经验 CDF，`auto_optimize=True` 覆盖显式方法，且 `_select_optimal_transform` 依赖全样本 skew/kurt/Shapiro p 选型——前 t 期输出依赖 t 之后的数据。
+
+**核心产出**:
+- 变换改为**逐日截面 rank → 目标分布**（默认 Blom 正态分数），`fit()` 无状态，结构上无参数可泄漏
+- `auto` → `rank`，删除 `auto_optimize` 与整条选型/拟合链；`quantile` 作为 `rank` 配置别名
+- `log` / `boxcox` / `yeojohnson` / `power` 保留为先验参数模式（`lam` / `power_param` 必填，禁止 fit 估计）
+- `TransformationConfig` 接线到 Static/Mixed v2 管线；删除 `mixed_conditional_transform` / `mixed_skew_threshold` / `mixed_kurt_threshold`
+- Mixed 顺序切为 neutralize → transform（I-INT）
+- 新增 32 例单测；集成套件由 `7 passed / 5 xfailed` 变为 `9 passed / 3 xfailed`
+- 新增 **ADR-038**；项目版本 **3.3.4**；缓存 `CODE_VERSION` **v2.2.2-cache**
+
+### 缺陷根因 (四层叠加)
+
+| # | 根因 | 证据 |
+|---|------|------|
+| 1 | `fit()` 用 `X.values.flatten()` 在全 panel 上估计 λ / offset / 经验 CDF | 截断 60/100 期: 1800 格差异, `max_abs_diff=8.51e-04` |
+| 2 | `auto_optimize=True` 覆盖显式方法; 选型依赖全样本 skew/kurt/Shapiro p | 方法选择不可复现; Shapiro 子采样未设种子 |
+| 3 | Mixed 用全样本 `skew().median()` / `kurtosis().median()` 做条件变换 | 属于 pre-test 式在线切换, 估计量分布不可一致估计 |
+| 4 | `TransformationConfig` 未接线到 v2 管线 | 配置名义存在但实际由三个 `mixed_*` 字段独立控制 |
+
+**为何长期未被发现**: 变换是保序的。前视与截断输出的排序一致，Spearman 类指标无感；只有值相等的截断不变式能暴露。
+
+### 实测矩阵 (`T=100, N=30, t=60, atol=1e-12`)
+
+| 层级 | 对象 | 修复前 | 修复后 |
+|------|------|--------|--------|
+| step | transform auto | 1800 格, 8.51e-04 | **0 格, 0** |
+| pipeline | Static | 1800 格, 4.72e-05 | **0 格, 0** |
+| pipeline | Mixed | 1800 格, 2.91e-01 | 257 格, 6.98e-01（剩余仅 PL-06 全样本缩尾） |
+| pipeline | Dynamic | 1653 格 + 8 NaN, 8.05e-01 | 不变（PL-05，不含变换步骤） |
+| top | FactorProcessingPipelineV2 | 1650 格, 1.84e+00 | 不变（PL-05/06 + 指纹路由） |
+
+诊断报告: 违反 2 项 / 满足 7 项 / 合计 9 项（修复前为违反 4 项 / 满足 5 项）。
+
+**性能** (`T=2500, N=3000, t(3), NaN 5%`): `rankdata` 逐行 1.040s（设计基准 1.071s，−2.9%）；`ProcessingAdapter.transform` 1.075s；`normal` 中位列 std 0.9991712；`uniform` 0.5773502（理论 `1/√3`）；helper 与 adapter 输出 `max |diff| = 0`。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| [modules/factor_adaptive_winsor/core/transformers.py](modules/factor_adaptive_winsor/core/transformers.py) | 模块级 `rank_transform_1d` + 别名常量; `AdaptiveTransformer` 无状态重写; 删除选型链与 `_fit_*` |
+| [adapters.py](adapters.py) | PL-02 常量; 构造期方法解析; `fit` no-op; `transform` identity 短路与截面 rank; `get_stats` |
+| [config_v2.py](config_v2.py) | `TransformationConfig` 收敛 + `target_distribution`; 删除 `conditional_transform`; 桥接映射 |
+| [pipelines_v2.py](pipelines_v2.py) | `PipelineV2Config` 四字段; Static/Mixed 入参; Mixed 顺序; 删除 `_diagnose_transform_need` |
+| [demo_v2.py](demo_v2.py) | 删除 2 处 `mixed_conditional_transform=True` |
+| [tests/unit/test_transform_rank_cross_sectional.py](tests/unit/test_transform_rank_cross_sectional.py) | **新增** 28 函数 / 32 例 |
+| [tests/unit/test_adaptive_transformer_identity.py](tests/unit/test_adaptive_transformer_identity.py) | **重写** 为 rank/先验方法行为测试 (9 例) |
+| [tests/integration/test_pipeline_truncation_invariance.py](tests/integration/test_pipeline_truncation_invariance.py) | 摘除 PL-02/PL-04 xfail; 更新登记表与 PL-06/PL-07 reason |
+| [tests/test_fix2_config_unification.py](tests/test_fix2_config_unification.py) | `test_09` / `test_11` 改用 `transformation.method/target_distribution` |
+| `tests/test_pipelines_v2.py` / `tests/test_p3_phase2_config_migration.py` / `tests/test_adapters/test_module_enabled.py` | 删除已废弃字段; rank 无状态契约 |
+| `tests/test_backtest/verify_fix2_manual.py` / `verify_fix3_manual.py` | 字段与版本锚点同步 |
+| [tests/test_fix3_version_unification.py](tests/test_fix3_version_unification.py) | `EXPECTED_VERSION` → 3.3.4; 缓存断言 → v2.2.2-cache |
+| [pyproject.toml](pyproject.toml) / [__init__.py](__init__.py) / [config_v2.py](config_v2.py) / [reporting.py](reporting.py) | 版本 → 3.3.4 |
+| [backtest/cache_manager.py](backtest/cache_manager.py) | `CODE_VERSION` → v2.2.2-cache |
+| [DECISIONS.md](DECISIONS.md) | 新增 ADR-038 + 占用登记 |
+| [docs/analysis/PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md](docs/analysis/PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md) / [..._DESIGN.md](docs/analysis/PL02_TRANSFORM_LOOKAHEAD_DESIGN.md) | 调研/设计文档, 状态更新为已实施 |
+
+### 兼容性与缓存
+
+- **行为变更**: Static/Mixed 变换输出全部改变（逐日截面 rank，不再池化拟合与自选方法）；依赖旧变换数值的存量结果与缓存失效。
+- **配置字段删除**: `PipelineV2Config.mixed_conditional_transform` / `mixed_skew_threshold` / `mixed_kurt_threshold` 与 `MixedPipelineConfig.conditional_transform`、`TransformationConfig.skew_threshold` / `kurt_threshold` 已删除。Pydantic 默认 `extra='ignore'`，旧 JSON/YAML 不会报错，但字段被**静默忽略**——尤其 `conditional_transform=False` 的原意是禁用变换，现在仍会执行 `rank`。原语义需迁移为 `transformation.method='identity'`。
+- **显式方法**: `boxcox` / `yeojohnson` 现在必须提供 `lam`，`power` 必须提供 `power_param`；不再自动拟合。旧配置若依赖 auto 拟合，将得到 `ValueError`。
+- **缓存代际**: `v2.2.1-cache` → `v2.2.2-cache`。`CacheManager.get_with_meta` 读取时校验 `meta.code_version`，不一致即 MISS 并删除旧数据/meta；首次访问旧缓存自动重建。
+- **小截面**: 截面有效观测 `N<10` 回落逐日截面 z-score；`N<2` 原样返回（仅保护，不改变方法语义）。
+- **ties**: 平均秩 → 相同输出值；排序不受影响。
+
+### 实施偏差记录 (2026-10-22)
+
+1. `tests/test_adapters/test_module_enabled.py::test_transformation_enabled_ignored_in_processing`：原断言 `fit` 后 `_processor is not None`；rank 无状态后改为断言 `_processor is None` 且 `transform` 确实改变数值，保持“transformation 不可消融”的原意。
+2. `tests/test_pipelines_v2.py::test_neutralize_before_transform_reduces_industry_correlation`：旧顺序包含最后一步 OLS 中性化，R² 构造性为 0；新顺序 `neutralize→rank` 因非线性使 R² 轻微抬升（seed=999 实测 0.0057）。阈值由 `+0.005` 调整为 `+0.02`（仍为“行业信号基本消除”上限）。
+3. `tests/unit/test_transform_rank_cross_sectional.py` 的有限样本矩断言按精确公式计算（`uniform` std `sqrt((N+1)/(3N))`；`normal` std 取 Blom 分数样本矩），而非极限值 `1/√3` / `1`。
+4. `tests/unit/test_adaptive_transformer_identity.py` 的 `normal` std 同样改为 Blom 分数精确样本矩（N=2000 时 `0.9988613`，极限值差 `1.14e-3`）。
+
+---
+
 ## v3.3.3 — PL-01 去极值因果性修复: 逐日横截面 (已实施, 2026-10-22)
 
 ### 概览

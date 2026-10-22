@@ -2,6 +2,7 @@
 
 **文档版本**: v1.10 (调研完成, 默认方案与实现范围均已决策; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13; v1.8 = 决策 rank→正态(Blom) + I-INT, 追加 §3.6, 修正 §3.4.5 的 van der Waerden 命名错误; v1.9 = 追加 §3.7 实现范围决策, 修正 §3.6.4 配置契约, 登记旧 transform 路径的逐列维度潜伏缺陷; v1.10 = 追加 §3.8 条件性变换的学术/社区证据 + 参考文献 27-31)
 **日期**: 2026-10-22
+**实施状态**: 已按本文结论实现 (v3.3.4, ADR-038). 实测: PL-02 隔离 1800 格/8.51e-04 → 0; Static 端到端 4.72e-05 → 0; Mixed 残留 6.98e-01 属 PL-06; Dynamic / 顶层分别受 PL-05 / PL-05+06+路由影响. 详见 CHANGELOG v3.3.4 与 [EXECUTION_V3.3.4_PL02_TRANSFORM_CAUSALITY.md](../EXECUTION_V3.3.4_PL02_TRANSFORM_CAUSALITY.md) §7.
 **缺陷编号**: DEFECT-PL-02
 **调研范围**: `adapters.py` `ProcessingAdapter(process_type='transformation')` + `factor_adaptive_winsor` 的 `AdaptiveTransformer` + Static / Mixed / 顶层管线的变换路径
 **调研方法**: 源码逐行核对 + 截断不变式实测 + 逐方法探针 + MCP 学术/社区检索 (StackExchange / Crossref / Semantic Scholar) + 官方文档与论文原文核对

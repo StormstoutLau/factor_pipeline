@@ -55,6 +55,19 @@ _OUTLIER_DETECTOR_PARAM_KEYS = (
 )
 _MIN_OUTLIER_CROSS_SECTION_OBS = 3
 
+# PL-02: transformation 方法解析与截面 rank
+_TRANSFORMATION_ALIASES = {
+    'auto': 'rank',
+    'none': 'identity',
+    'box_cox': 'boxcox',
+    'yeo_johnson': 'yeojohnson',
+    'quantile': 'rank',
+}
+_TRANSFORMATION_METHODS = frozenset(
+    {'rank', 'identity', 'log', 'boxcox', 'yeojohnson', 'power'}
+)
+_MIN_RANK_CROSS_SECTION_OBS = 10
+
 # 滚动标准差近似参数
 ROLLING_WINDOW = 20
 ROLLING_MIN_PERIODS = 10
@@ -344,6 +357,26 @@ class ProcessingAdapter(PipelineStep):
         if process_type == 'standardization' and method == 'auto':
             method = 'z_score'
 
+        # PL-02: transformation 在构造期解析别名并固定方法.
+        # 'auto' 不再做全样本分布选型 (pre-test 式切换无法一致估计),
+        # 一律解析为无状态 rank; 显式方法改先验参数模式.
+        if process_type == 'transformation':
+            method = _TRANSFORMATION_ALIASES.get(method, method)
+            if method not in _TRANSFORMATION_METHODS:
+                raise ValueError(
+                    f"ProcessingAdapter(transformation): 未知 method={requested_method!r}; "
+                    f"合法值: {sorted(_TRANSFORMATION_METHODS)} 或 "
+                    f"{sorted(_TRANSFORMATION_ALIASES)}"
+                )
+            target_distribution = params.get('target_distribution', 'normal')
+            if target_distribution not in ('normal', 'uniform'):
+                raise ValueError(
+                    f"ProcessingAdapter(transformation): 未知 "
+                    f"target_distribution={target_distribution!r}"
+                )
+        else:
+            target_distribution = None
+
         # DEFECT-PL-01 修复 (2026-10): outlier 统一逐日横截面.
         # 'auto' 在构造期解析为固定方法, 不再依赖全样本分布特征自选;
         # 显式方法按声明执行, detector 侧始终 auto_select=False.
@@ -377,6 +410,13 @@ class ProcessingAdapter(PipelineStep):
         )
         self.requested_method = requested_method
         self._cross_sectional_outlier = (process_type == 'outlier')
+        self._identity_transformation = (
+            process_type == 'transformation' and method == 'identity'
+        )
+        self._cross_sectional_rank = (
+            process_type == 'transformation' and method == 'rank'
+        )
+        self.target_distribution = target_distribution
         if self._cross_sectional_outlier:
             self._outlier_percentile_lower = percentile_lower
             self._outlier_percentile_upper = percentile_upper
@@ -487,6 +527,26 @@ class ProcessingAdapter(PipelineStep):
             )
             return self
 
+        # PL-02: identity / rank 均无状态, 不做 flatten fit
+        if self._identity_transformation or self._cross_sectional_rank:
+            if not isinstance(X, pd.DataFrame):
+                raise TypeError(
+                    f"ProcessingAdapter(transformation, method={self.method}): "
+                    f"需要 pd.DataFrame, 收到 {type(X).__name__}"
+                )
+            if X.index.has_duplicates or X.columns.has_duplicates:
+                raise ValueError(
+                    "ProcessingAdapter(transformation): index/columns 必须唯一"
+                )
+            self._processor = None
+            self._column_processors = {}
+            self.is_fitted = True
+            logger.info(
+                "ProcessingAdapter(transformation, method=%s): 无状态, fit 为 no-op",
+                self.method,
+            )
+            return self
+
         # 实例化处理器
         processor_params = {'method': self.method}
         processor_params.update(self.params)
@@ -544,6 +604,14 @@ class ProcessingAdapter(PipelineStep):
             row_stds = row_stds.replace(0, 1.0)
             result = result.sub(row_means, axis=0).div(row_stds, axis=0)
             return result
+
+        # PL-02: identity 短路 (与 enabled=False 语义一致, 不复制)
+        if self._identity_transformation:
+            return X
+
+        # PL-02: 逐日截面 rank
+        if self._cross_sectional_rank:
+            return self._transform_rank_cross_sectional(X)
 
         # P1.3 修复: standardization 类型按列应用对应 processor
         if self.process_type == 'standardization' and self._column_processors:
@@ -626,6 +694,64 @@ class ProcessingAdapter(PipelineStep):
                 values[i] = detector.transform(values[i])
         return pd.DataFrame(values, index=X.index, columns=X.columns)
 
+    def _transform_rank_cross_sectional(self, X: pd.DataFrame) -> pd.DataFrame:
+        """逐日截面 rank -> target_distribution (PL-02).
+
+        无状态: 每个截面只使用当日有效值. 截断不变式结构成立.
+        """
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError(
+                f"ProcessingAdapter(transformation, method='rank'): "
+                f"需要 pd.DataFrame, 收到 {type(X).__name__}"
+            )
+        if X.index.has_duplicates or X.columns.has_duplicates:
+            raise ValueError(
+                "ProcessingAdapter(transformation, method='rank'): index/columns 必须唯一"
+            )
+        if X.empty:
+            return X.copy()
+
+        # 延迟导入: 保持 mock 路径不受影响
+        from factor_pipeline.modules.factor_adaptive_winsor.core.transformers import (
+            rank_transform_1d,
+        )
+
+        arr = X.to_numpy(dtype=float)
+        out = np.empty_like(arr)
+        n_valid = np.isfinite(arr).sum(axis=1)
+
+        for i in range(arr.shape[0]):
+            row = arr[i]
+            if n_valid[i] < 2:
+                # N<2 无法排名; 原样返回, 避免 nanmean/nanstd 的空切片警告
+                out[i] = row
+                continue
+            if n_valid[i] < _MIN_RANK_CROSS_SECTION_OBS:
+                mu = np.nanmean(row)
+                sd = np.nanstd(row, ddof=1)
+                if np.isfinite(sd) and sd > 0:
+                    out[i] = (row - mu) / sd
+                else:
+                    out[i] = row
+            else:
+                out[i] = rank_transform_1d(row, self.target_distribution)
+
+        n_small = int(
+            ((n_valid >= 2) & (n_valid < _MIN_RANK_CROSS_SECTION_OBS)).sum()
+        )
+        n_degenerate = int((n_valid < 2).sum())
+        if n_small:
+            logger.warning(
+                "PL-02 rank: %d 个截面 N<%d, 回落截面 z-score",
+                n_small, _MIN_RANK_CROSS_SECTION_OBS,
+            )
+        if n_degenerate:
+            logger.warning(
+                "PL-02 rank: %d 个截面 N<2, 原样返回", n_degenerate,
+            )
+
+        return pd.DataFrame(out, index=X.index, columns=X.columns)
+
     def get_stats(self) -> Dict[str, Any]:
         stats = super().get_stats()
         stats['process_type'] = self.process_type
@@ -635,6 +761,9 @@ class ProcessingAdapter(PipelineStep):
             stats['outlier_scope'] = 'cross_sectional'
             stats['percentile_lower'] = self._outlier_percentile_lower
             stats['percentile_upper'] = self._outlier_percentile_upper
+        if self._cross_sectional_rank:
+            stats['transform_scope'] = 'cross_sectional'
+            stats['target_distribution'] = self.target_distribution
         stats['fallback_mode'] = self.is_fallback_mode
         if self._processor and hasattr(self._processor, 'fitted_params'):
             stats['fitted_params'] = self._processor.fitted_params

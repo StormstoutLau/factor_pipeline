@@ -199,21 +199,22 @@ class TestFix2ConfigUnification(unittest.TestCase):
         self.assertEqual(dc.dynamic_ar_criterion, 'bic')
 
     def test_09_mixed_fields_mapped(self):
-        """test_09: mixed.conditional_transform + transformation.skew/kurt → mixed_*"""
+        """test_09: mixed.transformation.method/target → mixed_transformation_*"""
         unified = self.Unified(
-            mixed=self.MixedCfg(
-                conditional_transform=False,
-                transformation=self.TransCfg(
-                    skew_threshold=1.5, kurt_threshold=4.0,
-                ),
-            )
+            mixed=dict(transformation=dict(
+                method='identity', target_distribution='uniform',
+            )),
+            static=dict(transformation=dict(
+                method='rank', target_distribution='normal',
+            )),
         )
         dc = unified.to_pipeline_v2_config()
 
         # 手工校验
-        self.assertEqual(dc.mixed_conditional_transform, False)
-        self.assertAlmostEqual(dc.mixed_skew_threshold, 1.5, places=6)
-        self.assertAlmostEqual(dc.mixed_kurt_threshold, 4.0, places=6)
+        self.assertEqual(dc.mixed_transformation_method, 'identity')
+        self.assertEqual(dc.mixed_target_distribution, 'uniform')
+        self.assertEqual(dc.static_transformation_method, 'rank')
+        self.assertEqual(dc.static_target_distribution, 'normal')
 
     # =====================================================================
     # 测试 5: 双向一致性 (Unified → dataclass → Unified)
@@ -251,9 +252,8 @@ class TestFix2ConfigUnification(unittest.TestCase):
                 ar_criterion='hqic',
             ),
             mixed=self.MixedCfg(
-                conditional_transform=True,
                 transformation=self.TransCfg(
-                    skew_threshold=2.0, kurt_threshold=5.0,
+                    method='yeo_johnson', target_distribution='normal',
                 ),
             ),
         )
@@ -277,9 +277,8 @@ class TestFix2ConfigUnification(unittest.TestCase):
         self.assertAlmostEqual(dc.dynamic_decorrelation_strength, 0.9, places=6)
         self.assertEqual(dc.dynamic_max_ar_order, 6)
         self.assertEqual(dc.dynamic_ar_criterion, 'hqic')
-        self.assertEqual(dc.mixed_conditional_transform, True)
-        self.assertAlmostEqual(dc.mixed_skew_threshold, 2.0, places=6)
-        self.assertAlmostEqual(dc.mixed_kurt_threshold, 5.0, places=6)
+        self.assertEqual(dc.mixed_transformation_method, 'yeo_johnson')
+        self.assertEqual(dc.mixed_target_distribution, 'normal')
 
     # =====================================================================
     # 测试 6: 集成验证 — dataclass 仍可被 pipeline 和 optimizer 消费
