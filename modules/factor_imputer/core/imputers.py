@@ -585,7 +585,11 @@ class MLAdvancedImputer(BaseImputer):
         return X
 
     def _transform_rf_shared(self, X: pd.DataFrame) -> pd.DataFrame:
-        """共享 RF 预测: 一次预测所有资产的缺失 (multi-output)."""
+        """共享 RF 预测: 一次批量预测所有缺失行 (multi-output, P2-1 向量化).
+
+        P2-1: 用一次 scaler.transform + 一次 model.predict 替代按行循环,
+              语义与逐行版本等价 (RF 是无状态预测, 不依赖调用顺序).
+        """
         if 'shared' not in self.models or 'shared' not in self.scalers:
             return X
         if self._shared_target_cols is None:
@@ -596,38 +600,47 @@ class MLAdvancedImputer(BaseImputer):
         if not missing_mask.any().any():
             return X
 
-        # 对每个有缺失的行, 构造特征并预测所有资产
+        # 一次性提取所有有缺失的行
         missing_rows = X.index[missing_mask.any(axis=1)]
         if len(missing_rows) == 0:
             return X
 
-        for t in missing_rows:
-            # 构造特征: 时间特征 (与 _fit_random_forest_shared 一致)
-            if not isinstance(X.index, pd.DatetimeIndex):
-                features = pd.DataFrame(
-                    {'row_idx': [X.index.get_loc(t)]},
-                    index=[t]
-                )
-            else:
-                ts = X.index[X.index == t]
-                features = pd.DataFrame(
-                    {
-                        "year": [ts.year[0]],
-                        "month": [ts.month[0]],
-                        "day": [ts.day[0]],
-                        "dayofweek": [ts.dayofweek[0]],
-                    },
-                    index=[t]
-                )
+        # 批量构造时间特征 (与 _fit_random_forest_shared 一致)
+        if not isinstance(X.index, pd.DatetimeIndex):
+            locs = [X.index.get_loc(t) for t in missing_rows]
+            features = pd.DataFrame(
+                {'row_idx': locs},
+                index=missing_rows
+            )
+        else:
+            # missing_rows 是 DatetimeIndex, 可直接访问 .year/.month 等
+            features = pd.DataFrame(
+                {
+                    "year": missing_rows.year,
+                    "month": missing_rows.month,
+                    "day": missing_rows.day,
+                    "dayofweek": missing_rows.dayofweek,
+                },
+                index=missing_rows
+            )
 
-            # 标准化并预测
-            scaled = self.scalers['shared'].transform(features)
-            predicted = self.models['shared'].predict(scaled)  # shape: (1, n_targets)
+        # 一次标准化 + 一次预测 (vectorized)
+        scaled = self.scalers['shared'].transform(features)
+        predicted = self.models['shared'].predict(scaled)  # shape: (n_missing, n_targets)
 
-            # 只填缺失位置, 不覆盖已有值
-            for j, asset in enumerate(self._shared_target_cols):
-                if pd.isna(X.loc[t, asset]):
-                    X.loc[t, asset] = predicted[0, j]
+        # 用 missing_mask 一次性填充 (不覆盖已有值)
+        # predicted[i, j] 对应 missing_rows[i] 行, _shared_target_cols[j] 列
+        predicted_df = pd.DataFrame(
+            predicted,
+            index=missing_rows,
+            columns=self._shared_target_cols,
+        )
+        # 在 missing_mask 位置填入预测值
+        for asset in self._shared_target_cols:
+            asset_missing = missing_mask[asset]
+            if asset_missing.any():
+                X.loc[asset_missing[asset_missing].index, asset] = \
+                    predicted_df.loc[asset_missing[asset_missing].index, asset]
 
         return X
 
@@ -664,13 +677,17 @@ class FactorSpecificImputer(BaseImputer):
         """应用因子专属插补"""
         X_imputed = X.copy()
 
-        # 创建缺失指示变量
-        for asset in X.columns:
-            missing_mask = X[asset].isnull()
-            if missing_mask.any():
-                indicator_name = f"{asset}_missing"
-                X_imputed[indicator_name] = missing_mask.astype(int)
-                self.missing_indicators[asset] = indicator_name
+        # P2-1 向量化: DataFrame.isnull() + any(axis=0) 一次扫描所有列
+        missing_masks = X_imputed.isnull()
+        missing_cols = [c for c in X_imputed.columns
+                        if missing_masks[c].any()]
+        # 注: indicator 列添加保持 for 循环 — 单列赋值是 O(T) 操作,
+        # pd.concat 整批添加反而引入 DataFrame 拷贝 (实测无收益).
+        # 且 missing_cols 数量通常 ≤ N_assets (小), 性能瓶颈不在此.
+        for asset in missing_cols:
+            indicator_name = f"{asset}_missing"
+            X_imputed[indicator_name] = missing_masks[asset].astype(int)
+            self.missing_indicators[asset] = indicator_name
 
         # 根据因子类型应用插补
         if self.factor_type in ["fundamental", "valuation"]:
@@ -755,30 +772,40 @@ class FactorSpecificImputer(BaseImputer):
         return X
 
     def _transform_technical(self, X: pd.DataFrame) -> pd.DataFrame:
-        """技术因子插补变换"""
-        # 使用前向填充和滚动均值
-        for asset in X.columns:
-            if not asset.endswith("_missing"):
-                X[asset] = X[asset].ffill().fillna(X[asset].rolling(window=5, min_periods=1).mean())
+        """技术因子插补变换 (P2-1 向量化).
 
+        P2-1: 用 DataFrame.ffill + DataFrame.rolling 一次性处理所有非 _missing 列,
+              替代按列循环. 语义与原版等价.
+        """
+        orig_cols = [c for c in X.columns if not c.endswith("_missing")]
+        orig = X[orig_cols]
+        # ffill 然后 rolling_mean 兜底
+        filled = orig.ffill().fillna(
+            orig.rolling(window=5, min_periods=1).mean()
+        )
+        X[orig_cols] = filled
         return X
 
     def _transform_macro(self, X: pd.DataFrame) -> pd.DataFrame:
-        """宏观因子插补变换"""
-        # 使用指数平滑
-        for asset in X.columns:
-            if not asset.endswith("_missing"):
-                X[asset] = X[asset].ffill().fillna(X[asset].ewm(span=10).mean())
+        """宏观因子插补变换 (P2-1 向量化).
 
+        P2-1: 用 DataFrame.ffill + DataFrame.ewm 一次性处理所有非 _missing 列,
+              替代按列循环. 语义与原版等价.
+        """
+        orig_cols = [c for c in X.columns if not c.endswith("_missing")]
+        orig = X[orig_cols]
+        filled = orig.ffill().fillna(orig.ewm(span=10).mean())
+        X[orig_cols] = filled
         return X
 
     def _transform_generic(self, X: pd.DataFrame) -> pd.DataFrame:
-        """通用插补变换"""
-        # 使用简单的前向填充
-        for asset in X.columns:
-            if not asset.endswith("_missing"):
-                X[asset] = X[asset].ffill().fillna(0)
+        """通用插补变换 (P2-1 向量化).
 
+        P2-1: 用 DataFrame.ffill().fillna(0) 一次性处理所有非 _missing 列,
+              替代按列循环. 语义与原版等价.
+        """
+        orig_cols = [c for c in X.columns if not c.endswith("_missing")]
+        X[orig_cols] = X[orig_cols].ffill().fillna(0)
         return X
 
 

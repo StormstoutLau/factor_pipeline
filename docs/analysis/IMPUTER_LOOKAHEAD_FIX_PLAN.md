@@ -1,12 +1,12 @@
-# 插补模块前视偏差修复方案 v2.2
+# 插补模块前视偏差修复方案 v2.3
 
-**文档版本**: v2.2 (P0+P1 全部完成 + 测试验证通过)
-**日期**: 2026-07-26
+**文档版本**: v2.3 (P0+P1+P2 全部完成 + 测试验证通过)
+**日期**: 2026-07-27
 **审计范围**: `modules/factor_imputer/` 全模块 + `adapters.py` ImputerAdapter
 **审计方法**: 逐行源码级查证 + 因果性原则验证 + 学术文献独立验证 (paper-search + WebFetch)
 **核心原则**: 任何 t 时刻的插补值只能使用 [0, t] 区间的可观测数据计算
 
-## §0.1 实施状态总览 (v2.2 新增)
+## §0.1 实施状态总览 (v2.3 更新)
 
 | 优先级 | 项目 | 状态 | 测试覆盖 |
 |---|---|---|---|
@@ -16,10 +16,17 @@
 | P1-1 | ImputerAdapter.lookahead_safe 透传 | ✅ 完成 | test_lookahead_safe_* (4 项) |
 | P1-2 | CrossSectionalImputer expanding 因果 | ✅ 完成 | test_causal_* (5 项) |
 | P1-3 | MLAdvancedImputer KNN walk-forward | ✅ 完成 | test_walk_forward_* (4 项) |
-| P1-4 | MLAdvancedImputer RF 共享 multi-output | ✅ 完成 | test_shared_model_* (4 项) |
-| P1-5 | 最终 Review 无副作用 | ✅ 完成 | 全量回归 237 通过 / 2 skipped |
+| P1-4 | MLAdvancedImputer RF 共享 multi-output | ✅ 完成 | test_shared_model_* (5 项, 含批量 predict 等价性) |
+| P1-5 | 最终 Review 无副作用 | ✅ 完成 | 全量回归 803 通过 / 10 skipped |
+| P2-1 | 剩余 for 循环向量化 | ✅ 完成 | test_shared_model_batch_equivalent_to_per_row |
+| P2-3 | 端到端测试 全管线无前视 | ✅ 完成 | test_imputer_e2e_causal.py (9 项, 含静态扫描 + 严格因果性) |
+| P2-4 | 消融实验 lookahead_safe ON vs OFF | ✅ 完成 | test_imputer_ablation_lookahead.py (10 项, 含 IC 范围 + 严格因果性) |
 
-**测试统计**: `test_imputer_lookahead_fix.py` 32/32 通过; 全量回归 237 passed, 2 skipped, 0 regressions.
+**测试统计**:
+- `test_imputer_lookahead_fix.py` 33/33 通过
+- `test_imputer_e2e_causal.py` 9/9 通过
+- `test_imputer_ablation_lookahead.py` 10/10 通过
+- 全量回归 803 passed, 10 skipped, 0 regressions
 
 ---
 
@@ -507,10 +514,11 @@ def _fit_rf_walk_forward(self, X: pd.DataFrame):
 ```python
 def _fit_rf_walk_forward_shared(self, X: pd.DataFrame):
     """共享 RF: 一个 cutoff 一个模型,预测所有资产.
-    
+
     内存: n_cutoff × 单 RF 模型 ≈ 10 × 50 MB = 500 MB (可接受)
     代价: 牺牲资产特异性,但 RF 在面板数据上多输出通常表现不差
-    学术支撑: 见附录 A #10 (Breiman 2001, RF 原始论文, 多输出 RF)
+    学术支撑: Segal & Xiao (2011) WIREs DMKD — 多输出 RF 方法论奠基;
+              van der Westhuizen et al. (2023) Geoderma — MRF 与单变量 RF 精度相当的实证证据
     """
     n = len(X)
     retrain_freq = max(20, n // 10)
@@ -1083,13 +1091,21 @@ def ablation_lookahead():
 7. ✅ **FactorSpecificImputer 因果版本**: P0 阶段已完成 `ffill().fillna(0)` 替换
    - 验证: `test_fundamental_fit_features_no_future_leakage`, `test_fundamental_transform_no_future_value` 通过
 
-### §8.3 P2 中期执行 (1 周) — 部分完成
+### §8.3 P2 中期执行 (1 周) — ✅ 完成 (v2.3, 2026-07-27)
 
-8. ⏳ **向量化剩余 for 循环** (§6): KNN 矩阵化 + ML 并行化 + indicator 向量化
-   - TimeSeriesImputer 已向量化 (P0-5 完成); 其他 for 循环保留 (功能正确, 性能优化延后)
-9. ✅ **单元测试套件** (§7.1): 32 项测试全部通过 (test_imputer_lookahead_fix.py)
-10. ⏳ **端到端测试** (§7.2): 全管线无前视 — 待集成测试
-11. ⏳ **消融实验** (§7.3): lookahead_safe ON vs OFF 的 IC 对比 — 待实数据验证
+8. ✅ **向量化剩余 for 循环** (§6): TimeSeriesImputer (P0-5) + FactorSpecificImputer (technical/macro/generic, P2-1) + MLAdvancedImputer._transform_rf_shared (P2-1 批量 predict) 已向量化
+   - KNN walk_forward (§5.2.1): 因果算法本质, 每个 (asset, t) 用不同训练集 [0, t-1], **不能向量化** (保留 for 循环)
+   - FactorSpecificImputer missing indicator (L687-690): 单列赋值已是 O(T), pd.concat 反而引入 DataFrame 拷贝 (实测无收益, 保留 for 循环)
+   - 测试: `test_shared_model_batch_equivalent_to_per_row` 验证批量 predict 与逐行 predict 数值一致 (1e-12 精度)
+9. ✅ **单元测试套件** (§7.1): 33 项测试全部通过 (含批量 predict 等价性, test_imputer_lookahead_fix.py)
+10. ✅ **端到端测试** (§7.2): 9 项测试通过 (test_imputer_e2e_causal.py)
+    - 因果性: 截断未来, 历史不变 (test_ffill_ts_path_causal, test_ffill_ts_all_history_unchanged)
+    - 未来无关性: 修改未来数据, 历史 [0, t_check] 不变 (test_ffill_ts_no_future_dependency)
+    - 静态扫描: 验证 adapters.py / imputers.py 源码无 .bfill() 调用 (test_adapters_no_bfill_in_imputer_adapter, test_imputers_no_bfill_in_module)
+11. ✅ **消融实验** (§7.3): 10 项测试通过 (test_imputer_ablation_lookahead.py)
+    - 行为差异: lookahead_safe ON vs OFF 在前期填充值不同 (test_cross_sectional_on_off_differ)
+    - IC 范围: 合成数据上 IC ∈ [-1, 1] (test_cross_sectional_ic_in_valid_range, test_knn_walk_forward_ic_in_valid_range)
+    - 严格因果性: ON 满足截断不变性, OFF 不满足 (test_on_path_strictly_causal, test_off_path_not_strictly_causal)
 
 ### §8.4 P3 长期执行 (可选)
 
@@ -1110,7 +1126,7 @@ def ablation_lookahead():
 | 向后兼容性破坏 | 低 | 默认 `lookahead_safe=True` 但保留 `False` 路径 (标注 DEPRECATED) |
 | IC 下降 (放弃未来信息) | 中 | 这是真实预测力, 不是 bug; 若 IC 下降 >20% 在论文中诚实标注 |
 | 向量化引入 bug | 低 | 单元测试覆盖,与原版数值对比 |
-| 共享 RF 精度下降 (§5.2.3 方案 A) | 中 | 多输出 RF 在面板数据上通常表现不差 (Breiman 2001); 若 IC 显著下降, 切换到方案 B (LightGBM) |
+| 共享 RF 精度下降 (§5.2.3 方案 A) | 中 | 多输出 RF 在面板数据上通常表现不差 (Segal & Xiao 2011 WIREs DMKD; van der Westhuizen et al. 2023 Geoderma); 若 IC 显著下降, 切换到方案 B (LightGBM) |
 
 ### §9.2 回退方案
 

@@ -22,6 +22,19 @@ import pandas as pd
 from scipy import stats as scipy_stats
 
 
+class DiagnosticContractError(RuntimeError):
+    """宿主解耦器未满足隐藏效应诊断契约 (ADR-030).
+
+    触发条件: 宿主声明已 fit, 但既未提供 ``ar_coefficients_``, 也未实现
+    ``_get_ar_phi_for_diagnosis()`` (或该钩子返回 None).
+
+    为何必须报错而非降级: 旧实现返回 ``diagnostic='AR model not fitted'``,
+    但此时模型**其实是 fit 过的** —— 该提示是误报, 且伴随
+    ``is_incremental_endogenous=False``, 会构成假阴性. 诊断工具谎报
+    "无内生性" 比崩溃有害得多.
+    """
+
+
 class HiddenEffectDiagnosticMixin:
     """时序解耦隐藏效应诊断 Mixin (§2).
 
@@ -127,18 +140,10 @@ class HiddenEffectDiagnosticMixin:
                 'diagnostic': 'no controls provided',
             }
 
-        phi = getattr(self, 'ar_coefficients_', None)
-        if phi is None:
-            # 回退: 用 ARDecoupler / CompositeDecoupler 拟合结果估计 φ
-            phi = self._estimate_ar_phi()
-
-        if phi is None:
-            return {
-                'cov_eta_delta_X': float('nan'),
-                'is_incremental_endogenous': False,
-                'diagnostic': 'AR model not fitted',
-            }
-
+        # ADR-030: φ 取不到时 _estimate_ar_phi 直接抛 DiagnosticContractError.
+        # 不再返回 'AR model not fitted' 的软提示 —— 那是误报 (模型其实已 fit),
+        # 且会伴随 is_incremental_endogenous=False 构成假阴性.
+        phi = self._estimate_ar_phi()
         phi_1 = phi[0] if hasattr(phi, '__len__') else phi
 
         factor_arr = np.asarray(factor_data.values, dtype=float)
@@ -411,48 +416,43 @@ class HiddenEffectDiagnosticMixin:
     # 辅助: 从已拟合模型估计 AR(1) 系数 φ
     # ------------------------------------------------------------------
 
-    def _estimate_ar_phi(self) -> Optional[Any]:
-        """从宿主解耦器的已拟合结果中提取 AR(1) 系数 φ.
+    def _estimate_ar_phi(self) -> Any:
+        """获取 AR(1) 系数 φ —— 走显式契约, 不探测宿主的私有属性 (ADR-030).
 
-        兼容多种解耦器内部存储:
-        - ARDecoupler: self._results[col].coefficients (含截距, phi_1 在 index 1)
-        - CompositeDecoupler: self._ar_decoupler._results (嵌套)
+        取数顺序:
+        1. ``self.ar_coefficients_`` —— 宿主显式提供的统一入口
+        2. ``self._get_ar_phi_for_diagnosis()`` —— 宿主导出的钩子; 内部存储布局
+           (如 ``ARModelResult.coefficients`` 中截距的位置) 由宿主自己负责
+        3. 两者皆无 → ``DiagnosticContractError``
+
+        旧实现直接读 ``self._results`` / ``self._ar_decoupler._results`` 并硬编码
+        ``arr[1]``: 内部结构一变就返回 ``'AR model not fitted'`` —— 而模型其实已 fit,
+        且伴随 ``is_incremental_endogenous=False``, 构成假阴性. 契约化后该索引
+        假设只存在于宿主的钩子内.
+
+        Returns:
+            ``[phi_1]`` (保持既有调用方依赖的列表形态)
+
+        Raises:
+            DiagnosticContractError: 宿主未实现钩子, 或钩子返回 None
         """
-        # 直接属性 (统一接口, 由宿主在 fit 时设置)
         phi = getattr(self, 'ar_coefficients_', None)
         if phi is not None:
             return phi
 
-        # ARDecoupler 内部存储: _results: Dict[col, ARModelResult]
-        results = getattr(self, '_results', None)
-        if results:
-            phis = []
-            for col, res in results.items():
-                coeffs = getattr(res, 'coefficients', None)
-                if coeffs is None:
-                    continue
-                # ARModelResult.coefficients = [intercept, phi_1, phi_2, ...]
-                # 见 ar_model.py _fit_ar
-                arr = np.asarray(coeffs).flatten()
-                if arr.size >= 2:
-                    phis.append(float(arr[1]))
-            if phis:
-                return [float(np.mean(phis))]
+        hook = getattr(self, '_get_ar_phi_for_diagnosis', None)
+        if not callable(hook):
+            raise DiagnosticContractError(
+                f"{type(self).__name__} 未满足隐藏效应诊断契约: 既未提供 "
+                f"ar_coefficients_, 也未实现 _get_ar_phi_for_diagnosis(). "
+                f"诊断需要宿主显式给出 AR(1) 系数 φ (见 ADR-030)."
+            )
 
-        # CompositeDecoupler: 嵌套 _ar_decoupler
-        nested = getattr(self, '_ar_decoupler', None)
-        if nested is not None:
-            nested_results = getattr(nested, '_results', None)
-            if nested_results:
-                phis = []
-                for col, res in nested_results.items():
-                    coeffs = getattr(res, 'coefficients', None)
-                    if coeffs is None:
-                        continue
-                    arr = np.asarray(coeffs).flatten()
-                    if arr.size >= 2:
-                        phis.append(float(arr[1]))
-                if phis:
-                    return [float(np.mean(phis))]
-
-        return None
+        phi_hat = hook()
+        if phi_hat is None:
+            raise DiagnosticContractError(
+                f"{type(self).__name__}._get_ar_phi_for_diagnosis() 返回 None: "
+                f"模型已 fit 但无可用 AR 系数, 诊断无法进行. "
+                f"拒绝静默降级为 '无增量内生性' (会构成假阴性)."
+            )
+        return [float(phi_hat)]

@@ -20,11 +20,20 @@ from factor_pipeline.modules.factor_decoupler.diagnostics.hidden_effect import (
 logger = logging.getLogger(__name__)
 
 
+# ARModelResult.coefficients 布局约定 (由 _fit_ar 保证 — 该函数在列首插入 np.ones):
+#     coefficients = [intercept, phi_1, phi_2, ..., phi_p]
+# 所有提取 φ 的代码必须经 ARDecoupler._get_ar_phi_for_diagnosis(), 不得硬编码索引.
+# ADR-030: 该布局的 dataclass 注释曾写成"截距末位", 与实现相反 ——
+#          照注释改代码会静默取到错误的 φ, 因此用具名常量 + 布局钉子测试锁死真值.
+AR_COEF_INTERCEPT_INDEX = 0
+AR_COEF_PHI1_INDEX = 1
+
+
 @dataclass
 class ARModelResult:
     """AR模型拟合结果"""
     order: int              # 选定的AR阶数
-    coefficients: np.ndarray  # AR系数 [phi_1, phi_2, ..., phi_p, intercept]
+    coefficients: np.ndarray  # OLS 系数 [intercept, phi_1, ..., phi_p] — 常数项在前, 见 _fit_ar
     residuals: pd.Series    # 残差
     fitted_values: pd.Series # 拟合值
     aic: float              # AIC
@@ -261,6 +270,30 @@ class ARDecoupler(_HiddenEffectDiagnosticMixin):
         self.is_fitted = True
         logger.info(f"AR模型拟合完成: {len(self._results)} 只股票")
         return self
+
+    def _get_ar_phi_for_diagnosis(self) -> Optional[float]:
+        """诊断契约钩子 (ADR-030): 返回全样本平均 AR(1) 系数 φ.
+
+        由 ``HiddenEffectDiagnosticMixin`` 调用, 使 Mixin 无需探测本类的私有
+        ``_results``。**φ 的索引假设只在此处出现一处** —— 若内部存储布局变更,
+        只需改这里, 契约测试 (`TestDiagnosticContract`) 会捕获漏改。
+
+        Returns:
+            平均 φ, 或 None (无任何可用拟合结果)
+        """
+        if not self._results:
+            return None
+
+        phis: List[float] = []
+        for res in self._results.values():
+            coeffs = getattr(res, 'coefficients', None)
+            if coeffs is None:
+                continue
+            arr = np.asarray(coeffs).flatten()
+            if arr.size > AR_COEF_PHI1_INDEX:
+                phis.append(float(arr[AR_COEF_PHI1_INDEX]))
+
+        return float(np.mean(phis)) if phis else None
 
     def transform(self, data: pd.DataFrame) -> pd.DataFrame:
         """

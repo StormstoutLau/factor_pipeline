@@ -28,6 +28,7 @@ from factor_pipeline.modules.factor_decoupler import (
 )
 from factor_pipeline.modules.factor_decoupler.diagnostics.hidden_effect import (
     HiddenEffectDiagnosticMixin,
+    DiagnosticContractError,
 )
 from factor_pipeline.pipelines_v2 import (
     FactorProcessingPipelineV2,
@@ -463,3 +464,123 @@ class TestDiagnoseRequiresFitFirst:
         assert 'model not fitted' in result['information_loss']['diagnostic']
         assert 'model not fitted' in result['stationarity_vs_endogeneity']['diagnostic']
         assert 'model not fitted' in result['method_sensitivity']['diagnostic']
+
+
+# ============================================================
+# ADR-030: 诊断契约 — 私有状态依赖显式化 + 破坏时 fail-loud
+# ============================================================
+
+class TestDiagnosticContract:
+    """用显式契约替代私有属性探测, 并在契约破坏时抛错而非静默降级.
+
+    背景 (ADR-030 记录的耦合风险):
+    原 ``_estimate_ar_phi`` 直接探测 ``self._results`` / ``self._ar_decoupler._results``,
+    并假定 ``coefficients = [intercept, phi_1, ...]``. 一旦内部结构变更:
+    - 探测返回 None → 返回 ``'AR model not fitted'``, 但模型**已 fit** → 误报
+    - 伴随 ``is_incremental_endogenous=False`` → 假阴性, 谎报"无内生性"
+
+    更隐蔽的是布局陷阱: ``ARModelResult.coefficients`` 的注释曾写成
+    ``[phi_1, ..., phi_p, intercept]`` (截距末位), 而 ``_fit_ar`` 实际把常数项
+    放在**列首** (``[intercept, phi_1, ...]``). 照注释改代码会静默取错 φ.
+
+    契约: 宿主必须实现 ``_get_ar_phi_for_diagnosis()``, φ 提取的索引假设
+    收拢在该钩子内; 宿主已 fit 但取不到 φ 时, Mixin 抛
+    ``DiagnosticContractError``.
+    """
+
+    def test_coefficients_layout_is_intercept_first(self):
+        """布局钉子: coefficients[0]=截距, coefficients[1]=φ_1.
+
+        构造已知 AR(1): y_t = 30 + 0.7·y_{t-1} + ε, 截距(≈30)与 φ(≈0.7)量级差异大,
+        可明确区分。若有人按旧注释把截距当末位, 此测试会失败并提示同步所有 φ 提取点。
+        """
+        rng = np.random.default_rng(0)
+        n = 200
+        y = np.zeros(n)
+        y[0] = 100.0
+        for t in range(1, n):
+            y[t] = 30.0 + 0.7 * y[t - 1] + rng.standard_normal() * 0.1
+        series = pd.Series(y, index=pd.date_range('2000-01-31', periods=n, freq='ME'))
+
+        decoupler = ARDecoupler(max_order=1, min_order=1, criterion='aic')
+        decoupler.fit(series.to_frame('S'))
+        coeffs = np.asarray(decoupler._results['S'].coefficients).flatten()
+
+        assert coeffs.size == 2, f"AR(1)+截距应有 2 个系数, 实际 {coeffs.size}"
+        assert abs(coeffs[1] - 0.7) < 0.05, (
+            f"coefficients[1] 应为 phi_1 ≈ 0.7, 实际 {coeffs[1]:.4f}"
+        )
+        assert abs(coeffs[0]) > 5, (
+            f"coefficients[0] 应为截距 (≈30), 实际 {coeffs[0]:.4f}. "
+            f"若此断言失败, 说明布局已变成截距末位 —— "
+            f"必须同步修改 AR_COEF_PHI1_INDEX 及所有 φ 提取点"
+        )
+
+    @pytest.mark.parametrize('cls', [ARDecoupler, CompositeDecoupler])
+    def test_hosts_implement_phi_hook(self, cls):
+        """两个宿主都必须实现契约钩子."""
+        assert callable(getattr(cls, '_get_ar_phi_for_diagnosis', None)), (
+            f"{cls.__name__} 未实现 _get_ar_phi_for_diagnosis —— 诊断契约被破坏 (ADR-030)"
+        )
+
+    def test_ar_decoupler_hook_returns_known_phi(self):
+        """钩子须返回接近真值的 φ (语义钉子, 不依赖内部索引)."""
+        factor_data = _make_factor_data(n_periods=240, n_stocks=5, seed=3, ar_coef=0.7)
+        decoupler = ARDecoupler(max_order=1, min_order=1, criterion='aic')
+        decoupler.fit(factor_data)
+
+        phi = decoupler._get_ar_phi_for_diagnosis()
+        assert phi is not None, "已 fit 的 ARDecoupler 应能给出 φ"
+        assert abs(phi - 0.7) < 0.08, f"φ 应 ≈0.7 (真实系数), 实际 {phi:.4f}"
+
+    def test_composite_delegates_hook_to_inner_ar(self):
+        """CompositeDecoupler 的钩子须与内部 ARDecoupler 一致 (纯委托, 不假设存储)."""
+        n_stocks = 10
+        stocks = [f'S{i:03d}' for i in range(n_stocks)]
+        industry = pd.Series([f'I{i % 4}' for i in range(n_stocks)], index=stocks)
+        factor_data = _make_factor_data(n_periods=120, n_stocks=n_stocks, seed=5, ar_coef=0.6)
+
+        composite = CompositeDecoupler(industry_data=industry)
+        composite.fit(factor_data)
+
+        outer = composite._get_ar_phi_for_diagnosis()
+        inner = composite._ar_decoupler._get_ar_phi_for_diagnosis()
+        assert outer is not None
+        assert outer == pytest.approx(inner), (
+            f"CompositeDecoupler 钩子应纯委托内部 ARDecoupler: outer={outer}, inner={inner}"
+        )
+
+    def test_missing_hook_fails_loud(self):
+        """宿主声称已 fit 但无任何 φ 来源 → DiagnosticContractError, 不再静默误报."""
+
+        class _BrokenHost(HiddenEffectDiagnosticMixin):
+            is_fitted = True  # 声称已 fit, 却不提供 φ 来源
+
+        host = _BrokenHost()
+        factor_data = _make_factor_data(n_periods=60, n_stocks=10)
+        controls = _make_endogenous_controls(factor_data)
+
+        with pytest.raises(DiagnosticContractError, match='_get_ar_phi_for_diagnosis'):
+            host._diagnose_incremental_endogeneity(factor_data, controls)
+
+    def test_hook_returning_none_fails_loud(self):
+        """钩子存在但返回 None (已 fit 却无可用 AR 系数) → 同样报错."""
+
+        class _NullHookHost(HiddenEffectDiagnosticMixin):
+            is_fitted = True
+
+            def _get_ar_phi_for_diagnosis(self):
+                return None
+
+        host = _NullHookHost()
+        factor_data = _make_factor_data(n_periods=60, n_stocks=10)
+        controls = _make_endogenous_controls(factor_data)
+
+        with pytest.raises(DiagnosticContractError, match='返回 None'):
+            host._diagnose_incremental_endogeneity(factor_data, controls)
+
+    def test_unfitted_still_soft(self):
+        """回归守卫: 未 fit 仍走软提示 (两阶段分离), 不因契约收紧而变成抛错."""
+        factor_data = _make_factor_data(n_periods=60, n_stocks=10)
+        result = CompositeDecoupler().diagnose_hidden_effects(factor_data)
+        assert 'model not fitted' in result['incremental_endogeneity']['diagnostic']

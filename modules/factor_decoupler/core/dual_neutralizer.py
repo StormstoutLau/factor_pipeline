@@ -427,6 +427,20 @@ class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
 
         return self
 
+    def _get_ar_phi_for_diagnosis(self) -> Optional[float]:
+        """诊断契约钩子 (ADR-030): 纯委托给内部 ARDecoupler.
+
+        本类不假设内层存储结构 (避免原先直接读 ``_ar_decoupler._results`` 的
+        隐性耦合). 内层未实现钩子时返回 None, 由 Mixin 抛 DiagnosticContractError。
+        """
+        ar = getattr(self, '_ar_decoupler', None)
+        if ar is None:
+            return None
+        hook = getattr(ar, '_get_ar_phi_for_diagnosis', None)
+        if not callable(hook):
+            return None
+        return hook()
+
     def transform(
         self,
         X: pd.DataFrame,

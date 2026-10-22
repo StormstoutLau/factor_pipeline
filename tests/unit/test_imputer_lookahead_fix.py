@@ -8,11 +8,16 @@ TDD: 插补模块前视偏差修复测试
 3. MLAdvancedImputer / FactorSpecificImputer bfill 修复验证
 
 学术依据:
-- Little & Rubin (2002) §4.3: 因果填充原则
+- Little & Rubin (2002) §4.3: fill within-unit first, then across-units
+  (注: 原术语"因果填充原则"非 Little & Rubin 标准术语, 此处按 CHANGELOG.md
+   核实后的实际内容修正; 全书核心是 MAR/ignorability/MI 框架)
 - Hyndman & Athanasopoulos (2021) §5.10: 时间序列交叉验证
-- Lopez de Prado (2018) §7: Purged K-Fold 信息泄漏
+- Lopez de Prado (2018), Chapter on Cross-Validation Methods in Finance:
+  Purged K-Fold 信息泄漏
+  (注: §7 章号未能从数据库逐章核验, 改用保守引用方式;
+   书本身存在, ISBN 978-1-119-44811-0)
 
-参考: docs/analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md v2.1 §4.1 §5.1
+参考: docs/analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md v2.2 §4.1 §5.1
 """
 import numpy as np
 import pandas as pd
@@ -863,6 +868,62 @@ class TestRFSharedModel:
         total_filled = filled_mask.sum().sum()
         assert total_filled == total_nan, \
             f"共享模型应填充所有缺失: {total_nan} → {total_filled}"
+
+    def test_shared_model_batch_equivalent_to_per_row(self, rf_panel):
+        """P2-1 向量化等价性: 批量 predict 与逐行 predict 结果应数值一致.
+
+        RF 是无状态预测, 不依赖调用顺序. 批量 predict 与逐行 predict 在
+        数值上应一致 (允许浮点误差 1e-12).
+        """
+        # 注入多个缺失位置, 让批量路径有多个行要预测
+        df = rf_panel.copy()
+        df.iloc[5, 0] = np.nan   # S0 t=5
+        df.iloc[15, 2] = np.nan  # S2 t=15
+        df.iloc[25, 3] = np.nan  # S3 t=25
+        # 原有的 t=10 S0, t=20 S1 保留
+
+        imp = MLAdvancedImputer(
+            method='random_forest', n_estimators=10, shared_model=True
+        )
+        imp.fit(df)
+
+        # 路径 A: 当前实现 (批量 predict)
+        result_batch = imp.transform(df.copy())
+
+        # 路径 B: 逐行 predict (reference, 等价于原 for-loop 实现)
+        result_per_row = df.copy()
+        if 'shared' in imp.models and imp._shared_target_cols is not None:
+            missing_mask = result_per_row[imp._shared_target_cols].isnull()
+            missing_rows = result_per_row.index[missing_mask.any(axis=1)]
+            for t in missing_rows:
+                # 逐行构造时间特征 (与 _fit_random_forest_shared 一致)
+                ts = result_per_row.index[result_per_row.index == t]
+                features = pd.DataFrame(
+                    {
+                        "year": [ts.year[0]],
+                        "month": [ts.month[0]],
+                        "day": [ts.day[0]],
+                        "dayofweek": [ts.dayofweek[0]],
+                    },
+                    index=[t]
+                )
+                scaled = imp.scalers['shared'].transform(features)
+                predicted = imp.models['shared'].predict(scaled)[0]
+                for j, asset in enumerate(imp._shared_target_cols):
+                    if pd.isna(result_per_row.loc[t, asset]):
+                        result_per_row.loc[t, asset] = predicted[j]
+
+        # 两条路径结果应数值一致
+        nan_mask = df.isnull()
+        for col in nan_mask.columns:
+            col_filled = nan_mask[col] & ~np.isnan(result_batch[col].values)
+            if col_filled.any():
+                batch_vals = result_batch.loc[col_filled, col].values
+                per_row_vals = result_per_row.loc[col_filled, col].values
+                np.testing.assert_allclose(
+                    batch_vals, per_row_vals, rtol=1e-12, atol=1e-12,
+                    err_msg=f"批量 vs 逐行 predict 不一致 (col={col})"
+                )
 
 
 # 引入测试所需的额外依赖
