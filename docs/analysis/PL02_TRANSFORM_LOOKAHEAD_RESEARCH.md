@@ -1,6 +1,6 @@
 # PL-02 变换步骤前视缺陷调研
 
-**文档版本**: v1.9 (调研完成, 默认方案与实现范围均已决策; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13; v1.8 = 决策 rank→正态(Blom) + I-INT, 追加 §3.6, 修正 §3.4.5 的 van der Waerden 命名错误; v1.9 = 追加 §3.7 实现范围决策, 修正 §3.6.4 配置契约, 登记旧 transform 路径的逐列维度潜伏缺陷)
+**文档版本**: v1.10 (调研完成, 默认方案与实现范围均已决策; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13; v1.8 = 决策 rank→正态(Blom) + I-INT, 追加 §3.6, 修正 §3.4.5 的 van der Waerden 命名错误; v1.9 = 追加 §3.7 实现范围决策, 修正 §3.6.4 配置契约, 登记旧 transform 路径的逐列维度潜伏缺陷; v1.10 = 追加 §3.8 条件性变换的学术/社区证据 + 参考文献 27-31)
 **日期**: 2026-10-22
 **缺陷编号**: DEFECT-PL-02
 **调研范围**: `adapters.py` `ProcessingAdapter(process_type='transformation')` + `factor_adaptive_winsor` 的 `AdaptiveTransformer` + Static / Mixed / 顶层管线的变换路径
@@ -31,6 +31,7 @@ PL-02 不是单点缺陷, 而是**四层相互叠加**的问题:
 3. 修复会改变输出数值, 需要缓存代际 bump (与 PL-01/PL-03 同类处理).
 4. 范围边界: 修 PL-02 应同时关闭 PL-04 (Static 残留仅由 PL-02 构成); PL-06 还包含独立的全样本缩尾 (`_compute_winsorize_params`), PL-07 还包含指纹路由依赖全样本, 均不在本文范围.
 5. 实现落点 (§3.7): transformation 层新增 `method='rank'`, 输出分布由已有的 `target_distribution` 控制; 必须新增 `ProcessingAdapter._cross_sectional_rank` 分支 — 现有 transform 路径按股票列 (时序) 逐列应用, 对逐元素方法无害, 但对 rank 是语义错误 (潜伏缺陷). rank 无状态, 截断不变性在结构上成立.
+6. 条件性变换 (§3.8): 无学术或开源实践支持"逐期按分布检验决定是否变换". 所有命中来源均为固定方法 + 逐截面应用; ORQ (rank→正态) 对任意分布有效, 无 ties 时保证输出正态 (Peterson & Cavanaugh 2019); pre-test / post-selection 估计量的分布不可一致估计 (Leeb & Pötscher 2006/2008), 故在线切换会污染下游统计量.
 
 ---
 
@@ -828,6 +829,46 @@ F([0,t] 数据)[t] ≡ F(全样本)[t]
 3. ties 告警: 是否在 `fit` 期按日统计 ties 比例并汇总? `fit` 无状态, 告警只能来自 `transform`, 需确定日志频率 (每日一次会刷屏).
 4. `TransformationConfig` 是否接入管线 (当前 `PipelineV2Config.transformation` 未传入 Static/Mixed 构造器, §6.2). 若不接入, `method='rank'` 只能通过构造参数设置.
 
+### 3.8 条件性变换: 学术与社区实践证据
+
+**问题**: 是否应按截面分布 (skewness / kurtosis / 正态性检验) **逐期决定**"变换 vs 不变换"?
+
+#### 3.8.1 结论
+
+没有检索到任何学术或开源实践支持"逐期根据分布检验决定是否变换". 所有命中来源都是**固定方法 + 固定参数 + 逐截面应用**, 选型 (若有) 发生在**建模前的一次性决策**中, 且选定后不在预测阶段重选.
+
+#### 3.8.2 证据表
+
+| 来源 | 做法/陈述 | 等级 |
+|------|----------|------|
+| Peterson & Cavanaugh (2019), *Ordered quantile normalization: a semiparametric transformation built for the cross-validation era*, J. Applied Statistics 47(13-15):2312-2327, DOI 10.1080/02664763.2019.1630372 | ORQ (rank→正态) 是"designed to consistently and effectively transform a vector of arbitrary distribution into a normal distribution"; "In the absence of ties, ORQ normalization is guaranteed to produce normally distributed transformed data"; "we find [it is] the only method that works effectively, regardless of the underlying [distribution]" | **A** (OpenAlex 摘要原文) |
+| `bestNormalize` vignette (Peterson) | 选型是一次性建模决策: `bestNormalize(x)` 对整列选一个变换, 之后 `predict(obj, newdata)` 应用到新数据, **预测阶段不重选**; ORQ 在 "left/right skewed data, multimodal data, and even data generated from a Cauchy distribution" 上表现一致 | **A** (官方 vignette 原文) |
+| Qlib 文档, `CSRankNorm` | processor 链中**无条件**调用截面 rank 归一化 (`CSRankNorm` 无分布检验分支); 同类 `CSZScoreNorm` 亦无条件 | **A** (官方文档) |
+| Gu, Kelly & Xiu (2020) | 固定映射到 `(-1,1)` 区间, 逐月截面, 无条件 | **A** (§4.3 已核) |
+| Leeb & Pötscher (2006), *Can one estimate the conditional distribution of post-model-selection estimators?*, Annals of Statistics 34(5):2554-2591, DOI 10.1214/009053606000000821 | 基于同一数据集先选择模型 (AIC 或假设检验) 再估计参数, 其条件分布"impossible to estimate ... with reasonable accuracy even asymptotically"; "no [estimator] can be uniformly consistent (not even locally)" | **A** (OpenAlex 摘要原文) |
+| Leeb & Pötscher (2008), *Can one estimate the unconditional distribution of post-model-selection estimators?*, Econometric Theory 24(2):338-376, DOI 10.1017/s0266466608080158 | 无条件分布同样不可一致估计 | **B** (标题 + Crossref 元数据; 未读摘要全文) |
+
+#### 3.8.3 为什么在线条件切换在本场景特别有害
+
+1. **输出是 mixture 分布**: t 日 `identity`、t+1 日 `rank`, 输出边缘分布是两段的混合, 不再有稳定的形状.
+2. **日间不可比**: 相邻日期的因子值来自不同变换; 逐日 z-score 只能统一一阶矩, 不能统一形状.
+3. **下游统计量分布非标准**: pre-test / post-selection estimator 的分布不可一致估计 (Leeb-Pötscher 2006/2008); rank 化后 IC / Sharpe 的抽样分布会依赖"当日是否触发变换"这一随机事件.
+4. **对 rank 而言判断本身无意义**: rank 在无 ties 时**保证**输出正态, 且对 Cauchy 级重尾仍有效 (§3.8.2 前两条). "是否需要变换"的答案恒为"是", 检验只增加噪声.
+
+#### 3.8.4 对本项目的含义
+
+Mixed 的 `conditional_transform` 有三种处置:
+
+| 方案 | 语义 | 代价 |
+|------|------|------|
+| A 删除 | Mixed 永远 `rank` | 破坏 `mixed.conditional_transform` / `skew_threshold` / `kurt_threshold` 配置契约与 `test_fix2_config_unification` |
+| B 保留字段, 语义改为"是否启用 rank" | `True` = `rank`, `False` = `identity`; 删除阈值参数 | 参数名 (`conditional_transform`) 与语义不符; 配置契约保留 |
+| C 逐日诊断 | 每日按 skew/kurt 决定 `rank` 或 `identity` | 无任何实践支持; 输出为 mixture; 下游分布非标准 |
+
+**建议**: 若要在 Mixed 保留"关注分布"的设计意图, 应把诊断从**在线决策**降级为**离线审计** — `get_stats()` 输出逐日 skew/kurt 分布供事后检查, 变换本身固定为 `rank`. 这样既不改配置契约, 也不产生 mixture.
+
+**已决策 (2026-10-22)**: 采用**方案 D** — 删除 `conditional_transform` / `skew_threshold` / `kurt_threshold` 三个字段, 改由 `transformation.method` 统一控制 (Static 与 Mixed 共用; 默认 `rank`, `identity` 作为 opt-out). 选择理由: 保留 opt-out 能力, 同时把两条管线收敛为一套配置. 详见 [设计文档](PL02_TRANSFORM_LOOKAHEAD_DESIGN.md) §3 D5 / §4.4.
+
 ---
 
 ## §4 学术证据
@@ -965,6 +1006,11 @@ GKX 的做法说明: 资产定价中的常见预处理是**逐月截面**的缺�
 | 24 | McCaw, Z. R., Lane, J. M., Saxena, R., Redline, S. & Lin, X. Operating characteristics of the rank-based inverse normal transformation for quantitative trait analysis in genome-wide association studies. *Biometrics*. | DOI 10.1111/biom.13214; 预印本 10.1101/635706 | D-INT / I-INT / O-INT 的定义与相对功效 | A (预印本摘要原文 + 正式版 DOI) |
 | 25 | McCaw, Z. R. *RNOmni: Rank Normal Transformation Omnibus Test* (CRAN, v1.0.1.2). | cran.r-universe.dev/RNOmni | INT 定义、`k=0.375` (Blom) 默认、`ties.method='average'` | A (官方包文档原文) |
 | 26 | *Inference for Rank-Rank Regressions*. | arXiv:2310.15512 | 秩回归对 ties 处理高度敏感 | A (摘要原文) |
+| 27 | Peterson, R. A. & Cavanaugh, J. E. (2019). Ordered quantile normalization: a semiparametric transformation built for the cross-validation era. *Journal of Applied Statistics* 47(13-15):2312–2327. | DOI 10.1080/02664763.2019.1630372 | ORQ (rank→正态) 对任意分布有效; 无 ties 时保证输出正态 | A (OpenAlex 摘要原文) |
+| 28 | Peterson, R. A. (2021). Finding Optimal Normalizing Transformations via bestNormalize. *The R Journal*. | RJ-2021-041 | 选型为一次性建模决策, 预测阶段不重选; ORQ 在 skew/multimodal/Cauchy 上表现一致 | A (官方 PDF/vignette 原文) |
+| 29 | Leeb, H. & Pötscher, B. M. (2006). Can one estimate the conditional distribution of post-model-selection estimators? *Annals of Statistics* 34(5):2554–2591. | DOI 10.1214/009053606000000821 | 先选模型再估计, 条件分布不可一致估计 | A (OpenAlex 摘要原文) |
+| 30 | Leeb, H. & Pötscher, B. M. (2008). Can one estimate the unconditional distribution of post-model-selection estimators? *Econometric Theory* 24(2):338–376. | DOI 10.1017/s0266466608080158 | 无条件分布同样不可一致估计 | B (标题 + Crossref 元数据) |
+| 31 | Microsoft Qlib 文档, `CSRankNorm` / `CSZScoreNorm`. | qlib.readthedocs.io/en/stable/component/data.html | 截面 rank 归一化无条件执行, 无分布检验分支 | A (官方文档) |
 
 ---
 
