@@ -2,7 +2,7 @@
 """Fix 3 手工校验脚本
 
 校验:
-  1. 5 个预期位置的版本号均为 2.5.0
+  1. 5 个预期位置的版本号均为 3.3.3
   2. 全局扫描旧版本号 (2.0.0, 2.1.0) 残留
   3. 缓存 code_version 独立于项目版本
   4. pyproject.toml 版本号状态
@@ -18,7 +18,7 @@ _PROJECT_ROOT = _PROJECT_PARENT / "factor_pipeline"
 if str(_PROJECT_PARENT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_PARENT))
 
-EXPECTED_VERSION = "2.5.0"
+EXPECTED_VERSION = "3.3.3"
 OLD_VERSIONS = ["2.0.0", "2.1.0"]
 
 
@@ -30,12 +30,13 @@ print("=" * 70)
 # ── 校验 1: 5 个预期位置 ────────────────────────────────────────
 print("\n[1] 预期位置版本号核对")
 
+# 字段级测试已改为比对本包 __version__ (不再各存字面量), 故此处校验 4 处声明 + 1 处锚点
 EXPECTED_LOCATIONS = [
     ("__init__.py", r'__version__\s*=\s*["\']([^"\']+)["\']'),
     ("config_v2.py", r'version:\s*str\s*=\s*Field\(default="([^"]+)"'),
     ("reporting.py", r'pipeline_version\s*:\s*str\s*=\s*"([^"]+)"'),
-    ("tests/unit/test_config_v2.py", r"config\.version\s*==\s*'([^']+)'"),
-    ("tests/unit/test_reporting.py", r'pipeline_version\s*==\s*"([^"]+)"'),
+    ("pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
+    ("tests/test_fix3_version_unification.py", r'EXPECTED_VERSION\s*=\s*"([^"]+)"'),
 ]
 
 found_versions = []
@@ -43,7 +44,7 @@ for rel_path, pattern in EXPECTED_LOCATIONS:
     full_path = _PROJECT_ROOT / rel_path
     assert full_path.exists(), f"文件不存在: {rel_path}"
     content = full_path.read_text(encoding='utf-8')
-    m = re.search(pattern, content)
+    m = re.search(pattern, content, re.MULTILINE)
     assert m, f"{rel_path}: 未找到版本号 (pattern: {pattern})"
     actual = m.group(1)
     assert actual == EXPECTED_VERSION, (
@@ -73,6 +74,9 @@ for py_file in _PROJECT_ROOT.rglob("*.py"):
         continue
     # 跳过测试/校验文件自身
     if any(kw in py_file.name for kw in EXCLUDE_FILE_KEYWORDS):
+        continue
+    # 跳过子模块: modules/* 各自维护独立版本 (如 factor_decoupler 1.2.0), 不随项目版本统一
+    if "modules" in py_file.relative_to(_PROJECT_ROOT).parts:
         continue
     content = py_file.read_text(encoding='utf-8')
     for i, line in enumerate(content.splitlines(), 1):
@@ -147,5 +151,5 @@ print(f"  ✓ factor_pipeline.__version__ = {actual_top_version}")
 print("\n" + "=" * 70)
 print(f"Fix 3 手工校验通过: 5/5 (预期位置 {len(found_versions)}/5, 缓存独立, 顶层可导入)")
 if residual:
-    print(f"  注意: 有 {len(residual)} 处旧版本残留 (已记录, 非代码赋值场景)")
+    print(f"  注意: 有 {len(residual)} 处旧版本残留 (已记录, 非项目版本声明)")
 print("=" * 70)

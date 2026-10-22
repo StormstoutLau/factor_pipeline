@@ -38,7 +38,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from .cache_manager import CacheManager
+from .cache_manager import CODE_VERSION, CacheManager
 from .factor_cache import FactorMatrixCache
 from .price_cache import PriceMatrixCache
 
@@ -78,7 +78,7 @@ class CachedDataLoader:
         db_path: str,
         cache_dir: str,
         enabled: bool = True,
-        code_version: str = "v2.2.0-cache",
+        code_version: str = CODE_VERSION,
         factor_adapter_factory: Optional[Callable[[str], Any]] = None,
         price_query_factory: Optional[Callable[[str], Any]] = None,
     ):

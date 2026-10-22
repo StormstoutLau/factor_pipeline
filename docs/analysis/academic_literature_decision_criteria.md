@@ -4,6 +4,8 @@
 **目的**: 为当前管线中每个依赖启发式规则的模块提供学术文献支持的严格统计决策准则
 **范围**: Imputer / Winsorizer / Transformer / Routing / Neutralization 五个核心模块
 
+> ⚠️ **勘误 (2026-10-22, DEFECT-PL-01)**: §9.1 提出的 `ProcessingAdapter(..., cross_sectional=True)` 当时**未实现**——`SmartOutlierDetector` 没有该参数, adapter 仍在全 panel 池化拟合, 且 `auto_select=True` 会覆盖显式 `method`。实际实现见 **ADR-037**: 逐日横截面由 `ProcessingAdapter` 在 `transform` 时按行计算, 构造期 `auto→percentile`, detector 侧 `auto_select=False`。历史方案文本保留, 以本提示为准。
+
 ---
 
 ## 核心结论 (TL;DR)

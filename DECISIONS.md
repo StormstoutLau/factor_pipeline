@@ -12,6 +12,70 @@
 
 ---
 
+## ADR 编号登记规则与勘误 (2026-10-21)
+
+### 登记规则
+
+1. **ADR 编号唯一在本文档中分配**：编号一经在此写入即视为占用，不得复用。
+2. **规划文档不得预留编号**：`docs/EXECUTION_*.md`、`docs/analysis/*.md`、`docs/audit/*.md` 在记录待实施决策时须写「ADR 编号待分配」，不得自行指定编号；实施完成后回本文档取号。
+3. **引用须可检索**：文档中出现的 `ADR-0XX` 应能在此处查到同号条目，否则视为悬空引用。
+
+> 规则 1-2 的由来：2026-07 至 08 期间，三份规划文档各自把 ADR-026 分配给不同决策，且 v3.1.0 一次性预留 ADR-026~031 共 6 个编号，与实际占用编号大面积冲突。见下「勘误表」。
+
+### 占用现状 (权威)
+
+| 编号 | 决策 | 版本 / 日期 |
+|------|------|------------|
+| ADR-026 | Audit-Driven Code Quality Remediation | v3.1.0, 2026-07-09 |
+| ADR-027 | 学术准则驱动管线重构 | v3.2.0, 2026-07-10 |
+| ADR-028 | Layer 3 溢价健康诊断 (FactorHealthDiagnoser) | v3.3.0, 2026-07-15 |
+| ADR-029 | 标准化统一为逐日横截面 Z-Score (因果性修复) | 2026-10-21 |
+| ADR-030 | E1 隐藏效应诊断 — Mixin 嵌入 | v3.1.0 决策, 2026-10 补记 |
+| ADR-031 | E2 P-hacking 防御 — L1-L2 独立模块 + L3 扩展 | v3.1.0 决策, 2026-10 补记 |
+| ADR-032 | E3 内生性诊断 S1-S4 — 独立新模块 + 四阶段 | v3.1.0 决策, 2026-10 补记 |
+| ADR-033 | E4 格兰杰检验 — Toda-Yamamoto 默认 + Bootstrap 可选 | v3.1.0 决策, 2026-10 补记 |
+| ADR-034 | E5 三层决策正则化 — 硬依赖 E3 + opt-in | v3.1.0 决策, 2026-10 补记 |
+| ADR-035 | E6 估计层方法 — opt-in + 与决策层互补 | v3.1.0 决策, 2026-10 补记 |
+| ADR-036 | 消融对照机制 — 四层架构 + Baseline 阶梯 | v3.0.0 决策, 2026-10 补记 |
+| ADR-037 | 去极值统一为逐日横截面 (因果性修复) | v3.3.3, 2026-10-22 |
+| ADR-038 起 | 未占用 | — |
+
+### 勘误表
+
+下列「声明编号」与权威占用冲突，**声明一律作废**，以「占用现状」为准。
+
+| 声明编号 | 声明内容 | 来源 (文件, 处数) | 实际占用者 | 处置 |
+|---------|---------|---------------|-----------|------|
+| ADR-026 | E1 Mixin 嵌入而非独立模块 | EXECUTION_V3.1.0.md (3) | Audit-Driven 修复 | 作废，E1 已改记 ADR-030 |
+| ADR-026 | 消融对照机制 (四层架构 + Baseline 阶梯) | EXECUTION_ABLATION_V3.0.0.md (7) | Audit-Driven 修复 | 作废，已改记 ADR-036 |
+| ADR-026 | AblationRunner independent | audit/2026-07-08-ablation-code-quality-audit.md (1) | Audit-Driven 修复 | 作废，同上归入 ADR-036 |
+| ADR-027 | E2 L1-L2 独立模块 + L3 扩展 | EXECUTION_V3.1.0.md (3) | v3.2.0 管线重构 | 作废，E2 已改记 ADR-031 |
+| ADR-028 | E3 独立新模块 + 四阶段诊断 | EXECUTION_V3.1.0.md (3) | v3.3.0 Layer 3 | 作废，E3 已改记 ADR-032 |
+| ADR-029 | E4 Toda-Yamamoto 默认 + Bootstrap 可选 | EXECUTION_V3.1.0.md (3) | 标准化因果性修复 | 作废，E4 已改记 ADR-033 |
+| ADR-030 | E5 三层正则化硬依赖 E3 + opt-in | EXECUTION_V3.1.0.md (3) | E1 隐藏效应诊断 (ADR-030) | 作废，E5 已改记 ADR-034 |
+| ADR-031 | E6 估计层方法 opt-in + 与决策层正则化互补 | EXECUTION_V3.1.0.md (3) | E2 P-hacking 防御 (ADR-031) | 作废，E6 已改记 ADR-035 |
+
+> 检索方式: 以「声明内容」列为关键字 grep 对应文件。来源列只标文件名与出现次数、**不标行号**——行号会随文档编辑失效，此类漂移曾导致本表首版自我腐化。
+> 各来源文件均已置入顶部或就近的 ⚠️ 勘误提示，读者在该文档内即可被引导回本表。
+
+### 已实施决策 → ADR 补记对照 (2026-10-21 完成)
+
+以下 7 项决策的代码早已实现但长期无 ADR 记录，现已全部补记，**无遗留**。
+
+| 决策 | 补记 ADR | 实现位置 (已核实存在) |
+|------|---------|------|
+| E1 隐藏效应诊断 (Mixin 嵌入而非独立模块) | ADR-030 | `modules/factor_decoupler/diagnostics/hidden_effect.py` |
+| E2 P-hacking 防御 (L1-L2 独立模块 + L3 扩展) | ADR-031 | `backtest/specification_logger/` |
+| E3 内生性诊断 S1-S4 (独立新模块 + 四阶段) | ADR-032 | `modules/endogeneity_check/core/` |
+| E4 格兰杰检验 (Toda-Yamamoto 默认 + Bootstrap 可选) | ADR-033 | `backtest/granger_attribution/toda_yamamoto.py` |
+| E5 三层正则化 (硬依赖 E3 + opt-in 默认关闭) | ADR-034 | `modules/endogeneity_regularizer/` |
+| E6 估计层方法 (opt-in + 与决策层正则化互补) | ADR-035 | `modules/endogeneity_estimators/core/` |
+| 消融对照机制 (AblationRunner 四层架构 + Baseline 阶梯) | ADR-036 | `backtest/ablation_runner.py` |
+
+> 补记标准见「ADR-030 ~ ADR-036 补记说明」：决策表述取自规划文档，代码证据逐条核实；规划文档未记录的备选方案与文献卷期页码不予补造。
+
+---
+
 ## ADR-001: 软路由替代硬路由
 
 **日期**: 2026-07-01
@@ -1865,6 +1929,596 @@ Layer 2 的 StatisticalClassifier 解决了"因子是什么类型"的问题（st
 ### 回滚方案
 
 `modules/factor_health/` 为独立模块，删除目录 + 移除 test 文件即可回滚。不依赖其他模块，不侵入 Pipeline 主循环。
+
+---
+
+## ADR-029: 标准化统一为逐日横截面 Z-Score (因果性修复)
+
+**日期**: 2026-10-21
+**状态**: 已实施
+**优先级**: P0
+**关联缺陷**: DEFECT-PL-03
+**关联测试**: `tests/integration/test_pipeline_truncation_invariance.py`
+
+### 背景
+
+为判定"处理结果是否依赖未来数据"，新增管线级**截断不变式测试**：对任意截断点 t，用 `[0, t]` 数据跑出的 `[0, t]` 期输出，必须等于用全样本 `[0, T]` 跑完后截取 `[0, t]` 期的输出。
+
+该测试暴露 `factor_adaptive_winsor` 标准化步骤违反不变式。根因有两层：
+
+1. **分支判定依赖 method 字面量**。`ProcessingAdapter._cross_sectional_zscore` 仅在 `method == 'z_score'` 时为 True。`StaticFactorPipeline` 传的是 `method='auto'`，因此落入 per-column 分支：`fit()` 在**全样本**上对每一列拟合 `(mean, std)`，`transform()` 套用该固定参数。于是前 t 期的标准化结果依赖 t 之后的样本。
+2. **`'auto'` 的方法选择本身依赖全样本**。`AdaptiveStandardizer._vote_on_method` 依据 `outlier_ratio / is_heavy_tailed / is_skewed / cv` 投票选出 `z_score | robust | quantile`。这些特征全部由输入数据计算，因此：(a) 构成第二重前视源；(b) 同一因子在不同时间窗口可能被选到不同方法，输出不可复现。
+
+此外，实现与管线自身的文档契约不一致：`StaticFactorPipeline` 与 `MixedFactorPipeline` 的类文档均声明终步为"线性Z-Score"，但 `MixedFactorPipeline` 实际传 `method='z_score'`（命中逐日横截面分支），`StaticFactorPipeline` 传 `'auto'`（数据自适应选型）。二者语义不统一。
+
+### 实测证据
+
+截断不变式违反度量（`T=100, N=30, t=60, atol=1e-12`，Python 3.12）
+
+| 对象 | 修复前 | 修复后 |
+|------|--------|--------|
+| `standardize(method='auto')` 单步 | 1800/1800 格差异, `max_abs_diff=6.18e-01` | **0** |
+| `StaticFactorPipeline` 端到端 | `max_abs_diff=4.03e-01` | **1.33e-02** |
+| `standardize(method='z_score')` 单步 | 0（对照组，本已因果） | 0 |
+
+Static 残留的 1.33e-02 由去极值（DEFECT-PL-01）与变换（DEFECT-PL-02）构成，不在本 ADR 范围。
+
+**后续 (2026-10-22)**: DEFECT-PL-01 已由 ADR-037 修复，Static 残留降至 **4.72e-05**，仅由 PL-02（变换）构成。本 ADR 的历史测量值保留不改。
+
+### 决策
+
+**`ProcessingAdapter` 在 `process_type == 'standardization'` 且 `method == 'auto'` 时，于构造期将 method 解析为 `'z_score'`，从而命中逐日横截面分支。**
+
+```python
+if process_type == 'standardization' and method == 'auto':
+    method = 'z_score'
+```
+
+逐日横截面分支不存储全样本参数：`fit()` 置 `_processor=None`、`_column_processors={}`；`transform()` 对每一期独立计算 `(x - mean_t) / std_t`。因此 fit 对标准化而言成为 no-op，**不存在可泄漏的参数**——这是本方案在结构上优于"把参数算对"的原因。
+
+### 备选方案
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| A: 维持 `'auto'` 原行为 | 零改动 | 保留前视；方法选择不可复现 | ❌ |
+| B: 扩展窗口 per-column 标准化 | 保留 per-stock 时序语义 | 需时间变化参数，改动大；仍破坏横截面可比性；存量输出同样作废 | ❌ |
+| C: standardization 统一解析为逐日横截面 z-score | 消除前视；与 Mixed 一致；与"线性Z-Score"契约一致；fit 无参数可泄漏 | Static 输出数值变更（存量结果作废） | ✅ |
+| D: 全部标准化方法（robust/min_max/quantile）横截面化 | 覆盖更全 | 三类方法无生产路径使用；逐行 robust 语义需另行定义，超出本次范围 | ❌（留待需要时） |
+
+### 后果
+
+**正面**
+- 消除标准化步骤的前视偏差：截断不变式由 1800/1800 格违反降为 0
+- Static 端到端违反幅度降 30 倍（4.03e-01 → 1.33e-02），确认该缺陷是 Static 的主因
+- 标准化行为变为确定性：不再依赖数据自适应投票，同一输入在任何窗口得到同一方法
+- Static 与 Mixed 语义统一
+
+**负面 / 破坏性**
+- **`StaticFactorPipeline` 输出数值变更**。此前用该管线产出的因子值、IC、Sharpe 等结论需重算
+- 两处既有测试的契约随之变更（见下节）
+
+**风险**
+- 单值截面（某期仅 1 个非 NaN 观测）会使 `std(ddof=1)` 为 NaN，该期输出变为 NaN。当前管线在标准化前已完成插补，正常路径不触发；将来若处理稀疏面板需另行定义语义
+- 显式指定 `robust / min_max / quantile` 的调用仍走非因果的 per-column 分支
+
+### 测试契约变更
+
+两处既有断言原为 `result.mean(axis=0) ≈ 0`（**列**均值），已改为逐日横截面断言（**行**均值 ≈ 0、行标准差 ≈ 1）：
+
+- `tests/test_adapters/test_module_enabled.py::test_module_enabled_none_default_behavior`
+- `tests/test_pipelines_v2.py::TestStaticFactorPipeline::test_static_pipeline_processing`
+
+依据：**列均值 == 0 是全样本 per-column 标准化的定义特征**——它正是"除以全样本均值"构造出来的。任何因果变换（逐日横截面或扩展窗口）在数学上都无法满足该等式。因此原断言并未检验"输出已标准化"，**其成立本身即前视的症状**。
+
+### 影响面
+
+生产代码中 `process_type='standardization', method='auto'` 仅 2 处，均已受益：
+
+| 位置 | 用途 | 变更 |
+|------|------|------|
+| `pipelines_v2.py:904` | `StaticFactorPipeline` 终步 | 修复目标 |
+| `demo.py:72` | demo 脚本 | 同步受益 |
+
+其余路径原本已是 `'z_score'`，不受影响：`pipeline.py:190`、`pipelines_v2.py:1002`（Dynamic）、`pipelines_v2.py:1119`（Mixed）。
+
+### 回归验证
+
+| 范围 | 结果 |
+|------|------|
+| adapters / pipelines_v2 / pipelines_v2 子目录 / p1_fixes / multi_dim / integration | 123 passed, 2 skipped, 6 xfailed, 0 failed |
+| unit 全量 / demo_notebook / integration 冒烟 | 262 passed, 2 skipped, 0 failed |
+
+全量套件（800+）未完成长跑：`tests/test_backtest/test_p3_phase4_integration.py` 的 optimizer 模拟为主要耗时来源，需单独安排。
+
+### 不覆盖范围
+
+- `method='robust' / 'min_max' / 'quantile'` 仍走 per-column 全样本拟合分支，非因果。三条生产管线均未使用，已在截断不变式测试文件中登记为"已知未登记"
+- 去极值（DEFECT-PL-01）、变换（DEFECT-PL-02）、解耦器 AR 样本内预测（DEFECT-PL-05）不在本次处理
+
+### 学术依据
+
+- Fama, E. F., & MacBeth, J. D. (1973). Risk, return, and equilibrium: Empirical tests. *Journal of Political Economy*, 81(3), 607-636. — 逐期横截面估计范式：因子暴露在每期截面上标准化后参与排序/回归，而非在个股时序上标准化
+- Grinold, R. C., & Kahn, R. N. (2000). *Active Portfolio Management* (2nd ed.). McGraw-Hill. — 因子暴露的截面 z-score 是行业惯例（惯例引用，不指认具体章节）
+- 判定基准不依赖文献：截断不变式由 `tests/integration/test_pipeline_truncation_invariance.py` 直接可证伪
+
+### 回滚方案
+
+回滚为删除 `adapters.py` 中一处条件解析。但回滚会重新引入前视偏差，并使
+`test_pipeline_truncation_invariance.py::TestIsolatedStepInvariance::test_standardize_auto_is_causal` 失败。
+若确需 per-column 语义，应改用扩展窗口实现（方案 B），而非回滚到全样本拟合。
+
+---
+
+## 补记说明: ADR-030 ~ ADR-036 (2026-10-21)
+
+以下 7 条 ADR 为**补记**：决策实际发生于 v3.0.0 / v3.1.0 实施期 (2026-07)，但当时只写进了规划文档，从未写入本文档（见文首「ADR 编号登记规则与勘误」）。
+
+补记素材来源与证据标准：
+- **决策表述**取自 `docs/EXECUTION_V3.1.0.md` 各任务「验收标准」与 `docs/EXECUTION_ABLATION_V3.0.0.md` §12 的既有大纲
+- **代码证据**为本次逐条核实：类定义位置、配置字段名与默认值，均已在当前代码中确认存在
+- 规划文档未记录的**备选方案对比**不予补造；标注为「规划文档未记录」
+- 学术引用只到**作者-年份**，取自规划文档；未逐篇核验卷期页码
+
+编号分配（不复用已占用的 026~029）：ADR-030 E1 · ADR-031 E2 · ADR-032 E3 · ADR-033 E4 · ADR-034 E5 · ADR-035 E6 · ADR-036 消融对照机制。
+
+---
+
+## ADR-030: E1 隐藏效应诊断 — Mixin 嵌入而非独立模块
+
+**日期**: v3.1.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P1
+**原规划编号**: ADR-026 (已作废)
+
+### 背景
+
+因子经解耦后是否仍残留不可观测的混淆效应，此前无任何诊断手段。需要在不改动解耦器既有 `fit / transform / get_summary` 接口的前提下，提供事后诊断能力。
+
+### 决策
+
+**以 Mixin 嵌入 `CompositeDecoupler` / `ARDecoupler`，而非新建独立诊断模块。**
+
+附带的四条子决策：
+1. **两阶段分离**：`fit` 阶段只做模型估计，post-hoc 诊断在 fit 完成后执行；未 fit 时诊断返回降级提示而非报错
+2. 诊断覆盖 4 类：增量内生性 / 信息损失 / 平稳性 vs 内生性 / 方法敏感性
+3. `enable_hidden_effect_diagnosis=False`（默认）时管线行为与 v3.0.0 完全一致
+4. 平稳性诊断须保留「ADF 通过 ≠ 内生性消除」的警告，防止把单位根检验结果误当内生性结论
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `HiddenEffectDiagnosticMixin` | `modules/factor_decoupler/diagnostics/hidden_effect.py:25` |
+| `diagnose_hidden_effects` | 同文件 `:37` |
+| `CompositeDecoupler(_HiddenEffectDiagnosticMixin)` | `modules/factor_decoupler/core/dual_neutralizer.py:337` |
+| `ARDecoupler(_HiddenEffectDiagnosticMixin)` | `modules/factor_decoupler/core/ar_model.py:211` |
+| 管线委托方法 | `pipelines_v2.py:1650` |
+| 配置开关 (默认 False) | `pipelines_v2.py:740` |
+
+### 备选方案
+
+规划文档只记录了结论（"Mixin 嵌入而非独立模块"）与验证项（`test_mixin_not_invasive`：Mixin 不修改 fit/transform 签名），**未记录备选方案对比表**，本 ADR 不补造。
+
+### 后果
+
+- **正面**：解耦器接口零改动，诊断能力随实例天然可用，无需同步两套状态
+- **负面（未处置，Mixin 方案的固有代价）**：诊断逻辑与被诊断对象强耦合，无法脱离解耦器复用于其它对象——这是换取"接口零改动"的取舍，属设计选择而非缺陷
+- **风险（已处置，见下节）**：Mixin 曾依赖实例私有状态（`_results` 等），解耦器内部结构变更会导致诊断静默失效
+
+### 耦合风险的处置 (2026-10-21)
+
+补记时核查代码，发现该风险的具体形态比原表述更严重：
+
+1. **误报**：旧 `_estimate_ar_phi` 直接探测私有 `self._results` / `self._ar_decoupler._results`。内部结构一变即返回 `None`，诊断给出 `'AR model not fitted'` —— 而模型**其实已 fit**
+2. **假阴性（真正危险处）**：走该分支时同时返回 `is_incremental_endogenous=False`，等于谎报"无增量内生性"。诊断工具谎报比崩溃有害
+3. **布局陷阱**：`ARModelResult.coefficients` 的 dataclass 注释写 `[phi_1, ..., phi_p, intercept]`（截距末位），而 `_fit_ar` 实际把常数项插在**列首**，真实布局为 `[intercept, phi_1, ...]`。照注释改代码会静默取到错误 φ —— 不报错，只是数值错
+
+处置措施：
+
+| 措施 | 实现 |
+|------|------|
+| φ 提取收拢为显式契约 | 宿主实现 `_get_ar_phi_for_diagnosis()`；Mixin 不再探测任何私有属性 |
+| 布局假设单点化 | `AR_COEF_INTERCEPT_INDEX` / `AR_COEF_PHI1_INDEX` 具名常量，仅在 `ARDecoupler` 钩子内使用 |
+| 注释纠偏 | `ARModelResult.coefficients` 注释改为真实布局 `[intercept, phi_1, ..., phi_p]` |
+| CompositeDecoupler 纯委托 | 钩子只转发给内部 `ARDecoupler`，本类不假设内层结构 |
+| 破坏即报错 | 已 fit 却取不到 φ → 抛 `DiagnosticContractError`，不再静默降级 |
+| 语义钉子 | 新增 `TestDiagnosticContract`（8 项）：布局钉子（已知 AR(1) 反查 φ≈0.7、截距>5）、钩子存在性、Composite 纯委托一致性、钩子缺失/返回 None 均报错、未 fit 仍走软提示 |
+
+**未 fit 的软提示行为保持不变**（两阶段分离，E1-T21 仍通过），契约收紧只作用于「已 fit 但取不到 φ」这一原本会误报的情形。
+
+回归：`tests/test_factor_decoupler/` + `test_pipelines_v2` + `integration/` 共 80 passed / 6 xfailed / 0 failed。
+
+---
+
+## ADR-031: E2 P-hacking 防御 — L1-L2 独立模块 + L3 扩展
+
+**日期**: v3.1.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P1
+**原规划编号**: ADR-027 (已作废)
+
+### 背景
+
+三层 P-hacking 防御中只有 L3（BH-FDR 事后校正，v3.0.0 T4 已实施）存在，L1（事前设计约束）与 L2（事中记录）完全缺失。缺少这两层时，"试了多少种规格"这一信息在生产过程中就丢失了，事后无法重建。
+
+### 决策
+
+**新建 `backtest/specification_logger/` 三个独立类 + 扩展 `multiple_testing.py` 增加 BY-FDR。**
+
+1. `SpecificationLogger` — append-only JSONL 事中记录，`log_run` 返回 8 字符 SHA1 commit hash
+2. `PreRegistration` — 事前承诺 vs 实际配置的偏差检测（`is_compliant` / `deviations`）
+3. `SpecificationCurve` — 规格曲线：按符号一致性给出 `consistency` 判定
+4. `apply_by_fdr` — Benjamini-Yekutieli（依赖稳健），与既有 `apply_bh_fdr` **共存**，返回类型严格一致 `Tuple[List[float], List[bool]]`
+5. L1 test-set 一次性原则：`enforce_test_set_once` 阻止对同一 test set 重复评估
+6. 全部 opt-in，`enable_specification_logger=False` 为默认
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `SpecificationLogger` | `backtest/specification_logger/spec_log.py:25` |
+| `SpecificationCurve` | `backtest/specification_logger/spec_curve.py:16` |
+| `PreRegistration` | `backtest/specification_logger/pre_registration.py:18` |
+| `apply_by_fdr` | `backtest/multiple_testing.py:210` |
+| 配置字段 | `pipelines_v2.py:744-747`（`enable_specification_logger` / `spec_log_dir` / `enforce_test_set_once`） |
+
+### 后果
+
+- **正面**：搜索路径可审计——规格曲线的符号一致性直接暴露"换规格改结论"的幅度
+- **负面**：新增运行时产物 `logs/specifications/`（append-only，需纳入版本/清理策略）
+- **风险**：BY-FDR 比 BH 更保守，功效下降；记录本身依赖调用方主动 `log_run`，漏记则防御失效
+
+### 关联
+
+- ADR-002a（BH-FDR 用于 KS 迁移校正）——BY-FDR 与其并存而非替换
+- ADR-026（审计流程）——L2 记录是事后审计的输入
+
+---
+
+## ADR-032: E3 内生性诊断 S1-S4 — 独立新模块 + 四阶段
+
+**日期**: v3.1.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P2
+**原规划编号**: ADR-028 (已作废)
+
+### 背景
+
+内生性此前只在单一环节被局部检验，无法回答"威胁是在插补、中性化还是解耦环节引入/消除的"。逐环节定位需要分阶段诊断，且不能侵入主处理链路。
+
+### 决策
+
+**新建独立模块 `modules/endogeneity_check/`，实现四阶段诊断 + 四方法 + 威胁度融合。**
+
+1. 四阶段：S1 插补前（缺失机制）/ S2 插补后 / S3 中性化后 / S4 解耦后；**默认 S1+S2+S4，S3 按需开启**（高 stakes 场景）
+2. 四方法：Oster δ / AET (Altonji-Elder-Taber) / IFE / Lewbel 内部 IV；各自独立可用、可组合
+3. `EndogeneityThreatAssessor` 加权融合四方法，`get_final_threat_assessment()` 输出 `final_threat_tau ∈ [0,1]`
+4. S1→S2 为**上下文衔接**（逻辑上调推荐策略），不是数值差分；S3/S4 对 S2 才做数值差分
+5. 术语纪律（v1.3）：`Oster δ` 而非 ITCV；`R_max = min(1, 1.3×R̃)` 而非 2.75；IFE 记号 `lambda_i' · F_t`；Lewbel 工具变量 `(Z - Z̄) × ê²`
+6. 事后诊断，不侵入 `fit / transform`；`enable_endogeneity_check=False` 为默认
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `EndogeneityDiagnosticOrchestrator` | `modules/endogeneity_check/core/diagnostic_orchestrator.py:27` |
+| 各检查器 | 同目录 `missingness_checker.py` / `oster_delta.py` / `aet_checker.py` / `ife_checker.py` / `lewbel_iv.py` / `threat_assessor.py` |
+| 管线方法 `check_endogeneity` | `pipelines_v2.py:1745` 起 |
+| 配置字段 | `pipelines_v2.py:752-761`，含 `oster_r_max_multiplier = 1.3`（v1.3 修正的代码落点） |
+
+### 后果
+
+- **正面**：威胁可归因到具体处理环节，而非只给出一个整体"有无内生性"的模糊结论
+- **负面**：成为 E5 的硬依赖——E3 不运行时 E5 必须报错或显式降级
+- **风险**：Oster δ 依赖 `R_max` 选取，1.3 倍是文献建议而非本项目数据校准值；无对照组时需降级处理而非给伪精确结论
+
+### 关联
+
+- ADR-034（E5）硬依赖本条的 `final_threat_tau`
+- ADR-025（CUSUM）——同样是事后诊断、不侵入主链路的模式
+
+---
+
+## ADR-033: E4 格兰杰检验 — Toda-Yamamoto 默认 + Bootstrap 可选
+
+**日期**: v3.1.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P2
+**原规划编号**: ADR-029 (已作废)
+
+### 背景
+
+因子与收益的时序先后关系需要检验，但标准格兰杰检验在非平稳序列上会伪回归。同时，格兰杰因果极易被误读为结构因果。
+
+### 决策
+
+**新建 `backtest/granger_attribution/`，默认采用 Toda-Yamamoto 程序。**
+
+1. 流程：ADF 定阶 d → VAR(p+d) 估计（p 由 AIC 选）→ Wald 检验，对非平稳序列保持检验有效性
+2. `granger_use_toda_yamamoto=True` 为默认；`granger_use_bootstrap=False` 为默认（block bootstrap 保持时序结构，成本约 30s）
+3. 同期因果一律标 `unidentified` —— 诚实承认不可识别，不强行给结论
+4. 输出固定携带警告文案「格兰杰因果 ≠ 结构因果 — 仅为伪回归初筛」
+5. T < 20 时降级；不侵入 `fit / transform`；默认关闭
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `TodaYamamotoGrangerTester` | `backtest/granger_attribution/toda_yamamoto.py:21` |
+| 管线方法 `check_granger_causality` | `pipelines_v2.py:1843` 起 |
+| 配置字段 | `pipelines_v2.py:765-768`（`granger_max_lag=12` / `granger_use_toda_yamamoto=True` / `granger_use_bootstrap=False`） |
+
+### 后果
+
+- **正面**：在非平稳序列上仍给出可信的拒绝/不拒绝结论；同期因果的不可识别性被显式标注而非掩盖
+- **负面**：VAR(p+d) 增广降低自由度，短样本下功效有限（T<20 直接降级）
+- **风险**：最大风险是**误读**——该检验极易被当作因果证据。警告文案是防线，但防线依赖读者
+
+### 学术依据
+
+Toda & Yamamoto (1995)。
+
+---
+
+## ADR-034: E5 三层决策正则化 — 硬依赖 E3 + opt-in 默认关闭
+
+**日期**: v3.1.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P3
+**原规划编号**: ADR-030 (已作废)
+
+### 背景
+
+E3 只输出威胁度 `τ`，若不消费这个量，诊断就只是报告而不改变任何决策。需要在预处理、检验、组合三层把 `τ` 转化为实际的处理强度。
+
+### 决策
+
+**`EndogeneityRegularizer` 消费 E3 的 `final_threat_tau`，在 L1/L2/L3 三层施加不同作用；硬依赖 E3，全部 opt-in。**
+
+1. **L1 预处理层**：`τ < 0.3` 跳过 Stage 2；`0.3 ≤ τ < 0.7` 标准三重中性化；`τ ≥ 0.7` 追加 β' 检查
+2. **L2 检验层**：显著性阈值按威胁度收缩，`α_i = α_base × (1 − γ·τ_i)`
+3. **L3 组合层**：权重按威胁度惩罚，`w_final = w_raw × (1 − ρ·τ)`
+4. **硬依赖 E3**：E3 未运行时必须报错或显式降级，不允许静默按 τ=0 处理
+5. `lambda_endogeneity = 0.0` 时优化器目标函数与 v2.6.0 完全一致（零回归）
+6. `enable_endogeneity_regularization=False` 为默认
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `EndogeneityRegularizer` | `modules/endogeneity_regularizer/regularizer.py:18` |
+| 管线方法 | `pipelines_v2.py:1995` 起 |
+| 配置字段 | `pipelines_v2.py:780-785` |
+
+**记录一处 spec 与代码的命名偏离**（代码注释已自承）：规划文档中的 `endogeneity_reg_gamma` / `endogeneity_reg_strength`，实际落地为 `regularizer_gamma` / `regularizer_rho`。参数语义未变，仅命名不同。
+
+### 后果
+
+- **正面**：威胁度从"报告指标"变成"实际改变处理强度"的闭环；三层可独立启用、可组合
+- **负面**：与 E3 单向强耦合，E3 不可用时 E5 整体不可用
+- **风险**：0.3 / 0.7 两个阈值与 `ρ=0.3`、`γ=0.5` 为经验设定，规划文档未记录校准过程；本 ADR 如实标注这一点，不声称其最优
+
+### 关联
+
+- ADR-032（E3）为硬依赖项
+- ADR-035（E6）与本条互补：E6 在估计层吸收，本条在决策层惩罚残留
+
+---
+
+## ADR-035: E6 估计层方法 — opt-in + 与决策层正则化互补
+
+**日期**: v3.1.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P3
+**原规划编号**: ADR-031 (已作废)
+
+### 背景
+
+除"诊断 + 惩罚"路线外，还有"换估计量"路线：用对弱工具/持续回归更稳健的估计方法吸收部分内生性。两条路线的关系需要明确界定，否则会互相冒充。
+
+### 决策
+
+**四种估计器 + 一个方法选择器，全部 opt-in；定位为估计层缓解，与 E5 决策层正则化互补。**
+
+1. 四估计器：`ProfileGMMEstimator` / `IVXEstimator` / `RegularizedDOLSEstimator` / `PFGMMEstimator`，统一接口 `fit / get_diagnostics / get_residual_threat`
+2. `EstimationMethodSelector` 按场景推荐，优先级：三层正则化 > Profile GMM > IVX > DOLS > PFGMM
+3. **与 E5 串联**：E6 先估计，E5 再对残留威胁正则化
+4. 认识论立场：估计层**不声称消除内生性**，只声称在估计阶段吸收部分；残留威胁仍需 E5 处理
+5. 术语纪律：Profile GMM 为正式术语（Hong-Su-Jiang 2022，NNR+GMM 为别名）；IVX 为**指数衰减滤波**而非分数差分；PFGMM 处理 error-covariate 内生而非弱 IV；因子增强 IVX 暂不使用
+6. PFGMM 输出 A 股适用性低警告；全部默认关闭
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `ProfileGMMEstimator` | `modules/endogeneity_estimators/core/profile_gmm.py:32` |
+| `IVXEstimator` | 同目录 `ivx.py:38` |
+| `RegularizedDOLSEstimator` | 同目录 `regularized_dols.py:31` |
+| `PFGMMEstimator` | 同目录 `pfgmm.py:30` |
+| `EstimationMethodSelector` | 同目录 `method_selector.py:26` |
+| 配置字段 | `pipelines_v2.py:789-797`（`enable_endogeneity_estimators=False` / `estimator_method='auto'` / 四个子开关） |
+
+### 后果
+
+- **正面**：给出"不改变决策规则、只改估计量"的第二条路径；统一接口使方法间可横向对比
+- **负面**：四种估计器维护成本高，其中 PFGMM 在 A 股场景适用性低（仅理论保留）
+- **风险**：多方法并存容易诱发"挑一个显著的"式方法搜索——正是 ADR-031 要防的行为。方法选择器必须留下选择记录
+
+### 学术依据
+
+Hong, Su & Jiang (2022)（Profile GMM）；Kostakis et al. (2015)（IVX）；Stock & Watson (1993)（DOLS）；Ghosh & Thoresen (2019)（PFGMM）。
+
+---
+
+## ADR-036: 消融对照机制 — 四层架构 + Baseline 阶梯
+
+**日期**: v3.0.0 实施期 (2026-07)
+**补记**: 2026-10-21
+**状态**: 已实施
+**优先级**: P1
+**原规划编号**: ADR-026 (已作废，与 Audit-Driven 修复的 ADR-026 冲突)
+
+### 背景
+
+管线此前没有消融机制，因此"某个前置处理步骤确实有用"这一论点缺乏实证支持——无法区分增益来自该步骤还是来自评估噪声。
+
+### 决策
+
+**`AblationRunner` 独立模块，实现四层消融 + Baseline 阶梯 + 显著性判定。**
+
+1. **L1**：5 个模块的 enabled 开关（Adapter 层）
+2. **L2**：5 种路由配置，**含随机路由控制组**（用于排除混淆）
+3. **L3**：4 组参数（CUSUM / EWMA / 五叉阈值 / winsorize）
+4. **L4**：6 个自由度的 OAT（单维逐一关掉），**不做全因子 972 组合**（不可行）
+5. **B0–B3** Baseline 阶梯
+6. 显著性：Ledoit-Wolf (2008) HAC 标准误 + circular block bootstrap（B=1000）；多重比较复用 BH-FDR（ADR-002a）
+7. `enabled` 开关放在 **Adapter 层**而非模块层，复用 `OrthogonalizerAdapter` 既有模式
+8. 不侵入 `fit / transform`；诚实立场：**消融是双向的**——结果可能降级评定，也可能升级评定
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `AblationRunner` | `backtest/ablation_runner.py:395`（全文件 1564 行） |
+| `module_enabled` 透传 | `pipelines_v2.py` 配置字段 + `_create_pipeline` 透传 |
+| 测试 | `tests/test_backtest/test_ablation_runner.py` |
+
+### 后果
+
+- **正面**：每个前置处理步骤的贡献可被单独测量并给出显著性；随机路由控制组能拆开"路由本身"与"路由内容"的效应
+- **负面**：组合数受控于 OAT，因此**无法检测交互效应**——这是为可行性付出的代价，需在报告中显式声明
+- **风险**：bootstrap 使单次运行成本上升；B0 的 dropna 语义已在规划文档中记录为在 IC 计算层处理（`factor_metrics.py` 跳过 NaN pair），而非管线层
+
+### 学术依据
+
+Ledoit & Wolf (2008)（HAC）；Benjamini & Hochberg (1995)（BH-FDR）。
+
+---
+
+## ADR-037: 去极值统一为逐日横截面 (因果性修复)
+
+**日期**: 2026-10-22
+**状态**: 已实施
+**优先级**: P0
+**关联缺陷**: DEFECT-PL-01
+**关联测试**: `tests/unit/test_outlier_cross_sectional.py`、`tests/integration/test_pipeline_truncation_invariance.py`
+**调研/设计**: [PL01_OUTLIER_LOOKAHEAD_RESEARCH.md](docs/analysis/PL01_OUTLIER_LOOKAHEAD_RESEARCH.md) / [PL01_OUTLIER_LOOKAHEAD_DESIGN.md](docs/analysis/PL01_OUTLIER_LOOKAHEAD_DESIGN.md)
+
+### 背景
+
+管线级截断不变式测试（ADR-029 引入）暴露 `ProcessingAdapter(process_type='outlier')` 违反不变式：用 `[0,t]` 数据跑出的前 t 期缩尾结果，与全样本跑后截取的前 t 期结果不同。项目测试面板实测 187 格差异，`max_abs_diff=1.68e-01`。
+
+根因有三层，且相互叠加：
+
+1. **池化拟合**：`fit()` 用 `X.values.flatten()` 在**全 panel** 上拟合缩尾参数。前 t 期的缩尾边界因此依赖 t 之后的数据。
+2. **选型前视**：`SmartOutlierDetector` 默认 `auto_select=True`，其方法选择依据全 panel 分布特征（偏度、尾部、离散度），会**覆盖显式传入的 `method`**。实测显式 `method='percentile'` 在探针面板上实际拟合为 `mad`（`threshold=2.7725`）；200/200 个变波动率面板在截断前后选到不同方法。
+3. **配置未消费**：`StaticFactorPipeline` 名义传 `percentile(1,99)`，但未被执行；旧版 `PipelineV2ConfigUnified.to_pipeline_config()` 产生的 `threshold / lower_percentile / upper_percentile` 经 `pipeline.py` 传入 `ProcessingAdapter`，修复前在 `fit()` 实例化 detector 时因签名不匹配而 `TypeError`。修复后 outlier `fit()` 为 no-op，这些旧字段不再报错，但仍不被消费（见“不覆盖范围”）。
+
+这同时是 **ADR-027 的实施缺口**：ADR-027 已决定“所有 `auto` → 固定方法”和“Winsorizer `percentile(1,99)`”，但 adapter 层从未落实。
+
+该缺陷长期未被发现，是因为缩尾是**单调**变换：前视与截断输出的逐日 Spearman 中位数 = 1.000，最小值 = 0.9973。排序类指标几乎无感，只有值相等的截断不变式能暴露它。
+
+### 决策
+
+**`ProcessingAdapter(process_type='outlier')` 统一改为逐日横截面估计；`fit()` 不存参数，边界只在 `transform()` 用当日行重算。**
+
+1. **D1 估计轴**：每个交易日独立计算缩尾边界，只使用该日横截面。行 = 日期、列 = 股票的因子面板，因此逐行（axis=1）即逐日截面。
+2. **D2 方法解析**：`method='auto'` 在构造期解析为 `'percentile'`（默认 1/99）；显式方法按声明执行；detector 侧始终 `auto_select=False`，禁止数据自适应选型。
+3. **D3 实现路径**：
+   - `percentile` 走向量化快速路径：`X.quantile(q, axis=1)` + `X.clip(lower, upper, axis=0)`；
+   - 其他方法（`mad/iqr/z_score/adaptive/sigmoid_soft/quantile`）逐行复用 `SmartOutlierDetector`，保留原有截断语义（smooth clip / sigmoid）；
+   - 实测 2500×3000 面板：向量化 percentile 0.226s（验收复测；设计基准 0.212s）、逐行 MAD 2.888s、逐行 percentile 循环 2.56s。
+4. **D4 `fit()` 为 no-op**：outlier 不存储任何拟合参数，结构上不存在可泄漏的参数面（与 ADR-029 的 `z_score` 分支同构）。
+5. **D5 范围控制**：不提供时间序列 axis，不接 `OutlierConfig`，不扩展 `threshold` 语义，不做 rank-normal。
+6. **D6 失败语义**：未知方法、非法分位、非数值输入 fail loud；行内有效观测 < 3 或零离散度时原样返回该行（与 detector 内部 `<3` 判据一致）；`percentile_upper < 1.0` 视为 0-1 小数约定误用并拒绝。边界说明：`(0.0, 1.0)` 仍会被解释为 0/1 百分位，调用方应显式使用 0-100 约定。
+7. **D7 版本**：项目版本升至 **v3.3.3**；缓存 `CODE_VERSION` 由 `v2.2.0-cache` 升至 `v2.2.1-cache`。`CacheManager` 在读取时校验 `meta.code_version`，不一致即 MISS 并删除旧数据，确保算法变更后不会命中旧缓存（自愈重建）。
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| 常量（合法方法 / 参数白名单 / 最小观测） | `adapters.py` 顶部常量区 `_OUTLIER_METHODS` 等 |
+| 构造期解析与校验 | `ProcessingAdapter.__init__` / `_validate_outlier_percentiles` |
+| `fit()` no-op 分支 | `ProcessingAdapter.fit` |
+| `transform()` 分支 | `ProcessingAdapter.transform` → `_transform_outlier_cross_sectional` |
+| 向量化 percentile / 逐行复用 | `_transform_outlier_percentile` / `_transform_outlier_rowwise` |
+| 统计字段 | `ProcessingAdapter.get_stats` (`outlier_scope='cross_sectional'`) |
+
+### 实测证据
+
+`T=100, N=30, t=60, atol=1e-12`，Python 3.12：
+
+| 对象 | 修复前 | 修复后 |
+|------|--------|--------|
+| 隔离测试：outlier percentile | 187 格差异, `max_abs_diff=1.68e-01` | **0 格, 0** |
+| StaticFactorPipeline 端到端 | 1.33e-02 | **4.72e-05**（残留仅 PL-02） |
+| 方法解析（显式 percentile） | 实际拟合 `mad`, `threshold=2.7725` | 实际执行 `percentile(1,99)` |
+| auto 选型稳定性（200 个变波动率面板） | 200/200 截断前后选型不同 | 构造期固定，无不一致 |
+| 逐日 Spearman（前视 vs 截断） | 中位数 1.000 / 最小 0.9973 | —（仪器灵敏度对照） |
+
+其他管线未变化，符合预期：Dynamic 不含 outlier 步骤（PL-05，8.05e-01/8 NaN）；Mixed 使用自身 `_compute_winsorize_params` 全样本缩尾（PL-06，2.91e-01）；顶层仍受残留缺陷与指纹路由影响（PL-07，1.84e+00）。
+
+### 测试契约
+
+| 测试 | 覆盖 |
+|------|------|
+| `tests/unit/test_outlier_cross_sectional.py`（15 函数 / 30 例） | `auto→percentile`；7 个显式方法保留；非法方法/分位；分位边界；percentile/MAD/全方法截断不变式；`fit` 不存参数；NaN/元数据；<3 观测/零离散；`enabled=False`；非 DataFrame；`get_stats` |
+| `tests/integration/test_pipeline_truncation_invariance.py::test_outlier_percentile_is_causal` | 隔离步骤截断不变式：0 格 / 0 |
+| `tests/integration/...::test_diagnostic_report` | outlier 行 0/0；Static 4.72e-05 |
+| `tests/test_backtest/test_cache_manager.py::TestCodeVersionGeneration` | 缓存代际不一致 → MISS 且删除旧数据；`verify` 报告 `code_version mismatch` |
+| `tests/test_fix3_version_unification.py::test_07_all_cache_code_versions_consistent` | 5 处缓存 `code_version` 默认值一致 |
+
+### 不覆盖范围
+
+- **PL-02 / PL-05 / PL-06 / PL-07**：保持 `xfail` 登记，不在本 ADR 范围。
+- **旧版 `OutlierConfig` / `to_pipeline_config()` 字段接线**：`threshold`、`lower_percentile`、`upper_percentile` 当前不被消费；修复后不再抛 `TypeError`，但也不会生效。另立任务处理。
+- **`SmartOutlierDetector` 默认值**：不修改模块默认 `auto_select=True`；adapter 显式传 `False`。
+- **时序 expanding/rolling 轴**、**rank-normal**、**非 percentile 方法向量化**：后续评估。
+
+### 备选方案
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| A: 保留全 panel 池化，只固定方法 | 改动最小 | 前视仍在；只是把“选型前视”降为“参数前视” | 不选 |
+| B: 按列（每只股票全历史）expanding 缩尾 | 保留时序语义 | 与因子面板的截面标准化/中性化口径不一致；需时间变化参数；存量输出同样作废 | 不选 |
+| C: 逐日横截面 + 固定方法（percentile 快速路径，其他方法逐行复用） | 结构上无泄漏；与 ADR-027/029 及行业实践一致；保持各方法原截断语义；向量化 | 输出数值变更，旧缓存失效 | **选用** |
+| D: 逐日 rank-normal | 对极端值稳健 | 改变输出分布与后续线性步骤的前提，超出缺陷修复范围 | 不选（留待需要时） |
+
+### 后果
+
+- **正面**：outlier 步骤在结构上不再有拟合参数可泄漏；`Static` 端到端由 1.33e-02 降至 4.72e-05；`auto` 行为可复现；与 ADR-027 的固定方法决策对齐；percentile 路径向量化后性能提升约一个数量级。
+- **负面**：所有依赖旧缩尾数值的存量结果与缓存失效，需重建；缓存代际是粗粒度的，价格/前向收益缓存也会一并失效（一次性重查，换取实现简单与代际一致）；行内有效观测 <3 时该行跳过缩尾（小截面面板行为需知悉）；非 percentile 方法仍为逐行 Python 循环（当前无生产路径使用）。
+- **风险**：若未来确需时序去极值（例如对单股票时间序列），必须显式新增估计轴并另立决策，不得通过修改默认轴实现——否则会重新引入前视或破坏截面口径。
+
+### 学术与工业依据
+
+- 因子面板的截面缩尾：Bali, Engle & Murray (2016), *Empirical Asset Pricing*。
+- 样本依赖与前视偏差：Banz & Breen (1986)。
+- 全样本预处理导致的信息泄漏：Kaufman, Rosset, Perlich & Stitelman (2012)；Kapoor & Narayanan (2023)。
+- 因子定义/预处理选择对结果的影响：Arnott, Harvey & Markowitz (2019)。
+- 稳健缩尾与 MAD 尺度：Hampel (1974)；Rousseeuw & Croux (1993)（`1.4826` 为 MAD 的正态一致性常数）。
+- 分位数估计约定：Hyndman & Fan (1996)。
+- 工业实践（截面缩尾为默认）：MSCI FaCS 方法论（2018，A）；DolphinDB Barra 因子处理教程（A）；Quant SE Q43498/A43511（A）；华泰金工因子处理系列（B，转载片段）；Portfolio Optimizer 文档（B）。
+- 详细检索记录与证据等级见调研文档；未验证项在调研文档中显式标注，不作为本 ADR 的论据。
+
+### 回滚方案
+
+回退 `adapters.py` 的 outlier 分支与常量，恢复 `CODE_VERSION = "v2.2.0-cache"` 并删除/重建缓存；项目版本回退至 v3.3.2。回滚会使 PL-01 隔离测试重新失败，应同时恢复其 `xfail` 登记。
+
+### 评审修订 (2026-10-22)
+
+评审发现并修复一处会使本 ADR 失效的实现缺口：初版仅 bump `CODE_VERSION` 常量，但 `CacheManager.get/verify` 从未校验 `meta.code_version`，旧缓存仍会命中并返回修复前的数值。已补：
+
+1. `CacheManager.get_with_meta`：读取时校验 `code_version`，不一致则记录 MISS 并删除旧数据/meta；
+2. `CacheManager.verify`：不一致返回 `is_valid=False`，reason 为 `code_version mismatch`；
+3. 3 项 `TestCodeVersionGeneration` 单测 + `test_07` 五处默认值一致性测试；
+4. 修正本 ADR 的配置 `TypeError` 发生位置、Arnott 等作者名单、性能实测口径。
 
 ---
 

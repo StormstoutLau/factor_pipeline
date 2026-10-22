@@ -1,5 +1,344 @@
 # 开发日志 (Changelog)
 
+## v3.3.3 — PL-01 去极值因果性修复: 逐日横截面 (已实施, 2026-10-22)
+
+### 概览
+
+修复 DEFECT-PL-01: `ProcessingAdapter(process_type='outlier')` 的缩尾参数在全 panel 上池化拟合，且 `SmartOutlierDetector(auto_select=True)` 会覆盖显式方法——前 t 期输出依赖 t 之后的数据，同时名义上的 `percentile(1,99)` 实际按全样本特征自选方法执行。
+
+**核心产出**:
+- 去极值改为**逐日横截面**：每行只使用当日数据；`fit()` 对 outlier 成为 no-op，结构上无参数可泄漏
+- `method='auto'` 构造期解析为 `percentile`；显式方法按声明执行；detector 侧始终 `auto_select=False`
+- `percentile` 走向量化快速路径（2500×3000 面板 0.212–0.226s，逐行循环 2.56s）；其他方法逐行复用 detector，保留原截断语义
+- 新增 30 项单测；集成套件由 `6 passed / 6 xfailed` 变为 `7 passed / 5 xfailed`（PL-01 摘除 xfail）
+- 新增 **ADR-037**；项目版本 **3.3.3**；缓存 `CODE_VERSION` **v2.2.1-cache**（读取时校验代际，旧缓存自愈失效）
+- 关联回归: 37 passed / 5 xfailed（新单测 + 集成）；适配器回归 38 passed / 2 skipped；缓存相关 91 passed
+
+### 缺陷根因 (三层叠加)
+
+| # | 根因 | 证据 |
+|---|------|------|
+| 1 | `fit()` 用 `X.values.flatten()` 在全 panel 上拟合缩尾参数 | 截断 60/100 期: 187 格差异, `max_abs_diff=1.68e-01` |
+| 2 | `auto_select=True` 用全 panel 分布特征覆盖显式 `method` | 显式 `percentile` 实际拟合 `mad`, `threshold=2.7725`; 200/200 个变波动率面板截断前后选型不同 |
+| 3 | 管线配置的分位/阈值参数未被 adapter 消费 | 修复前经 `to_pipeline_config()` 传入，`fit()` 实例化 detector 时 `TypeError`；修复后不再报错，但字段仍被忽略（后续任务） |
+
+这也是 **ADR-027 的实施缺口**: "所有 `auto` → 固定方法" 与 "Winsorizer percentile(1,99)" 早已决定，但 adapter 层未落实。
+
+**为何长期未被发现**: 缩尾是单调变换。前视与截断输出的逐日 Spearman 中位数 = 1.000，最小值 = 0.9973；排序类指标几乎无感，只有值相等的截断不变式能暴露。
+
+### 实测矩阵 (`T=100, N=30, t=60, atol=1e-12`)
+
+| 层级 | 对象 | 修复前 | 修复后 |
+|------|------|--------|--------|
+| step | outlier percentile | 187 格, 1.68e-01 | **0 格, 0** |
+| step | transform auto | 1800 格, 8.51e-04 | 1800 格, 8.51e-04（PL-02，未修） |
+| pipeline | Static | 1800 格, 1.33e-02 | **1800 格, 4.72e-05**（残留仅 PL-02） |
+| pipeline | Dynamic | 1653 格 + 8 NaN, 8.05e-01 | 不变（PL-05，不含 outlier 步骤） |
+| pipeline | Mixed | 1800 格, 2.91e-01 | 不变（PL-06，使用自身全样本缩尾） |
+| top | FactorProcessingPipelineV2 | 1650 格, 1.84e+00 | 不变（PL-07，含指纹路由） |
+
+诊断报告: 违反 4 项 / 满足 5 项（修复前为违反 5 项 / 满足 4 项）。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| [adapters.py](adapters.py) | outlier 常量 + 构造期解析/校验 + `fit` no-op + `transform` 分支 + 3 个 helper + `get_stats` 字段 |
+| [tests/unit/test_outlier_cross_sectional.py](tests/unit/test_outlier_cross_sectional.py) | **新增** 15 项测试（参数化后 30 例）：方法解析 / 边界 / 因果性 / NaN / 小截面 / 零离散 / identity / 统计字段 |
+| [tests/integration/test_pipeline_truncation_invariance.py](tests/integration/test_pipeline_truncation_invariance.py) | 移除 PL-01 xfail; 更新缺陷登记表与 PL-04/05/06/07 reason |
+| [tests/test_fix3_version_unification.py](tests/test_fix3_version_unification.py) | 版本锚点 → 3.3.3; 缓存断言 → v2.2.1-cache |
+| [pyproject.toml](pyproject.toml) / [__init__.py](__init__.py) / [config_v2.py](config_v2.py) / [reporting.py](reporting.py) | 版本 → 3.3.3 |
+| `backtest/cache_manager.py` + 4 个缓存默认值 | `CODE_VERSION` → v2.2.1-cache |
+| [DECISIONS.md](DECISIONS.md) | 新增 ADR-037 + 占用登记; ADR-029 追加后续测量 |
+| [docs/analysis/PL01_OUTLIER_LOOKAHEAD_RESEARCH.md](docs/analysis/PL01_OUTLIER_LOOKAHEAD_RESEARCH.md) / [..._DESIGN.md](docs/analysis/PL01_OUTLIER_LOOKAHEAD_DESIGN.md) | 调研/设计文档, 状态更新为已实施 |
+
+### 兼容性与缓存
+
+- **行为变更**: 去极值输出数值改变（不再池化、不再自选方法），依赖旧缩尾数值的存量结果与缓存失效。
+- **缓存代际**: `v2.2.0-cache` → `v2.2.1-cache`。`CacheManager.get_with_meta` 读取时校验 `meta.code_version`，不一致即 MISS 并删除旧数据/meta；`verify` 返回 `code_version mismatch`。首次访问旧缓存会自动重建；缓存版本仍不跟随项目版本。
+- **单一来源**: 4 个子缓存默认值改为引用 `cache_manager.CODE_VERSION`，避免多处字面量漂移。
+- **接口**: 无公开 API 破坏。`ProcessingAdapter(outlier)` 仍接受原参数；未知方法/非法分位改为构造期 `ValueError`（原为静默覆盖或延迟失败）。
+- **小截面**: 行内有效观测 < 3 或零离散度时该行原样返回（不缩尾），与 detector 内部判据一致。
+
+### 评审修订 (2026-10-22)
+
+评审发现初版缓存 bump 只改了 `CODE_VERSION` 常量，但 `CacheManager.get/verify` 从未校验 `meta.code_version`，旧缓存仍会命中并返回修复前的数值。已补：
+
+- `CacheManager.get_with_meta`: 代际不一致 → MISS + 删除旧数据/meta
+- `CacheManager.verify`: 代际不一致 → `is_valid=False`
+- 新增 `TestCodeVersionGeneration` 3 项单测 + `test_07` 五处默认值一致性测试
+- 修正 ADR-037 中配置 `TypeError` 的发生位置（`fit` 而非桥接）、Arnott 等作者名单、性能实测口径
+
+### 已知未修 (保持 xfail 登记)
+
+- **PL-02**: 变换 `fit` 仍全 panel flatten 拟合 λ（8.51e-04）
+- **PL-05**: 解耦器 AR 用样本内 `fitted_values` 充当 OOS 预测（8.05e-01, 8 NaN）
+- **PL-06**: Mixed 自有 `_compute_winsorize_params` 全样本缩尾（2.91e-01）
+- **PL-07**: 顶层叠加残留缺陷 + 指纹路由依赖全样本（1.84e+00）
+
+---
+
+## v3.3.2 — 管线级因果性测试 + 标准化因果性修复 + ADR 编号治理 (已实施, 2026-10-21)
+
+### 概览
+
+接续 Claude 外部评审对新管线级缺陷的指认, 本轮不以"修某个函数"为起点, 而是先建立**可证伪的因果性测量仪器**, 由测试暴露问题清单, 再按实测幅度决定修复顺序。同时清理长期存在的 ADR 编号冲突与未记录的已实施决策。
+
+**核心产出**:
+- 新增管线级**截断不变式测试** (12 项, 6 通过 / 6 登记缺陷), 把"无前视"变成可执行判据
+- 修复 DEFECT-PL-03: 标准化 `method='auto'` 全样本前视 (实测 6.18e-01 → 0)
+- 处置 ADR-030 记录的 Mixin 耦合风险 (发现并修掉一处**布局注释与实现相反**的陷阱)
+- ADR 编号治理: 建立登记规则 + 勘误表 + 补记 ADR-030~036 (7 条)
+- **版本号统一到 3.3.2**: 4 处声明 (pyproject / `__init__` / config_v2 / reporting) 收敛, 字段级测试改为比对本包 `__version__`
+- 关联回归: 80 passed / 6 xfailed / 0 failed
+
+**修正了两项此前的判断** (见下文各节):
+1. 外部评审称"Mixed 管线输出不再是单位方差"——**不成立**, 实测为 1.0
+2. 此前的分析认为"标准化逐日截面即因果"——**只对 `z_score` 成立**, `'auto'` 走的是 per-column 全样本分支
+
+### 新增: 管线级截断不变式测试
+
+**文件**: [tests/integration/test_pipeline_truncation_invariance.py](tests/integration/test_pipeline_truncation_invariance.py)
+
+**不变式**: 对任意截断点 t, 用 `[0, t]` 数据跑出的 `[0, t]` 期输出, 必须等于全样本 `[0, T]` 跑后截取 `[0, t]` 期的输出。这是"无前视"的操作化定义, 不依赖实现者是否想到某个步骤有前视。
+
+**结构** (三层 + 仪器):
+
+| 层 | 内容 | 作用 |
+|----|------|------|
+| `TestIsolatedStepInvariance` | 每步单独喂**相同输入**独立测量 | 定位首个违反步骤, 避免上游前视污染下游判定 |
+| `TestSubPipelineInvariance` | Static / Dynamic / Mixed 端到端 | 暴露步骤间传播效应 |
+| `TestTopLevelInvariance` | `FactorProcessingPipelineV2` 全链路 | 含指纹路由决策的前视 |
+| `test_diagnostic_report` | 恒通过的测量表 | 修复前后可对比, 逐行 `n_diff_cells` 应降为 0 |
+
+**缺陷登记机制**: 预期违反的测试标 `xfail(strict=True, raises=AssertionError)`, reason 携带缺陷编号与实测数值。套件保持全绿的同时登记已知缺陷; 缺陷一旦修好, 该测试报 "unexpectedly passing" **强制摘标记**。`raises=AssertionError` 确保 ImportError/KeyError 等仍作为真错误暴露, 不被 xfail 吞掉。
+
+**实测矩阵** (PL-03 修复后, `T=100, N=30, t=60, atol=1e-12`, Python 3.12):
+
+| 层级 | 对象 | 状态 | 差异格 | 最大绝对差 |
+|------|------|------|--------|-----------|
+| step | imputer `ffill_ts` | PASS | 0 | 0 |
+| step | outlier percentile | FAIL (PL-01) | 187 | 1.680e-01 |
+| step | neutralize (逐日 OLS) | PASS | 0 | 0 |
+| step | transform auto | FAIL (PL-02) | 1800 | 8.506e-04 |
+| step | standardize `'auto'` | PASS (已修) | 0 | 0 |
+| step | standardize `'z_score'` | PASS | 0 | 0 |
+| pipeline | Static | FAIL | 1800 | 1.326e-02 |
+| pipeline | Dynamic | FAIL (+8 NaN) | 1653 | 8.045e-01 |
+| pipeline | Mixed | FAIL | 1800 | 2.906e-01 |
+
+**结论**: 5 个处理步骤中, 插补 / 中性化 / 标准化(`z_score`)满足因果性; 去极值 / 变换不满足。解耦器 AR 另有结构性缺陷 (PL-05)。
+
+### 修复 1: DEFECT-PL-03 标准化 `'auto'` 全样本前视
+
+**位置**: [adapters.py](adapters.py) `ProcessingAdapter.__init__`
+
+**根因 (两层)**:
+1. **分支判定用 method 字面量**: `_cross_sectional_zscore` 仅在 `method == 'z_score'` 时为 True。`StaticFactorPipeline` 传 `'auto'`, 落入 per-column 分支 — `fit()` 在全样本上对每列拟合 `(mean, std)`, `transform()` 套用固定参数 → 前 t 期结果依赖 t 之后样本
+2. **`'auto'` 的方法选择本身依赖全样本**: `AdaptiveStandardizer._vote_on_method` 依据 `outlier_ratio / is_heavy_tailed / is_skewed / cv` 投票选出方法 → 第二重前视源, 且同一输入在不同窗口可能选到不同方法
+
+**修复**: `standardization + 'auto'` 于构造期解析为 `'z_score'`, 命中逐日横截面分支。该分支 `fit()` 为 no-op (不存参数), `transform()` 逐期独立计算 `(x - mean_t) / std_t` → **结构上无可泄漏参数**。
+
+| 对象 | 修复前 | 修复后 |
+|------|--------|--------|
+| `standardize(method='auto')` 单步 | 1800/1800 格差异, 6.18e-01 | **0** |
+| `StaticFactorPipeline` 端到端 | 4.03e-01 | **1.33e-02** (降 30 倍) |
+
+**破坏性影响**: `StaticFactorPipeline` 输出数值变更, 此前用它产出的因子值 / IC / Sharpe 需重算。
+
+**测试契约变更** (2 处, 已记入 ADR-029):
+`tests/test_adapters/test_module_enabled.py` 与 `tests/test_pipelines_v2.py` 原断言 `result.mean(axis=0) ≈ 0` (列均值)。依据: **列均值 == 0 恰是全样本 per-column 标准化的定义特征**——任何因果变换在数学上都无法满足该等式, 故该断言成立本身就是前视的症状。已改为逐日横截面断言 (行均值 ≈ 0、行标准差 ≈ 1)。
+
+**外部评审结论修正**: 评审称"混合因子偏度 > 2 触发变换时, 标准化参数来自未变换尺度, 输出不再是单位方差"——**不成立**。Mixed 传的是 `'z_score'`, 命中行内重算分支, 完全不读 fit 参数。新增 `test_mixed_pipeline_output_is_unit_variance` 实测逐日截面 std 中位数 ≈ 1.0 予以固定。
+
+### 修复 2: ADR-030 Mixin 耦合风险处置
+
+**位置**: [modules/factor_decoupler/diagnostics/hidden_effect.py](modules/factor_decoupler/diagnostics/hidden_effect.py) · [core/ar_model.py](modules/factor_decoupler/core/ar_model.py) · [core/dual_neutralizer.py](modules/factor_decoupler/core/dual_neutralizer.py)
+
+补记 ADR-030 时核查代码, 发现耦合风险的实际形态**比原记录更严重**:
+
+| # | 形态 | 性质 |
+|---|------|------|
+| 1 | 探测私有 `_results` → 结构变则返回 `None` → 报 `'AR model not fitted'` | 误报 (模型其实已 fit) |
+| 2 | 该分支同时返回 `is_incremental_endogenous=False` | **假阴性: 谎报"无内生性"** |
+| 3 | `ARModelResult.coefficients` 注释写 `[phi_1, ..., phi_p, intercept]`, 而 `_fit_ar` 把常数项插在**列首** | **布局陷阱**: 照注释改代码会静默取错 φ, 不报错 |
+
+**处置**:
+
+| 措施 | 实现 |
+|------|------|
+| φ 提取收拢为显式契约 | 宿主实现 `_get_ar_phi_for_diagnosis()`; Mixin 不再探测任何私有属性 |
+| 布局假设单点化 | `AR_COEF_INTERCEPT_INDEX` / `AR_COEF_PHI1_INDEX` 具名常量, 仅在 `ARDecoupler` 钩子内使用 |
+| 注释纠偏 | `ARModelResult.coefficients` 注释改为真实布局 `[intercept, phi_1, ..., phi_p]` |
+| `CompositeDecoupler` 纯委托 | 钩子只转发内部 `ARDecoupler`, 本类不假设内层结构 |
+| **破坏即报错** | 已 fit 却取不到 φ → 抛 `DiagnosticContractError`, 不再静默降级 |
+| 语义钉子 | 新增 `TestDiagnosticContract` 8 项 |
+
+**未 fit 仍走软提示** (两阶段分离语义不变, E1-T21 继续通过); 契约收紧只作用于「已 fit 但取不到 φ」这一原本会误报的情形。
+
+### 治理: ADR 编号冲突与补记
+
+**冲突规模** (排查后远大于单个编号): 3 份规划文档各自把 ADR-026 分配给不同决策, 且 v3.1.0 一次性预留 ADR-026~031 共 6 个编号, 与实际占用大面积冲突。
+
+**处置** (详见 [DECISIONS.md](DECISIONS.md) 文首「ADR 编号登记规则与勘误」):
+- 建立 3 条登记规则 (编号唯一集中分配 / 规划文档不得预留 / 引用须可检索)
+- 勘误表 8 行, 逐条标注「作废 + 改记去向」
+- 补记 7 条此前从未写入的 ADR: ADR-030 (E1 隐藏效应) / 031 (E2 P-hacking) / 032 (E3 内生性 S1-S4) / 033 (E4 格兰杰) / 034 (E5 三层正则化) / 035 (E6 估计层) / 036 (消融对照机制)
+- 4 处冲突点置入 ⚠️ 勘误注 (EXECUTION_V3.1.0 / EXECUTION_ABLATION_V3.0.0 / audit 报告)
+
+**勘误表自身的一次腐化与修正**: 首版用精确行号 (`:539, :3944`), 但在 DECISIONS.md 顶部插入内容后行号全部失效。已改为只标「文件名 + 出现次数」, 以「声明内容」列为检索键, 消除此类漂移。
+
+**连带修正**:
+- 代码注释编号错误: `pipelines_v2.py` 中 E1/E2 原标 `ADR-024` (实际是"指纹 21 维"), 改为 ADR-030 / ADR-031
+- `ARCHITECTURE.md` 三处模块 ADR 归属: `endogeneity_check` 原归 ADR-026 (错误归属) → ADR-032; 并修正类名 `Ivx`→`IVXEstimator`、`Regularizer`→`EndogeneityRegularizer` 等
+- `WORKFLOW_METHODOLOGY.md`: `ADR-001 至 ADR-025` → `至 ADR-036`
+
+### 统一: 版本号 3.3.2
+
+此前 `pyproject.toml` / `__init__.__version__` 停留在 `2.5.0`, 而本条目按 `3.3.x` 演进, 属上一轮显式记录的遗留缺口。本轮收敛:
+
+| 位置 | 值 |
+|------|-----|
+| [pyproject.toml](pyproject.toml) | `3.3.2` |
+| [__init__.py](__init__.py) | `__version__ = "3.3.2"` |
+| [config_v2.py](config_v2.py) | `PipelineV2ConfigUnified.version = "3.3.2"` |
+| [reporting.py](reporting.py) | `PipelineExecutionReport.pipeline_version = "3.3.2"` |
+
+**消除重复锚点**: `tests/unit/test_config_v2.py` / `test_reporting.py` / `test_factor_orthogonalizer/test_adapter.py` 原各自持有字面量 (上一轮 `2.5.0` 的漂移正是这样发生的), 现改为比对本包 `factor_pipeline.__version__`; 唯一绝对锚点留在 `tests/test_fix3_version_unification.py` 的 `EXPECTED_VERSION`, 并新增 `test_06_pyproject_version_matches_package` 校验 `pyproject.toml` 与包版本一致。
+
+**不参与统一**: `backtest/cache_manager.py` 的 `CODE_VERSION = "v2.2.0-cache"` 是缓存语义版本, 与项目版本解耦 (v3.3.3 因 PL-01 算法变更 bump 至 `v2.2.1-cache`, 见上); `modules/*` 子包各自维护独立版本 (decoupler 1.2.0 等)。
+
+### 测试结果
+
+| 范围 | 结果 |
+|------|------|
+| 新增 `test_pipeline_truncation_invariance.py` | 12 项 (6 通过 / 6 xfail 登记缺陷) |
+| `test_hidden_effect.py` | 29 passed (原 21 + 契约测试 8) |
+| `test_factor_decoupler/` + `test_pipelines_v2` + `test_pipelines_v2/` + `integration/` | **80 passed, 6 xfailed, 0 failed** |
+| `unit/` + `demo_notebook` + `integration` (PL-03 阶段) | 262 passed, 2 skipped, 0 failed |
+| 适配器 / 管线 / 多维度 / P1 (PL-03 阶段靶向) | 123 passed, 2 skipped, 6 xfailed, 0 failed |
+| 版本统一靶向 (`test_fix3_version_unification` + `unit/test_config_v2` + `unit/test_reporting` + `orthogonalizer/test_adapter`) | **62 passed, 0 failed**; 手工校验脚本 5/5 (4 处声明 + pyproject, 缓存独立) |
+
+### 已知遗留
+
+**缺陷登记** (xfail 追踪, 按实测幅度排序):
+
+| 编号 | 缺陷 | 实测 |
+|------|------|------|
+| DEFECT-PL-01 | `ProcessingAdapter` 去极值 `X.values.flatten()` 全 panel 拟合 → 全样本分位数 | 187 格 / 1.68e-01 |
+| DEFECT-PL-05 | 解耦器 `ar_model.transform` 用样本内 `fitted_values` 充当 OOS 预测 | 8.05e-01 + 8 格 NaN 模式差 |
+| DEFECT-PL-02 | 变换全 panel 拟合 λ; `'auto'` 选型亦依赖全样本 | 8.51e-04 (普遍但量级小) |
+
+**其它**:
+- 标准化 `'robust' / 'min_max' / 'quantile'` 仍走 per-column 全样本分支 (非因果), 三条生产管线均未使用, 已在测试文件登记为"已知未登记"
+- ~~版本号漂移~~ **已在本轮消除**: 4 处声明统一为 `3.3.2`, 见上文「统一: 版本号 3.3.2」
+- 全量 800+ 套件未完成长跑: `tests/test_backtest/test_p3_phase4_integration.py` 的 optimizer 模拟为主要耗时来源, 需单独安排
+
+### 文档产出
+
+- `DECISIONS.md`: ADR-029 (新增) + ADR 编号登记规则与勘误 + ADR-030~036 (补记) + ADR-030 耦合风险处置小节
+- `docs/ARCHITECTURE.md`: ADR 索引与模块归属更新
+- `docs/WORKFLOW_METHODOLOGY.md`: ADR 范围、模板占位符 (ADR-0XX) 修正
+- `docs/EXECUTION_V3.1.0.md` / `docs/EXECUTION_ABLATION_V3.0.0.md` / `docs/audit/2026-07-08-ablation-code-quality-audit.md`: 勘误注
+
+---
+
+## v3.3.1 — 插补模块 P2 完成 + 学术引用修正 (已实施, 2026-07-27)
+
+### 概览
+
+v3.3.0 完成后, 对插补模块 (`factor_imputer`) 进行 P2 阶段收尾, 包含 3 项学术引用修正 + 3 项 P2 任务 (向量化 + e2e 测试 + 消融实验)。同时新增架构文档 / 进度矩阵 / 工作流方法论升级 (v1.3)。
+
+**核心产出**:
+- 3 项学术引用修正 (Little & Rubin 术语 / Breiman 2001 多输出 RF / Lopez de Prado 章号)
+- P2-1: `_transform_rf_shared` 向量化 (1 次 predict 替代 N 次循环, 1e-12 精度等价)
+- P2-3: 9 项端到端测试 (含静态扫描 + 严格因果性验证)
+- P2-4: 10 项消融实验 (含 IC 范围 + 严格因果性消融)
+- 全量回归: 803 passed / 10 skipped / 0 regressions
+
+**文档产出**:
+- `docs/ARCHITECTURE.md` v1.0 — 项目架构总览 (6 层分层 + 模块边界 + 数据流)
+- `docs/DEV_PROGRESS.md` v1.0 — 版本 × 模块双维度进度矩阵
+- `docs/EXECUTION_V3.3.1_IMPUTER_P2.md` — 本次会话详细实施记录
+- `docs/WORKFLOW_METHODOLOGY.md` v1.3 — 整合 10 步 spec 规范 (调研→设计→实施→验收)
+
+### 修正 1: Little & Rubin §4.3 术语
+
+| 项 | 值 |
+|----|-----|
+| 问题 | 原引用 "因果填充原则" 非 Little & Rubin (2002) 标准术语 |
+| 修正 | 改为 "fill within-unit first, then across-units" + 标注非标准术语 |
+| 位置 | [tests/unit/test_imputer_lookahead_fix.py:11-13](tests/unit/test_imputer_lookahead_fix.py#L11-L13) |
+
+### 修正 2: Breiman 2001 多输出 RF 补专门文献
+
+| 项 | 值 |
+|----|-----|
+| 问题 | Breiman (2001) 未明确讨论 multi-output RF, 作为共享 RF 方案唯一引用不严谨 |
+| 修正 | 新增 Segal & Xiao (2011) WIREs DMKD + van der Westhuizen et al. (2023) Geoderma |
+| 位置 | [docs/analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md:520-521](docs/analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md#L520-L521) |
+
+### 修正 3: Lopez de Prado §7 章号保守引用
+
+| 项 | 值 |
+|----|-----|
+| 问题 | §7 章号未能从数据库逐章核验 |
+| 修正 | 改为 "Chapter on Cross-Validation Methods in Finance" 保守引用 (附 ISBN 978-1-119-44811-0) |
+| 位置 | [tests/unit/test_imputer_lookahead_fix.py:15-18](tests/unit/test_imputer_lookahead_fix.py#L15-L18) |
+
+### P2-1: 向量化剩余 for 循环
+
+| 项 | 值 |
+|----|-----|
+| 实现 | [modules/factor_imputer/core/imputers.py:587-645](modules/factor_imputer/core/imputers.py#L587-L645) |
+| 改动 | N 次 predict → 1 次 predict + `missing_mask` 一次性填充 |
+| 等价性 | `test_shared_model_batch_equivalent_to_per_row` (1e-12 精度) |
+| 保留 for 循环 | KNN walk_forward (因果本质不能向量化) + FactorSpecificImputer missing indicator (单列赋值已 O(T)) |
+
+### P2-3: 端到端测试 (9 项)
+
+| 测试类 | 数量 | 验证内容 |
+|--------|------|---------|
+| `TestE2ECausalProperty` | 2 | ffill_ts 截断不变性 + 无未来异常值泄漏 |
+| `TestE2ELookaheadSafeOnOff` | 2 | lookahead_safe=True/False 两条路径都跑通 |
+| `TestE2EAllStrategiesCausal` | 1 | cross_sectional 因果性 (参数化) |
+| `TestE2ESourceScan` (新增) | 2 | 静态扫描 adapters.py / imputers.py 无 .bfill() |
+| `TestE2EStrictCausality` (新增) | 2 | 严格因果: 截断任意时间点历史不变 + 修改未来数据历史不变 |
+
+### P2-4: 消融实验 (10 项)
+
+| 测试类 | 数量 | 验证内容 |
+|--------|------|---------|
+| `TestAblationLookaheadSafe` | 3 | ON/OFF 跑通 + 前期填充值不同 + KNN walk_forward vs legacy 差异 |
+| `TestAblationAdapterLevel` | 3 | lookahead_safe 透传 + ON/OFF 结果不同 |
+| `TestAblationICRange` (新增) | 2 | IC ∈ [-1, 1] (cross_sectional + KNN walk_forward) |
+| `TestAblationStrictCausality` (新增) | 2 | ON 满足截断不变性 + OFF 不满足 (验证切换确实改变语义) |
+
+### 测试结果
+
+```
+插补相关测试: 52 passed in 5.21s
+全量回归: 803 passed / 10 skipped / 0 regressions
+```
+
+| 测试文件 | 通过 / 总数 |
+|---------|------------|
+| `test_imputer_lookahead_fix.py` | 33 / 33 |
+| `test_imputer_e2e_causal.py` | 9 / 9 |
+| `test_imputer_ablation_lookahead.py` | 10 / 10 |
+
+### 工作流方法论升级 (v1.3)
+
+`docs/WORKFLOW_METHODOLOGY.md` 从 v1.2 升级至 v1.3, 新增 §13 整合 10 步 spec 规范:
+- 10 步 ↔ 7 阶段映射表 (调研→设计→实施→验收显式化)
+- 三类新工件定义: 调研文档 / 验收 checklist / 跨文档一致性 review
+- 双幻觉消除 review (步骤 4 + 步骤 6)
+- 工程细节显式检查 (版本 / 依赖 / 兼容 / 接口 / 签名 / 低效操作)
+- 适用范围与裁剪规则 (大/中/小任务)
+- v3.3.1 回溯适用性 (部分实例, 后续版本应补全步骤 7-8)
+
+---
+
 ## v3.3.0 — Layer 3 溢价健康诊断双层体系 (已实施, 2026-07-15)
 
 ### 概览

@@ -7,6 +7,8 @@
 > **方法**: 与 T1/T4 一致的 E1-E7 分阶段 TDD 流程, 严格 Red→Green→Review
 > **学术依据**: Ledoit & Wolf (2008) HAC + bootstrap / Benjamini & Hochberg (1995) BH-FDR
 
+> ⚠️ **ADR 编号勘误 (2026-10-21)**: 本文档中为「消融对照机制」预留的 ADR-026 **已作废**——该编号实际已被 v3.1.0「Audit-Driven Code Quality Remediation」占用；本决策已于 2026-10-21 补记为 **ADR-036**。文中「前置检查」表、「文档同步清单」及 §12 内容大纲等处的 ADR-026 引用一并适用本条。详见 [DECISIONS.md『ADR 编号登记规则与勘误』](../DECISIONS.md)。
+
 ---
 
 ## 0. 摘要
@@ -2052,6 +2054,8 @@ class TestBaselines:
 ---
 
 ## 12. ADR-026 内容大纲 (E7 写入)
+
+> ⚠️ **编号作废 (2026-10-21)**: ADR-026 实际已被 v3.1.0「Audit-Driven Code Quality Remediation」占用。本节为规划期草案，编号需重新分配；该「消融对照机制」决策已于 2026-10-21 补记为 **ADR-036**。详见 [DECISIONS.md『ADR 编号登记规则与勘误』](../DECISIONS.md)。
 
 ```markdown
 ## ADR-026: 消融对照机制 (v3.0.0, 四层架构 + Baseline 阶梯)

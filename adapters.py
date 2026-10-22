@@ -46,6 +46,15 @@ GARCH_DEFAULT_P = 1
 GARCH_DEFAULT_Q = 1
 GARCH_MIN_OBS = 50
 
+# PL-01: outlier 逐日横截面
+_OUTLIER_METHODS = frozenset({
+    'percentile', 'quantile', 'z_score', 'mad', 'iqr', 'adaptive', 'sigmoid_soft',
+})
+_OUTLIER_DETECTOR_PARAM_KEYS = (
+    'percentile_lower', 'percentile_upper', 'max_outlier_frac', 'adaptive_threshold',
+)
+_MIN_OUTLIER_CROSS_SECTION_OBS = 3
+
 # 滚动标准差近似参数
 ROLLING_WINDOW = 20
 ROLLING_MIN_PERIODS = 10
@@ -320,6 +329,38 @@ class ProcessingAdapter(PipelineStep):
     def __init__(self, process_type: str = 'outlier', method: str = 'auto',
                  enabled: Optional[bool] = None,
                  module_path=None, import_path=None, class_name=None, **params):
+        requested_method = method
+        # DEFECT-PL-03 修复 (2026-08): standardization 的 'auto' 统一解析为 'z_score'.
+        # 理由:
+        #   (a) 因果性: 'auto' 原落 per-column 全样本拟合分支, 前 t 期标准化参数
+        #       依赖 t 之后的数据 → 截断不变式违反 (实测 max_abs_diff=6.18e-01);
+        #   (b) 'auto' 走 AdaptiveStandardizer._vote_on_method, 方法选择依赖全样本
+        #       分布特征 (outlier_ratio/heavy_tail/skewness/cv), 自选方法本身即前视源,
+        #       并导致同一输入在不同窗口得到不同标准化方法;
+        #   (c) 契约: StaticFactorPipeline / MixedFactorPipeline 文档均声明"线性Z-Score",
+        #       标准化不应是数据自适应选型.
+        # 不覆盖范围: 显式指定 'robust'/'min_max'/'quantile' 仍走 per-column 分支,
+        # 那属于独立缺陷 (无生产路径使用, 见 pending_issue 记录).
+        if process_type == 'standardization' and method == 'auto':
+            method = 'z_score'
+
+        # DEFECT-PL-01 修复 (2026-10): outlier 统一逐日横截面.
+        # 'auto' 在构造期解析为固定方法, 不再依赖全样本分布特征自选;
+        # 显式方法按声明执行, detector 侧始终 auto_select=False.
+        if process_type == 'outlier':
+            if method == 'auto':
+                method = 'percentile'
+            if method not in _OUTLIER_METHODS:
+                raise ValueError(
+                    f"ProcessingAdapter(outlier): 未知 method={method!r}; "
+                    f"合法值: {sorted(_OUTLIER_METHODS)} 或 'auto'"
+                )
+            percentile_lower = float(params.get('percentile_lower', 1.0))
+            percentile_upper = float(params.get('percentile_upper', 99.0))
+            self._validate_outlier_percentiles(percentile_lower, percentile_upper)
+        else:
+            percentile_lower = percentile_upper = None
+
         super().__init__(
             name=f"FactorProcessing_{process_type}",
             step_type=process_type,
@@ -334,6 +375,18 @@ class ProcessingAdapter(PipelineStep):
         self._cross_sectional_zscore = (
             process_type == 'standardization' and method == 'z_score'
         )
+        self.requested_method = requested_method
+        self._cross_sectional_outlier = (process_type == 'outlier')
+        if self._cross_sectional_outlier:
+            self._outlier_percentile_lower = percentile_lower
+            self._outlier_percentile_upper = percentile_upper
+            self._outlier_detector_kwargs = {
+                key: params[key]
+                for key in _OUTLIER_DETECTOR_PARAM_KEYS
+                if key in params
+            }
+        else:
+            self._outlier_detector_kwargs = {}
 
         # ABLATION E1: enabled 仅对 outlier/standardization 生效; transformation 忽略 (永远 True)
         if process_type in ('outlier', 'standardization'):
@@ -354,6 +407,20 @@ class ProcessingAdapter(PipelineStep):
             self._processor_class = None
         # is_fallback_mode 保留向后兼容, REQUIRED 依赖下永远为 False
         self.is_fallback_mode = False
+
+    @staticmethod
+    def _validate_outlier_percentiles(lo: float, hi: float) -> None:
+        """校验 outlier 分位参数 (0-100 百分数约定)."""
+        if not (0.0 <= lo < hi <= 100.0):
+            raise ValueError(
+                f"outlier 分位需满足 0 <= lower < upper <= 100 (0-100 百分数); "
+                f"收到 lower={lo}, upper={hi}"
+            )
+        if hi < 1.0:
+            raise ValueError(
+                f"outlier percentile_upper={hi} 疑似使用 0-1 小数约定; "
+                f"本接口使用 0-100 百分数, 请乘以 100 (如 0.01/0.99 → 1/99)"
+            )
     
     def _get_processor_class(self):
         """导入处理器类 — P2.4: REQUIRED 依赖, 失败抛 AdapterImportError"""
@@ -404,6 +471,22 @@ class ProcessingAdapter(PipelineStep):
             logger.info(f"ProcessingAdapter({self.process_type}): enabled=False, 跳过拟合 (identity)")
             return self
 
+        # DEFECT-PL-01: outlier 逐日截面 — 不存任何拟合参数, 结构上无泄漏面
+        if self._cross_sectional_outlier:
+            if not isinstance(X, pd.DataFrame):
+                raise TypeError(
+                    f"ProcessingAdapter(outlier): 需要 pd.DataFrame, "
+                    f"收到 {type(X).__name__}"
+                )
+            self._processor = None
+            self._column_processors = {}
+            self.is_fitted = True
+            logger.info(
+                "ProcessingAdapter(outlier): 逐日横截面, fit 无参数 (method=%s)",
+                self.method,
+            )
+            return self
+
         # 实例化处理器
         processor_params = {'method': self.method}
         processor_params.update(self.params)
@@ -448,6 +531,10 @@ class ProcessingAdapter(PipelineStep):
         if not self.is_fitted:
             raise ValueError("处理器未拟合，请先调用 fit()")
 
+        # DEFECT-PL-01: outlier 逐日截面 (只用当日行)
+        if self._cross_sectional_outlier:
+            return self._transform_outlier_cross_sectional(X)
+
         # P0-3 fix: 横截面 z_score (rank-preserving)
         # x_i(t) = (x_i(t) - mean_t) / std_t  → 每期独立, 不改变截面排序
         if self._cross_sectional_zscore:
@@ -487,10 +574,67 @@ class ProcessingAdapter(PipelineStep):
 
         return result
 
+    def _transform_outlier_cross_sectional(self, X: pd.DataFrame) -> pd.DataFrame:
+        """逐日横截面去极值: 每行只使用该行数据."""
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError(
+                f"ProcessingAdapter(outlier): 需要 pd.DataFrame, "
+                f"收到 {type(X).__name__}"
+            )
+        if X.index.has_duplicates or X.columns.has_duplicates:
+            raise ValueError("ProcessingAdapter(outlier): index/columns 必须唯一")
+        if X.empty:
+            return X.copy()
+
+        try:
+            if self.method == 'percentile':
+                return self._transform_outlier_percentile(X)
+            return self._transform_outlier_rowwise(X)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "ProcessingAdapter(outlier): 输入必须为数值型 DataFrame"
+            ) from exc
+
+    def _transform_outlier_percentile(self, X: pd.DataFrame) -> pd.DataFrame:
+        valid = X.notna().sum(axis=1) >= _MIN_OUTLIER_CROSS_SECTION_OBS
+        lower = X.quantile(
+            self._outlier_percentile_lower / 100.0, axis=1
+        ).where(valid)
+        upper = X.quantile(
+            self._outlier_percentile_upper / 100.0, axis=1
+        ).where(valid)
+        return X.clip(lower=lower, upper=upper, axis=0)
+
+    def _transform_outlier_rowwise(self, X: pd.DataFrame) -> pd.DataFrame:
+        """其他方法: 逐行复用 detector, 保留原截断语义 (smooth clip / sigmoid)."""
+        values = X.to_numpy(dtype=float, copy=True)
+        valid = np.sum(~np.isnan(values), axis=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            dispersion = np.nanstd(values, axis=1)
+        rows = np.flatnonzero(
+            (valid >= _MIN_OUTLIER_CROSS_SECTION_OBS) & (dispersion > 1e-15)
+        )
+        if rows.size:
+            detector = self._processor_class(
+                method=self.method,
+                auto_select=False,
+                **self._outlier_detector_kwargs,
+            )
+            for i in rows:
+                detector.fit(values[i])
+                values[i] = detector.transform(values[i])
+        return pd.DataFrame(values, index=X.index, columns=X.columns)
+
     def get_stats(self) -> Dict[str, Any]:
         stats = super().get_stats()
         stats['process_type'] = self.process_type
         stats['method'] = self.method
+        stats['requested_method'] = self.requested_method
+        if self._cross_sectional_outlier:
+            stats['outlier_scope'] = 'cross_sectional'
+            stats['percentile_lower'] = self._outlier_percentile_lower
+            stats['percentile_upper'] = self._outlier_percentile_upper
         stats['fallback_mode'] = self.is_fallback_mode
         if self._processor and hasattr(self._processor, 'fitted_params'):
             stats['fitted_params'] = self._processor.fitted_params

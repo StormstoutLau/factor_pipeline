@@ -184,10 +184,15 @@ class TestPipelineModuleEnabled:
         df = _make_factor_df(with_nan=True)
         pipeline = StaticFactorPipeline(module_enabled=None)
         result = pipeline.fit_transform(df)
-        # 全启用: NaN 被插补, 标准化后均值≈0
+        # 全启用: NaN 被插补, 标准化后逐日截面均值≈0 / 标准差≈1
         assert result.isnull().sum().sum() == 0, "imputer 启用应填充所有 NaN"
-        col_means = result.mean(axis=0)
-        assert np.allclose(col_means, 0, atol=1e-8), "标准化后列均值应≈0"
+        # 标准化为逐日横截面 z-score (因果), 断言必须作用于行 (每个截面) 而非列.
+        # 注: 列均值==0 是全样本 per-column 标准化的定义特征, 也正是前视症状
+        # (DEFECT-PL-03), 因此不能作为"已标准化"的判据.
+        row_means = result.mean(axis=1).dropna()
+        row_stds = result.std(axis=1).dropna()
+        assert np.allclose(row_means, 0, atol=1e-8), "标准化后逐日截面均值应≈0"
+        assert np.allclose(row_stds, 1, atol=1e-8), "标准化后逐日截面标准差应≈1"
 
     def test_module_enabled_imputer_false(self):
         """module_enabled={'imputer': False} → 输出保留 NaN"""

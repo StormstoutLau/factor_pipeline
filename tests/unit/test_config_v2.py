@@ -150,7 +150,9 @@ class TestPipelineV2ConfigUnified:
         """测试默认值"""
         config = PipelineV2ConfigUnified()
         assert config.name == 'factor_pipeline_v2'
-        assert config.version == '2.5.0'
+        # 版本号比对本包 __version__ 而非字面量 — 避免每处各存一个随版本漂移的字面量
+        import factor_pipeline as _fp
+        assert config.version == _fp.__version__
         assert config.strict_order is True
         assert config.parallel is False
     

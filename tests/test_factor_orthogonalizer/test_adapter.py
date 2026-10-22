@@ -275,7 +275,9 @@ class TestRegressionProtection:
         config = PipelineV2ConfigUnified()
         assert hasattr(config, 'orthogonalization')
         assert config.orthogonalization.enabled is False
-        assert config.version == "2.5.0"
+        # 版本号比对本包 __version__ 而非字面量 (单一锚点见 test_fix3_version_unification)
+        import factor_pipeline as _fp
+        assert config.version == _fp.__version__
         # to_pipeline_v2_config 仍可执行
         runtime_config = config.to_pipeline_v2_config()
         assert runtime_config is not None

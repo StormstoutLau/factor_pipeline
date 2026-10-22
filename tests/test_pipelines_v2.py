@@ -179,10 +179,14 @@ class TestStaticFactorPipeline(unittest.TestCase):
         nan_ratio = result.isna().sum().sum() / result.size
         self.assertLess(nan_ratio, 0.3)
 
-        col_means = result.mean(axis=0)
-        self.assertTrue(np.allclose(col_means, 0, atol=1e-10))
+        # 标准化为逐日横截面 z-score (DEFECT-PL-03 修复), 断言作用于行 (每个截面).
+        # 注: 列均值==0 是全样本 per-column 标准化的定义特征, 也正是前视症状,
+        # 因果变换在数学上不可能满足, 故不再作为判据.
+        row_means = result.mean(axis=1).dropna()
+        self.assertGreater(len(row_means), 0, "应至少存在一个非全空截面")
+        self.assertTrue(np.allclose(row_means, 0, atol=1e-10))
 
-        print(f"[PASS] StaticFactorPipeline - 均值接近0: {np.abs(col_means).mean():.6f}")
+        print(f"[PASS] StaticFactorPipeline - 逐日截面均值接近0: {np.abs(row_means).mean():.6f}")
 
 
 class TestDynamicFactorPipeline(unittest.TestCase):

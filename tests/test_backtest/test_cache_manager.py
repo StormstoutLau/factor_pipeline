@@ -500,7 +500,58 @@ class TestParquetFidelity:
 
 
 # =============================================================================
-# 10. 边界情况
+# 10. code_version 代际失效
+# =============================================================================
+
+class TestCodeVersionGeneration:
+    """code_version 不同代的缓存必须失效并自愈删除.
+
+    背景: PL-01 修复改变了因子数值, 缓存 bump 若只改常量而不参与读取校验,
+    旧缓存仍会命中并返回错误数值.
+    """
+
+    def test_01_same_version_hits(self, cache_dir, sample_df):
+        """同一 code_version 应正常命中"""
+        key = CacheKey("factor_matrix", "f_demo", "v1")
+        old = CacheManager(cache_dir=cache_dir, enabled=True,
+                           code_version="v2.2.0-cache")
+        old.set(key, sample_df)
+
+        same = CacheManager(cache_dir=cache_dir, enabled=True,
+                            code_version="v2.2.0-cache")
+        result = same.get(key)
+        assert result is not None
+        pd.testing.assert_frame_equal(result, sample_df, check_freq=False)
+
+    def test_02_bumped_version_misses_and_removes(self, cache_dir, sample_df):
+        """code_version bump 后应 MISS, 并删除旧数据与 meta"""
+        key = CacheKey("factor_matrix", "f_demo", "v1")
+        old = CacheManager(cache_dir=cache_dir, enabled=True,
+                           code_version="v2.2.0-cache")
+        old.set(key, sample_df)
+
+        new = CacheManager(cache_dir=cache_dir, enabled=True,
+                           code_version="v2.2.1-cache")
+        assert new.get(key) is None
+        assert not (Path(cache_dir) / f"{key.filename_stem}.meta.json").exists()
+        assert not (Path(cache_dir) / f"{key.filename_stem}.parquet").exists()
+
+    def test_03_verify_reports_version_mismatch(self, cache_dir, sample_df):
+        """verify 应显式报告 code_version 不一致, 而不是 OK"""
+        key = CacheKey("factor_matrix", "f_demo", "v1")
+        old = CacheManager(cache_dir=cache_dir, enabled=True,
+                           code_version="v2.2.0-cache")
+        old.set(key, sample_df)
+
+        new = CacheManager(cache_dir=cache_dir, enabled=True,
+                           code_version="v2.2.1-cache")
+        status = new.verify(key)
+        assert status.is_valid is False
+        assert "code_version" in status.reason
+
+
+# =============================================================================
+# 11. 边界情况
 # =============================================================================
 
 class TestEdgeCases:

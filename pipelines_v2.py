@@ -735,12 +735,12 @@ class PipelineV2Config:
     # E2 AblationRunner 通过此字段控制 L1 组件消融
     module_enabled: Optional[Dict[str, bool]] = None
 
-    # v3.1.0 E1 (§2): 隐藏效应诊断 (默认关闭, opt-in, ADR-024)
+    # v3.1.0 E1 (§2): 隐藏效应诊断 (默认关闭, opt-in, ADR-030)
     # True: FactorProcessingPipelineV2.diagnose_hidden_effects 委托到 decoupler
     # False: 管线行为与 v3.0.0 完全一致 (零回归)
     enable_hidden_effect_diagnosis: bool = False
 
-    # v3.1.0 E2 (§3): P-hacking 防御 (默认关闭, opt-in, ADR-024)
+    # v3.1.0 E2 (§3): P-hacking 防御 (默认关闭, opt-in, ADR-031)
     # L2 事中记录: SpecificationLogger (append-only JSONL)
     enable_specification_logger: bool = False
     spec_log_dir: str = "logs/specifications/"

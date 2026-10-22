@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from .cache_manager import CacheKey, CacheManager
+from .cache_manager import CODE_VERSION, CacheKey, CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class FactorMatrixCache:
         adapter,
         cache_dir: str,
         enabled: bool = True,
-        code_version: str = "v2.2.0-cache",
+        code_version: str = CODE_VERSION,
     ):
         """初始化因子矩阵缓存。
 

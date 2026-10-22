@@ -126,6 +126,8 @@
 | ADR-002a | compare_all reuses apply_bh_fdr | ✅ PASS | ablation_runner.py:36, :1053 |
 | ADR-026 | AblationRunner independent | ✅ PASS | backtest/ablation_runner.py |
 
+> ⚠️ **编号勘误 (2026-10-21)**: 本行所指 ADR-026 已被 v3.1.0「Audit-Driven Code Quality Remediation」占用；「AblationRunner independent」这一决策已于 2026-10-21 补记为 **ADR-036**。详见 [DECISIONS.md『ADR 编号登记规则与勘误』](../../DECISIONS.md)。
+
 #### 参数流断裂 (P0-1/2/3/4 的跨模块视角)
 ```
 AblationConfig.module_enabled → modified_config.module_enabled ✓

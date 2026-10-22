@@ -12,6 +12,7 @@ L2 磁盘缓存管理器 — CacheManager
 
 失效策略（不依赖 TTL 猜测）:
     - 显式 invalidate()
+    - code_version 代际不一致时自愈丢弃（算法/格式变更后不会命中旧值）
     - 数据指纹校验失败时自愈丢弃
     - 文件损坏时返回 None
 
@@ -54,7 +55,7 @@ ENV_VAR = "FACTOR_PIPELINE_CACHE"
 ENV_DISABLED = "disabled"
 ENV_ENABLED = "enabled"
 
-CODE_VERSION = "v2.2.0-cache"
+CODE_VERSION = "v2.2.1-cache"
 
 
 # =============================================================================
@@ -200,7 +201,7 @@ class CacheManager:
         Args:
             cache_dir: 缓存目录路径
             enabled: 是否启用（受环境变量覆盖）
-            code_version: 代码版本号，写入 meta 用于追踪
+            code_version: 代码版本号；写入 meta 并在读取时校验，不一致即缓存失效
         """
         self.cache_dir = str(cache_dir)
         self._init_enabled = enabled
@@ -345,6 +346,16 @@ class CacheManager:
             logger.warning(f"[CACHE] MISS key={key} (meta corrupted: {e})")
             return None, None
 
+        # code_version 代际校验: 旧代缓存必须失效, 否则算法变更后仍会命中旧数值
+        if meta.code_version != self.code_version:
+            logger.warning(
+                f"[CACHE] MISS key={key} (code_version mismatch: "
+                f"cached={meta.code_version}, current={self.code_version})"
+            )
+            old_data_path = self._find_existing_data_path(key)
+            self._safe_remove(*[p for p in (old_data_path, meta_path) if p is not None])
+            return None, None
+
         # 定位数据文件
         data_path = self._data_path(key, meta.data_type)
         if not data_path.exists():
@@ -446,6 +457,15 @@ class CacheManager:
             meta = CacheMeta.from_dict(meta_dict)
         except Exception as e:
             return CacheStatus(is_valid=False, reason=f"meta corrupted: {e}")
+
+        if meta.code_version != self.code_version:
+            return CacheStatus(
+                is_valid=False,
+                reason=(
+                    f"code_version mismatch: cached={meta.code_version}, "
+                    f"current={self.code_version}"
+                ),
+            )
 
         data_path = self._data_path(key, meta.data_type)
         if not data_path.exists():

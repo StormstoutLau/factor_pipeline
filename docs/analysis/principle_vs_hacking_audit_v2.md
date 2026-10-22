@@ -4,6 +4,8 @@
 **范围**: Factor Pipeline v3.2.0 (v3.1.0 + 6 Steps 学术准则驱动重构)
 **变更**: v1.0 → v2.0: 新增 §2.8-2.10 (Step 1-7 已实施), 修正 §3 评分 (68%→88%), 否定 §4 改进路线图 (改为验证结论)
 
+> ⚠️ **勘误 (2026-10-22, DEFECT-PL-01)**: 本文 §2.2 称 Winsorizer 已改为 `percentile(1,99)`——该结论在**管线配置层**成立, 但 **adapter 层当时并未执行**: `SmartOutlierDetector(auto_select=True)` 覆盖显式方法, `fit()` 仍在全 panel 上池化, 且 `percentile_lower/upper` 未传入 detector。该缺陷已由 **ADR-037** 修复 (逐日横截面 + 构造期固定方法 + `auto_select=False`)。历史结论保留原文, 以本提示为准; 实测见 CHANGELOG v3.3.3。
+
 ---
 
 ## §1 审计框架 (不变)

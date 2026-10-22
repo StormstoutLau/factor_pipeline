@@ -19,7 +19,9 @@ class TestPipelineExecutionReport:
         """测试默认创建"""
         report = PipelineExecutionReport()
         assert report.pipeline_name == "factor_pipeline"
-        assert report.pipeline_version == "2.5.0"
+        # 版本号比对本包 __version__ 而非字面量 (单一锚点见 test_fix3_version_unification)
+        import factor_pipeline as _fp
+        assert report.pipeline_version == _fp.__version__
         assert report.step_count == 0
         assert report.success is True  # 无步骤时默认为成功
     
