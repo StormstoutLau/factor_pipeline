@@ -383,6 +383,9 @@ def _transform_rank_cross_sectional(self, X: pd.DataFrame) -> pd.DataFrame:
 
     for i in range(arr.shape[0]):
         row = arr[i]
+        if n_valid[i] < 2:
+            out[i] = row        # N<2 无法排名, 原样返回
+            continue
         if n_valid[i] < _MIN_RANK_CROSS_SECTION_OBS:      # 10, 见 §5.3.3
             mu = np.nanmean(row)
             sd = np.nanstd(row, ddof=1)
@@ -401,7 +404,7 @@ def _transform_rank_cross_sectional(self, X: pd.DataFrame) -> pd.DataFrame:
 - **确定性保护**: 回落条件只依赖截面样本量 `N`, 不依赖任何分布统计量. 这不属于 §3.8 否掉的 pre-test 式在线切换 —— `N` 在 t 时刻完全可观测, 且与因子取值无关.
 - **管线内等价**: rank 之后仍有逐日截面 z-score, 因此"N<阈值时回落 z-score"与"回落 identity"在完整管线内**最终结果相同**. 选择显式 z-score 的唯一目的是: 单独使用 `ProcessingAdapter` 时仍保持"输出 std=1"的契约.
 - **阈值取值**: 见 §5.3.3.
-- **零离散度 / 全 NaN**: `sd` 非有限或 `<= 0` 时原样返回该截面.
+- **零离散度 / 全 NaN**: `sd` 非有限或 `<= 0` 时原样返回该截面; `N<2` 无法排名, 也原样返回 (避免 `nanmean`/`nanstd` 的空切片警告).
 
 #### 5.3.3 阈值取 10
 
@@ -570,11 +573,11 @@ Mixed 同构.
 | 1 | `auto` 解析 | `adapter.method=='rank'`, `requested_method=='auto'` |
 | 2 | 别名映射 | `none→identity`, `box_cox→boxcox`, `yeo_johnson→yeojohnson`, `quantile→rank` |
 | 3 | 未知方法 | 构造期 `ValueError` |
-| 4 | 手工对拍 (normal) | 5×6 面板, 输出 == 手工 `Φ⁻¹((rank−3/8)/(n+1/4))` (1e-12) |
-| 5 | 手工对拍 (uniform) | 输出 == `(2R−n−1)/n` |
+| 4 | 手工对拍 (normal) | 30×12 面板 (N≥10 避免回落), 输出 == 手工 `Φ⁻¹((rank−3/8)/(n+1/4))` (1e-12) |
+| 5 | 手工对拍 (uniform) | 30×12 面板, 输出 == `(2R−n−1)/n` |
 | 6 | 截断不变式 | 全样本 vs 前 60%: `n_diff=0`, `max_abs_diff=0` |
 | 7 | NaN 保持 | NaN 位置不变; 有效值个数不变 |
-| 8 | N<10 回落 | 构造 9 行有效值的截面, 输出 == 截面 z-score; 10 行有效值的截面走 rank |
+| 8 | N<10 回落 | 单个截面 9 个有效值 → 截面 z-score; 10 个 → rank; 1 个 → 原样 |
 | 9 | ties 处理 | 含重复值, 输出与 `method='average'` 手工一致 |
 | 10 | 非 DataFrame | `TypeError` |
 | 11 | 重复 index/columns | `ValueError` |
