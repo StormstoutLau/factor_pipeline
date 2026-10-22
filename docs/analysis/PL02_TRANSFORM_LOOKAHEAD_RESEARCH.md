@@ -1,6 +1,6 @@
 # PL-02 变换步骤前视缺陷调研
 
-**文档版本**: v1.7 (调研完成, 未实施; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13)
+**文档版本**: v1.8 (调研完成, 默认方案已决策; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13; v1.8 = 决策 rank→正态(Blom) + I-INT, 追加 §3.6, 修正 §3.4.5 的 van der Waerden 命名错误)
 **日期**: 2026-10-22
 **缺陷编号**: DEFECT-PL-02
 **调研范围**: `adapters.py` `ProcessingAdapter(process_type='transformation')` + `factor_adaptive_winsor` 的 `AdaptiveTransformer` + Static / Mixed / 顶层管线的变换路径
@@ -513,22 +513,27 @@ rank 在所有四个因子上给出**完全相同**的矩, 与理论值逐位吻
 
 #### 3.4.5 两种目标分布: 均匀 vs 正态
 
-rank 只固定了"序", 目标分布仍可选:
+rank 只固定了"序", 目标分布仍可选. 正态版有三种标准偏移, 官方文档一致:
 
-```
-均匀 (默认):      u = 2(R − 0.5)/N − 1
-正态 (van der Waerden): u = Φ⁻¹((R − 0.5)/N)
-```
+| 名称 | 公式 | 来源 |
+|------|------|------|
+| van der Waerden | `Φ⁻¹(R/(N+1))` | NIST Dataplot / NAG g01dhc / IBM SPSS |
+| **Blom** | `Φ⁻¹((R − 3/8)/(N + 1/4))` | SAS PROC RANK / IBM SPSS / RNOmni 默认 `k=0.375` |
+| Tukey | `Φ⁻¹((R − 1/3)/(N + 1/3))` | SAS PROC RANK / IBM SPSS |
 
-实测 (market_value, `pl02_probe12.py`):
+均匀版: `u = 2(R − 0.5)/N − 1`.
+
+**v1.6 命名勘误**: 上一版把 `Φ⁻¹((R − 0.5)/N)` 标为 "van der Waerden", 这是错误的 —— 该式是 mid-rank 变体, 与任何标准命名都不对应. 标准 van der Waerden 是 `R/(N+1)`, Blom 是 `(R−3/8)/(N+1/4)`. 三个公式在 N=5064 时的数值差异约 2e-4 量级, 不影响 §3.4.4 的矩结论, 但命名必须准确.
+
+实测 (market_value, `pl02_probe12.py`; 该探针的"正态"版用的是 **mid-rank 变体** `Φ⁻¹((R−0.5)/N)`, 非 Blom):
 
 | 变体 | skew | κ_ex | p0.5 / p99.5 | 截面 std |
 |------|------|------|--------------|---------|
 | raw | 16.3746 | 357.14 | 63,459 / 38,090,514 | — |
 | rank→均匀 | 0.0000 | **−1.2000** | −0.9898 / 0.9902 | 0.5774 (= 1/√3) |
-| rank→正态 | 0.0000 | **−0.0059** | −2.5766 / 2.5766 | — |
+| rank→正态 (mid-rank) | 0.0000 | **−0.0059** | −2.5766 / 2.5766 | — |
 
-rank→正态 的超额峰度 −0.0059 ≈ 0, 分位点精确落在 `Φ⁻¹(0.005) = −2.576`; 两种变体的截面 Pearson 相关 0.9773. 选择依据:
+mid-rank 正态版的超额峰度 −0.0059 ≈ 0, 分位点精确落在 `Φ⁻¹(0.005) = −2.576`; 两种变体的截面 Pearson 相关 0.9773. 选择依据:
 
 - 下游 OLS 中性化假设残差近正态 → **rank→正态** 更匹配;
 - 下游需要严格有界 (防杠杆点) → **rank→均匀**;
@@ -668,6 +673,61 @@ B: u = { 0.2, 0.6, 1 },   ū_B =  0.6  →  ε^u = {−0.4, 0, 0.4}
 3. **对市值等"行业间量级有经济含义"的因子**, rank + 中性化会消除真实信号 (§3.5.4); 这类因子应慎用 rank, 或改用 log 保持量纲.
 4. **必须新增测试**: 至少一条断言 `Spearman(ε^identity, ε^rank) < 1`, 以固化"rank 改变中性化结果"这一事实, 防止未来有人误以为两者等价.
 
+### 3.6 决策: 默认变换 = rank→正态 (Blom) + I-INT 顺序
+
+#### 3.6.1 决策
+
+| 项 | 决定 |
+|----|------|
+| 默认变换 | **rank → 正态 (Blom 偏移)** |
+| 映射公式 | `u = Φ⁻¹((R − 3/8) / (N + 1/4))` |
+| 并列处理 | `method='average'` (与 RNOmni 默认一致) |
+| 执行顺序 | **I-INT**: 先中性化 (取行业残差), 再对残差 rank, 最后 z-score |
+| Static | 顺序已符合 (neutralize → transform → z-score), 仅替换变换方法 |
+| Mixed | **需把 transform 移到 neutralize 之后** (由 D-INT 改为 I-INT) |
+| 保留项 | `identity` 作为 opt-out (需要保留量纲的因子族) |
+
+#### 3.6.2 证据链
+
+| 步骤 | 证据 | 等级 |
+|------|------|------|
+| INT 优于未变换 | "INT-based tests robustly control the type I error... when the residual distribution exhibits excess skew or kurtosis"; "outperform standard linear regression in terms of power" (RNOmni 官方文档) | A |
+| D-INT vs I-INT 无普适最优 | "the relative powers of D-INT and I-INT depend on the underlying data generating process" (McCaw et al., *Biometrics*, DOI 10.1111/biom.13214) | A (preprint 摘要) |
+| 本场景匹配 I-INT | "I-INT is most powerful when the phenotype is linear in covariates, but the residual distribution is skewed or kurtotic" (RNOmni vignette); 本项目实测 identity 中性化残差 skew=14.41 / κ_ex=314 (§3.5.5) | A + C |
+| Blom 是事实标准 | SAS / SPSS / RNOmni 默认 `k=0.375` | A |
+| ties 需谨慎 | "when the underlying distribution is not continuous, the OLS estimator may be highly sensitive to the way in which ties are handled" (arXiv:2310.15512) | A (摘要) |
+
+#### 3.6.3 为什么这个组合消除了 §3.5 的语义冲突
+
+§3.5 的问题是: rank 在**中性化之前**时, 中性化残差从"行业超额水平"变为"行业超额排名", 与 identity 的排序一致性仅 0.716.
+
+选择 I-INT 后, rank 作用于**中性化残差**, 因此:
+
+- 行业暴露已在 rank 之前被剥离;
+- rank 只改变残差的边缘分布形状 (使其正态), 不再改变"减去的量";
+- §3.5 代价表中"中性化语义变化"一项**不再适用**;
+- 但"量纲损失"与"ties 敏感"仍然存在 (它们与顺序无关).
+
+#### 3.6.4 影响面 (实施文档需覆盖)
+
+| 面 | 影响 |
+|----|------|
+| **Mixed 步骤顺序** | transform 从第 3 步移到第 4 步之后; 所有 Mixed 历史输出改变, 需重新验收 |
+| **Static** | 顺序不变, 只替换变换实现; 输出仍改变 (λ→rank) |
+| **缓存** | 输出数值改变 → `CODE_VERSION` 必须 bump (§6.2) |
+| **可删除代码** | `_select_optimal_transform` / `_fit_yeojohnson` / `_fit_boxcox` / `_fit_quantile` / `_fit_power` / `_fit_log` / `auto_optimize` 的自动选型路径 |
+| **配置契约** | `TransformationConfig.method` 需新增 `rank_normal` / `rank_uniform`; 名称映射 (T6) 同步更新 |
+| **测试** | 移除 PL-02 / PL-04 xfail (T8); 新增 ties 告警测试; 新增 `Spearman(ε^identity, ε^rank) < 1` 不再适用的说明 (因顺序已变) |
+| **`enabled=False`** | transformation 仍强制启用 (§1.4 第 3 条); 若需 opt-out, 改用 `method='identity'` |
+| **z-score 冗余** | rank→正态后已近似 N(0,1), z-score 几乎无作用; 保留但需注明 |
+
+#### 3.6.5 遗留项 (不阻塞决策, 但需在设计/实施中处理)
+
+1. **ties 告警阈值**: `ret_1d` 实测 ties 12.27%; 建议对 ties > 5% 的因子记录 warning, 不作为硬失败.
+2. **脏值**: `stock_return` 存在 200400% 级异常 (§3.3.6); rank 对极端值免疫, 但 ties 会因 clip/停牌增加. 数据清洗属独立缺陷.
+3. **N 很小时的稳定性**: 截面股票数 < 30 时, Blom 的最极端值可达 `Φ⁻¹(0.625/30.25) ≈ −2.04`, 尚可; 但更小的 N 需设下限或跳过.
+4. **`identity` opt-out 的配置形态**: 是因子级 (`TransformationConfig` 按因子) 还是管线级 (`method='identity'`)? 取决于后续是否接入因子级配置.
+
 **与 ADR-027 的关系**: ADR-027 已决定"所有 `auto` → 固定方法", 但实现层从未落实 (`auto_optimize` 仍覆盖显式方法). PL-02 与 PL-01 一样, 同时是**前视缺陷**与 **ADR-027 实施缺口**. 设计文档需要明确: "固定方法"是否意味着"固定参数", 还是允许因果的参数调度.
 
 ---
@@ -772,8 +832,8 @@ GKX 的做法说明: 资产定价中的常见预处理是**逐月截面**的缺�
 5. **配置契约**: `TransformationConfig` 的方法名如何统一? 是否允许 `none` 关闭变换? `enabled=False` 是否仍然无效?
 6. **缓存代际**: 采用不同方案时输出变化幅度不同, 但都需要 bump; 具体版本号在实施文档确定.
 7. **API 形态**: 若采用 C/D, `fit/transform` 的批量 API 是否保持? 需要在 `fit` 内生成调度表, 还是新增 `fit_transform` 的时序路径?
-8. **因子族差异化**: 真实数据 (§3.3.6) 表明规模/流动性因子需 λ≈0、收益类需 λ≈1; 是采用 A3 (rank, 跨族统一但丢量纲), 还是按因子族配置 λ (保留量纲但需逐族先验)? 前者见 §3.4: 矩精确归一 (skew=0 / κ_ex=−1.2), 但截面 Pearson 损失 0.30–0.83, 且 `ret_1d` ties 达 12.27%. 设计文档还需在 rank→均匀 与 rank→正态 之间选择 (依据下游 OLS 假设).
-9. **rank 与中性化的顺序**: 若采用 rank, 必须决定它在中性化之前还是之后. Mixed 当前是 transform→neutralize, 实测中性化残差排序与 identity 仅 0.716 一致 (§3.5.5) → 语义已变为"行业超额排名". 设计需明确: 接受该语义变化, 还是把 rank 移到中性化之后 (Static 顺序), 并同步修改 §6.1 的测试契约.
+8. **因子族差异化**: 真实数据 (§3.3.6) 表明规模/流动性因子需 λ≈0、收益类需 λ≈1; 是采用 A3 (rank, 跨族统一但丢量纲), 还是按因子族配置 λ (保留量纲但需逐族先验)? 前者见 §3.4: 矩精确归一 (skew=0 / κ_ex=−1.2), 但截面 Pearson 损失 0.30–0.83, 且 `ret_1d` ties 达 12.27%. **已决策 (见 §3.6): 默认 rank→正态 (Blom), `identity` 作为 opt-out.**
+9. **rank 与中性化的顺序**: 若采用 rank, 必须决定它在中性化之前还是之后. Mixed 当前是 transform→neutralize, 实测中性化残差排序与 identity 仅 0.716 一致 (§3.5.5) → 语义已变为"行业超额排名". **已决策 (见 §3.6): 采用 I-INT (先中性化再 rank), Mixed 需调整步骤顺序.**
 
 ---
 
@@ -804,6 +864,9 @@ GKX 的做法说明: 资产定价中的常见预处理是**逐月截面**的缺�
 | 21 | Rodriguez-Rondon, G. (2024). Underlying Core Inflation with Multiple Regimes. | arXiv:2411.12845 | 结构突变离线 vs Markov switching 实时 | A (摘要原文) |
 | 22 | Horvath, L., Trapani, L. & Wang, S. (2024). Sequential monitoring for explosive volatility regimes. | arXiv:2404.17885 | 在线监测的检测延迟分布 | A (摘要原文) |
 | 23 | *Algorithmic Monitoring: Measuring Market Stress with Machine Learning* (作者未核). | arXiv:2602.07066 | 截面标准差/偏度/峰度作为市场压力监测指标 | B (搜索摘要, 未读原文) |
+| 24 | McCaw, Z. R., Lane, J. M., Saxena, R., Redline, S. & Lin, X. Operating characteristics of the rank-based inverse normal transformation for quantitative trait analysis in genome-wide association studies. *Biometrics*. | DOI 10.1111/biom.13214; 预印本 10.1101/635706 | D-INT / I-INT / O-INT 的定义与相对功效 | A (预印本摘要原文 + 正式版 DOI) |
+| 25 | McCaw, Z. R. *RNOmni: Rank Normal Transformation Omnibus Test* (CRAN, v1.0.1.2). | cran.r-universe.dev/RNOmni | INT 定义、`k=0.375` (Blom) 默认、`ties.method='average'` | A (官方包文档原文) |
+| 26 | *Inference for Rank-Rank Regressions*. | arXiv:2310.15512 | 秩回归对 ties 处理高度敏感 | A (摘要原文) |
 
 ---
 
@@ -954,5 +1017,10 @@ GKX 的做法说明: 资产定价中的常见预处理是**逐月截面**的缺�
 | `WebFetch` + `pypdf` (GKX) | 检索 "rank" 上下文 | 原文仅 "map these ranks into the [-1,1] interval", 未给显式公式; 引 Kelly-Pruitt-Su (2019) / Freyberger-Neuhierl-Weber (2020) |
 | 真实数据源 (v1.7) | `E:\Ashare_data\market_data\stock_ind.pkl` | 可读: 3510 日 × 5344 股, 日频行业分类; 覆盖 2009-01-05 起, 与 market_value 交集至 2023-04-11 |
 | 本项目探针 | `pl02_probe13.py` | rank 中性化残差与 identity 中性化残差 Spearman 0.7160; 行业解释 rank 方差 12.6% |
+| `mcp_paper-search_search_crossref` (v1.8) | rank-based inverse normal transformation effect size bias | 命中 McCaw et al. (2019) INT 研究 (10.1101/635706) |
+| `WebFetch` (CRAN) | RNOmni 官方文档与 vignette | D-INT/I-INT 定义、`k=0.375`、`ties.method='average'` 原文命中 |
+| `WebSearch` (v1.8) | van der Waerden / Blom / Tukey normal scores formula | IBM SPSS / SAS / NAG / NIST 官方公式一致; 确认 v1.6 的 van der Waerden 命名错误 |
+| `WebSearch` (v1.8) | D-INT I-INT direct indirect | 命中 RNOmni vignette 与 Genetic Epidemiology (10.1002/gepi.70013, 未完整核验, 未引用) |
+| `WebFetch` + StackExchange REST (v1.8) | `q=rank transformation before regression` (stats) | 无直接相关高质量问答; 未作为证据 |
 
 **说明**: MCP 的 Semantic Scholar 检索与 arXiv 读取存在不稳定; 本文所有关键学术论断均以 Crossref 元数据 + 官方文档/论文 PDF 原文复核, 不以搜索摘要单独作为 A 级证据.
