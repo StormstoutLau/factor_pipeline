@@ -1,11 +1,12 @@
 # PL-02 变换步骤前视缺陷 — 设计文档
 
-**版本**: v1.0
+**版本**: v1.1 (v1.0 + 实施状态 + §5.3.2 uniform 尺度契约限定)
 **日期**: 2026-10-22
 **缺陷编号**: DEFECT-PL-02
 **上游调研**: [PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md](PL02_TRANSFORM_LOOKAHEAD_RESEARCH.md) v1.10
-**关联决策**: ADR-027 (固定方法) / ADR-029 (逐日截面 Z-Score) / ADR-037 (逐日截面去极值) / 拟新增 ADR-038
+**关联决策**: ADR-027 (固定方法) / ADR-029 (逐日截面 Z-Score) / ADR-037 (逐日截面去极值) / ADR-038 (本文决策)
 **目标版本**: v3.3.4
+**实施状态**: 已实施 (v3.3.4, 2026-10-22); 验收记录见 [EXECUTION_V3.3.4_PL02_TRANSFORM_CAUSALITY.md](../EXECUTION_V3.3.4_PL02_TRANSFORM_CAUSALITY.md) §7
 
 ---
 
@@ -402,7 +403,8 @@ def _transform_rank_cross_sectional(self, X: pd.DataFrame) -> pd.DataFrame:
 #### 5.3.2 N 下限的性质与取值
 
 - **确定性保护**: 回落条件只依赖截面样本量 `N`, 不依赖任何分布统计量. 这不属于 §3.8 否掉的 pre-test 式在线切换 —— `N` 在 t 时刻完全可观测, 且与因子取值无关.
-- **管线内等价**: rank 之后仍有逐日截面 z-score, 因此"N<阈值时回落 z-score"与"回落 identity"在完整管线内**最终结果相同**. 选择显式 z-score 的唯一目的是: 单独使用 `ProcessingAdapter` 时仍保持"输出 std=1"的契约.
+- **管线内等价**: rank 之后仍有逐日截面 z-score, 因此"N<阈值时回落 z-score"与"回落 identity"在完整管线内**最终结果相同** (`z-score(z-score(x)) ≡ z-score(x)`).
+- **单独使用的尺度契约 (仅 normal)**: 回落 z-score 的目的是在单独使用 `ProcessingAdapter` 时保持"输出 std≈1"的契约. 该契约**只对 `target_distribution='normal'` 成立**: `uniform` 的 rank 输出 std 趋近 `1/√3`, 与回落的 `std=1` 不同尺度 (实测 ddof=1: N=5 回落 `std=1.0`; N=10 uniform rank `std=0.60553`). 因此 `uniform` 目标在独立使用时, 输出尺度会按当日 N 在 rank / z-score 之间跳变; 生产管线由后续逐日 z-score 统一, 不受影响. 若独立使用 `uniform` 且要求尺度一致, 调用方应对输出再做逐日 z-score.
 - **阈值取值**: 见 §5.3.3.
 - **零离散度 / 全 NaN**: `sd` 非有限或 `<= 0` 时原样返回该截面; `N<2` 无法排名, 也原样返回 (避免 `nanmean`/`nanstd` 的空切片警告).
 
