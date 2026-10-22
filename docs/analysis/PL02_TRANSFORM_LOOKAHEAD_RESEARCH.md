@@ -1,6 +1,6 @@
 # PL-02 变换步骤前视缺陷调研
 
-**文档版本**: v1.8 (调研完成, 默认方案已决策; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13; v1.8 = 决策 rank→正态(Blom) + I-INT, 追加 §3.6, 修正 §3.4.5 的 van der Waerden 命名错误)
+**文档版本**: v1.9 (调研完成, 默认方案与实现范围均已决策; v1.1 = review 修正: 代码行号 2 处、probe4 计时标注、probe7 无种子计数标注、数量级表述收紧; v1.2 = 追加 §3.1 方案 A/B vs C 的证据基础 + 参考文献 4 条 + 附录 B 检索记录; v1.3 = 追加 §3.2 regime 判别方法与实测 + 参考文献 8 条 + probe8; v1.4 = 追加 §3.3 A/B 恒等式与端到端实测 + probe9; v1.5 = 追加 §3.3.6/3.3.7 真实 A 股 skew 复测 + probe10, 并修正 §3.3.3 关于"4.58 属极端情形"的判断; v1.6 = 追加 §3.4 rank 变换数学推导与收益分析 + probe11/12; v1.7 = 追加 §3.5 rank 对中性化语义的影响 + probe13; v1.8 = 决策 rank→正态(Blom) + I-INT, 追加 §3.6, 修正 §3.4.5 的 van der Waerden 命名错误; v1.9 = 追加 §3.7 实现范围决策, 修正 §3.6.4 配置契约, 登记旧 transform 路径的逐列维度潜伏缺陷)
 **日期**: 2026-10-22
 **缺陷编号**: DEFECT-PL-02
 **调研范围**: `adapters.py` `ProcessingAdapter(process_type='transformation')` + `factor_adaptive_winsor` 的 `AdaptiveTransformer` + Static / Mixed / 顶层管线的变换路径
@@ -30,6 +30,7 @@ PL-02 不是单点缺陷, 而是**四层相互叠加**的问题:
 2. 变换是**单调**的, 因此逐日 Spearman 排序完全不变 (实测中位数/最小值均为 1.000000). 这解释了为什么 IC / 排序类回测长期未暴露该缺陷; 但值域变化会传导到 Mixed 的后续中性化 (Mixed 顺序为 transform→neutralize) 与多因子组合权重.
 3. 修复会改变输出数值, 需要缓存代际 bump (与 PL-01/PL-03 同类处理).
 4. 范围边界: 修 PL-02 应同时关闭 PL-04 (Static 残留仅由 PL-02 构成); PL-06 还包含独立的全样本缩尾 (`_compute_winsorize_params`), PL-07 还包含指纹路由依赖全样本, 均不在本文范围.
+5. 实现落点 (§3.7): transformation 层新增 `method='rank'`, 输出分布由已有的 `target_distribution` 控制; 必须新增 `ProcessingAdapter._cross_sectional_rank` 分支 — 现有 transform 路径按股票列 (时序) 逐列应用, 对逐元素方法无害, 但对 rank 是语义错误 (潜伏缺陷). rank 无状态, 截断不变性在结构上成立.
 
 ---
 
@@ -716,7 +717,7 @@ B: u = { 0.2, 0.6, 1 },   ū_B =  0.6  →  ε^u = {−0.4, 0, 0.4}
 | **Static** | 顺序不变, 只替换变换实现; 输出仍改变 (λ→rank) |
 | **缓存** | 输出数值改变 → `CODE_VERSION` 必须 bump (§6.2) |
 | **可删除代码** | `_select_optimal_transform` / `_fit_yeojohnson` / `_fit_boxcox` / `_fit_quantile` / `_fit_power` / `_fit_log` / `auto_optimize` 的自动选型路径 |
-| **配置契约** | `TransformationConfig.method` 需新增 `rank_normal` / `rank_uniform`; 名称映射 (T6) 同步更新 |
+| **配置契约** | `TransformationConfig.method` 需新增 `rank` (输出分布由 `target_distribution` 决定); 名称映射 (T6) 同步更新 |
 | **测试** | 移除 PL-02 / PL-04 xfail (T8); 新增 ties 告警测试; 新增 `Spearman(ε^identity, ε^rank) < 1` 不再适用的说明 (因顺序已变) |
 | **`enabled=False`** | transformation 仍强制启用 (§1.4 第 3 条); 若需 opt-out, 改用 `method='identity'` |
 | **z-score 冗余** | rank→正态后已近似 N(0,1), z-score 几乎无作用; 保留但需注明 |
@@ -729,6 +730,103 @@ B: u = { 0.2, 0.6, 1 },   ū_B =  0.6  →  ε^u = {−0.4, 0, 0.4}
 4. **`identity` opt-out 的配置形态**: 是因子级 (`TransformationConfig` 按因子) 还是管线级 (`method='identity'`)? 取决于后续是否接入因子级配置.
 
 **与 ADR-027 的关系**: ADR-027 已决定"所有 `auto` → 固定方法", 但实现层从未落实 (`auto_optimize` 仍覆盖显式方法). PL-02 与 PL-01 一样, 同时是**前视缺陷**与 **ADR-027 实施缺口**. 设计文档需要明确: "固定方法"是否意味着"固定参数", 还是允许因果的参数调度.
+
+### 3.7 实现范围: 宿主与配置面
+
+#### 3.7.1 前提纠正: 旧 transform 路径是逐列 (按股票时序) 的
+
+`X` 是 `pd.DataFrame`, index=日期, columns=股票. 两项直接证据:
+
+- outlier 截面路径用 `X.quantile(..., axis=1)`, 即按行 (日期) 聚合 — [adapters.py L600-L604](../../adapters.py#L600-L604);
+- 截面 z-score 用 `result.mean(axis=1)` / `result.std(axis=1)` — [adapters.py L542-L545](../../adapters.py#L542-L545).
+
+但 transformation 的 `transform` 走的是 else 分支:
+
+```python
+for col in X.columns:
+    col_data = X[col].dropna()
+    transformed = self._processor.transform(col_data)
+```
+
+[adapters.py L563-L575](../../adapters.py#L563-L575) — 即**按股票列 (时间序列)** 逐列套用.
+
+对 YJ / boxcox / quantile 这类**逐元素**映射, "逐列"与"全 panel"的 apply 结果相同 (参数在 `fit` 阶段已全局确定), 因此该维度错误在 §1.2 的实测矩阵中**不可见** — 它是一个**潜伏缺陷**. rank 是第一个非逐元素方法: 逐列应用会把"截面排秩"变成"每只股票在自己历史上排秩", 语义完全改变.
+
+> 注意区分: §1.2 中 `quantile` 的隔离差值最大 (2.064510e+00), 原因在 **fit**: `n_quantiles = min(1000, n)` 的经验分位网格对全样本敏感, 与 §3.7.1 的 transform 维度无关.
+
+**结论**: rank 不能复用现有 transform 分支, 必须新增截面路径.
+
+#### 3.7.2 三处现存 rank 实现: 登记但不采用
+
+| 位置 | 做法 | 不可用原因 |
+|------|------|-----------|
+| `AdaptiveTransformer._fit_quantile` (L701) / `_apply_quantile` (L820) ([transformers.py](../../modules/factor_adaptive_winsor/core/transformers.py#L701)) | sklearn `QuantileTransformer(output_distribution=target_distribution, n_quantiles=min(1000, n), random_state=42)` | 全样本 fit (前视, §1.2 差值 2.064510e+00); `n_quantiles` 上限 1000 合并 ties; 逐元素映射, 无截面语义 (与 rank 不同, 维度错误不影响它) |
+| `EnhancedRankPreservingScaler._robust_rank_normalize_transform` ([enhanced_transformers.py L446-L469](../../modules/factor_adaptive_winsor/core/enhanced_transformers.py#L446-L469)) | `(rank − 0.5)/n → Φ⁻¹`, 再乘回原始 std、加原始 mean | 输出是"正态形状 + 原始量纲", 非标准正态; 且 method 会被全样本 skewness 自动改写为该方法 ([L355-L357](../../modules/factor_adaptive_winsor/core/enhanced_transformers.py#L355-L357)), 属 PL-02 根因同型 |
+| `EnhancedRankPreservingScaler._continuous_rank_normalize_transform` ([enhanced_transformers.py L885-L930](../../modules/factor_adaptive_winsor/core/enhanced_transformers.py#L885-L930)) | KDE + 插值 + `clip(0.01, 0.99)` + 还原原始量纲 | 前视最严重 (KDE 用全样本); `clip` 到 0.99 等于人为设置 `±2.33` 的尾部上限 |
+
+其中后两处所在类 `EnhancedRankPreservingScaler` **从未被任何 pipeline 实例化**; `StandardizationConfig.method='rank'` ([config_v2.py L84](../../config_v2.py#L84)) 同样从未被实例化, 且若实例化会在 `AdaptiveStandardizer.fit` 抛 `ValueError: 未知的标准化方法: rank` ([transformers.py L896-L905](../../modules/factor_adaptive_winsor/core/transformers.py#L896-L905)). 三者均为死代码/死配置.
+
+**决策**: 本次只登记, 不清理 (清理属独立重构, 混入 PL-02 会扩大 review 面并干扰截断不变性的因果归因). 设计文档需在"范围边界"中显式声明它们不属于 PL-02 的修复对象.
+
+#### 3.7.3 实现范围决策
+
+| 项 | 决定 | 理由 |
+|----|------|------|
+| **实现层** | **transformation 层** (`AdaptiveTransformer`) | 与 §3.6 的 I-INT 一致 (neutralize → transform → z-score); rank 属 PIT / rank-based INT, 是分布变换而非 scale 归一; z-score 保留以精确归一 |
+| **method 名** | **`rank`** (单一枚举值) | 不引入 `rank_normal` / `rank_uniform` 两个方法名, 避免配置面与测试矩阵翻倍 |
+| **输出分布** | **复用 `target_distribution`** (`normal` / `uniform`) | 该参数已存在于 `AdaptiveTransformer.__init__` ([L501](../../modules/factor_adaptive_winsor/core/transformers.py#L501)), 现仅传给 `_fit_quantile` 的 `QuantileTransformer` ([L716](../../modules/factor_adaptive_winsor/core/transformers.py#L716)); 语义正好是 PIT 目标分布, 对 `quantile` 与 `rank` 同构 |
+| **截面路径** | 新增 `ProcessingAdapter._cross_sectional_rank` 分支 | 与 PL-01 的 `_cross_sectional_outlier` ([L379-L380](../../adapters.py#L379-L380)) 及 P0-3 的 `_cross_sectional_zscore` ([L375-L377](../../adapters.py#L375-L377)) 同构; 绕开 §3.7.1 的逐列路径 |
+| **rank 状态性** | **无状态**: `fit` 不产生任何参数 | 截断不变性在结构上成立 (逐日截面只依赖当日成员), 不依赖测试兜底 |
+| **正态分数** | Blom `Φ⁻¹((R − 3/8)/(N + 1/4))`, 硬编码 | R `rankNorm` / RNOmni 默认 `k=0.375`; 该式下 `mean(u) = 0.5` 精确成立; 三种标准式 (van der Waerden / Blom / mid-rank) 在 N > 100 时端点差异 < 0.2 (相对 ±3.6 约 5%), 且同序, 故不暴露参数 |
+| **均匀输出** | `(2R − N − 1)/N`, 即归一化秩 | 与 §3.4.1 的矩推导一致 (`E[u]=0`, `std→1/√3`); 端点 `±(N−1)/N`; 该式在 N=1 时取 0, 无除零风险 |
+| **ties** | `method='average'` | 与 scipy / scikit-learn 默认一致, 保序, 不引入伪结构; `ret_1d` 实测 ties 12.27% (§3.6.5 第 1 条) |
+| **N 下限** | N < 30 时该日回落截面 z-score, 并 `warning` | Blom 在 N=30 时端点 `Φ⁻¹(0.625/30.25) ≈ −2.04`, 尚可; 更小 N 无意义 |
+| **`identity` opt-out** | 维持**管线级** (`method='identity'`) | 不开因子级配置; 与 §6.1 T1 的"显式方法必须生效"同向 |
+| **Mixed 顺序** | 按 I-INT 直接切换为 neutralize → transform, **不保留旧路径开关** | 决策已固化 (§3.6.1); 两套顺序长期共存会让 Mixed 的输出口径无法归一, 且与 ADR-027 的"固定方法"方向冲突 |
+| **死代码** | 本次不动, 仅登记 (§3.7.2) | 控制 diff 范围与归因清晰度 |
+
+#### 3.7.4 为什么 rank 的截断不变性是结构性的
+
+PL-01 对 outlier 的论证可直接复用: 逐日截面操作**不保存任何跨日统计量**, 因此 `fit` 阶段无参数可泄漏; `transform(t)` 只读取第 `t` 行的值.
+
+rank 更强一层: 连"当日参数"都没有 (排名是纯函数). 形式化地, 令 `A_t` 为第 `t` 日有效样本集合, 则
+
+```
+z_i(t) = Φ⁻¹( (rank_i(t) − 3/8) / (|A_t| + 1/4) ),   i ∈ A_t
+```
+
+`rank_i(t)` 与 `|A_t|` 都只依赖 `{x_j(t) : j ∈ A_t}`. 因此对任意 `t`,
+
+```
+F([0,t] 数据)[t] ≡ F(全样本)[t]
+```
+
+恒成立, 无需测试验证 (测试只用于防止未来有人把截面路径改回全局路径).
+
+#### 3.7.5 `target_distribution` 的语义扩展与向后一致性
+
+本次把 `target_distribution` 从"仅 quantile 的输出分布"扩展为"所有 PIT 类变换的输出分布":
+
+| method | `target_distribution='normal'` | `target_distribution='uniform'` |
+|--------|-------------------------------|---------------------------------|
+| `rank` | Blom 正态分数 | 归一化秩 |
+| `quantile` | sklearn `output_distribution='normal'` | sklearn `output_distribution='uniform'` |
+
+两者语义同构 (经验 CDF 的目标分布), 因此复用不产生歧义. 默认值 `'normal'` 保持不变, 现有 `quantile` 行为不变.
+
+**数值对照** (N=4424, 经逐日截面 z-score 后):
+
+- `uniform`: 端点 `±(N−1)/N × √3 ≈ ±1.7317`
+- `normal`: 端点 `±3.6324`
+
+与附录 A 中 probe14 实测的 `min_u = −1.7315` / `min_n = −3.6324` 吻合 (uniform 侧经 z-score 放大 `√3` 倍, normal 侧 std 已 ≈ 1, z-score 近似幂等). 两者排序完全相同 (Spearman `= 1.0000`), 差异仅在下游线性合成时可见. 默认 `normal`.
+
+#### 3.7.6 待设计文档确认
+
+1. `rank` 的 `training` 期语义: `fit` 是否需要校验输入为 DataFrame (截面路径依赖 index/columns 语义)? 建议与 PL-01 一致, 强制 `pd.DataFrame`.
+2. `N < 30` 的回落目标是截面 z-score 还是 `identity`? 前者保量纲可比, 后者不改变输入; 需与"下游期望 std=1"的契约对齐.
+3. ties 告警: 是否在 `fit` 期按日统计 ties 比例并汇总? `fit` 无状态, 告警只能来自 `transform`, 需确定日志频率 (每日一次会刷屏).
+4. `TransformationConfig` 是否接入管线 (当前 `PipelineV2Config.transformation` 未传入 Static/Mixed 构造器, §6.2). 若不接入, `method='rank'` 只能通过构造参数设置.
 
 ---
 
@@ -795,10 +893,10 @@ GKX 的做法说明: 资产定价中的常见预处理是**逐月截面**的缺�
 |------|------|------|
 | T1 | 显式 `method` 必须生效 | `auto_optimize=True` 不得覆盖非 `auto` 的显式方法; 覆盖行为要么删除, 要么改为显式 opt-in |
 | T2 | `auto` 的解析必须在构造期固定或因果化 | 不得在 `fit` 时依赖全样本特征做方法选择 |
-| T3 | 每种方法的截断不变式 | identity / log / YJ / boxcox / power / quantile 分别验证 `n_diff=0` (或明确登记已知差异) |
+| T3 | 每种方法的截断不变式 | identity / log / YJ / boxcox / power / quantile / rank 分别验证 `n_diff=0` (或明确登记已知差异). rank 的成立是**结构性**的 (无状态 + 逐日截面), 测试只用于防止回归到全局路径 (§3.7.4) |
 | T4 | 参数调度因果性 | 若采用扩展/滚动 λ, 验证 `λ_t` 只使用 `[0,t]`; 截断前后每个日期的 λ 相同 |
 | T5 | 可复现性 | 同一输入多次 `fit` 必须选出同一方法; Shapiro 子采样必须设固定 seed 或改为确定性检验 |
-| T6 | 配置名映射 | `box_cox` / `yeo_johnson` / `none` 必须映射到实现层名称, 或在配置层拒绝 |
+| T6 | 配置名映射 | `box_cox` / `yeo_johnson` / `none` 必须映射到实现层名称, 或在配置层拒绝; 新增 `rank` 时两侧使用同一名称 (§3.7.3) |
 | T7 | Mixed 的 fit/transform 口径 | 诊断、拟合、变换必须使用同一缩尾口径 (与 PL-06 联动) |
 | T8 | 端到端 | PL-02 修复后移除 `test_pipeline_truncation_invariance.py` 的 PL-02 与 PL-04 xfail; PL-06/PL-07 保持登记 |
 
@@ -829,7 +927,7 @@ GKX 的做法说明: 资产定价中的常见预处理是**逐月截面**的缺�
 2. **重估频率**: 若采用 C, 月/季/年重估的统计依据与成本预算是多少? 早期样本不足时回退到 identity 还是跳过变换? 窗口选择可引 §3.2.3 (Pesaran-Timmermann 2007; Inoue-Jin-Rossi 2017; Hännikäinen 2016 支持扩展窗口); 触发条件建议先测 §3.2.5 的信噪比 ρ, 而非引入 regime 判别器.
 3. **逐日截面 λ (D)**: 是否需要作为可选项保留? 若保留, 只在 N≥某阈值时启用?
 4. **Mixed 的触发条件**: `_diagnose_transform_need` 是否改为逐日/扩展窗口? 与 PL-06 的缩尾修复如何排序?
-5. **配置契约**: `TransformationConfig` 的方法名如何统一? 是否允许 `none` 关闭变换? `enabled=False` 是否仍然无效?
+5. **配置契约**: `TransformationConfig` 的方法名如何统一? 是否允许 `none` 关闭变换? `enabled=False` 是否仍然无效? **部分已决策 (见 §3.7.3): 新增 `method='rank'`, 输出分布复用 `target_distribution`; `identity` 维持管线级 opt-out. 名称映射 (T6) 与 `enabled=False` 契约仍待设计文档处理.**
 6. **缓存代际**: 采用不同方案时输出变化幅度不同, 但都需要 bump; 具体版本号在实施文档确定.
 7. **API 形态**: 若采用 C/D, `fit/transform` 的批量 API 是否保持? 需要在 `fit` 内生成调度表, 还是新增 `fit_transform` 的时序路径?
 8. **因子族差异化**: 真实数据 (§3.3.6) 表明规模/流动性因子需 λ≈0、收益类需 λ≈1; 是采用 A3 (rank, 跨族统一但丢量纲), 还是按因子族配置 λ (保留量纲但需逐族先验)? 前者见 §3.4: 矩精确归一 (skew=0 / κ_ex=−1.2), 但截面 Pearson 损失 0.30–0.83, 且 `ret_1d` ties 达 12.27%. **已决策 (见 §3.6): 默认 rank→正态 (Blom), `identity` 作为 opt-out.**
