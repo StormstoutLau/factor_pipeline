@@ -1026,13 +1026,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.2.0 (学术准则驱动重构, 已实施)
+- **Pipeline 版本**: v3.3.6 (Dynamic AR 因果三段式一步预测 + 全链路因果性修复, ADR-040)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 974 passed + 6 skipped (v3.0.0 T1 全量) → audit 后子集 754 passed + 1 skipped (v3.1.0 E1-E10 + V3.1.0 E1-E6 范围)
+- **测试基线**: 全量套件未在本轮复跑; v3.3.6 靶向回归 **117 passed** (新单测 16 + 集成 15 + decoupler 29 + 管线 13 + 模块开关 20 + 内生性 17 + 版本 7)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.07.09
-- **状态**: STABLE (v3.1.0 audit-driven remediation)
+- **构建日期**: 2026.11.04
+- **状态**: STABLE (v3.3.6, 10 步 spec + 审计 PASS)
 
 ### 版本历史
 
@@ -1051,6 +1051,12 @@ factor_pipeline/
 | v3.0.0 T4 | 2026.07.04 | KS 迁移检测 BH-FDR 替代 Bonferroni (ADR-002a, E1-E3 全部完成): `_ks_migration_significance` 三路径分流 (BH/Bonferroni/none, 默认 BH) + 字段隔离 + 向后兼容 + 黄金参考校验, Benjamini-Hochberg (1995) FDR 控制, 934 passed + 6 skipped + 11 subtests |
 | v3.0.0 T1 | 2026.07.04 | 指纹维度扩展至 21 维 (ADR-024, E1-E3 全部完成): `FactorFingerprint` NamedTuple 13→21 维 (尾部依赖 4 + 体制转换 3 + 综合衍生 1) + `FingerprintConfig` 8→14 字段 + 8 新计算方法 (POT-MLE/Hill/Markov) + `_get_multi_dim_pipeline_weights` 接入 transform + `enable_multi_dim_routing` 开关 (默认 False) + ADR-014 技术债清理, Nelsen/Pickands/Hill/Hamilton 学术依据, 974 passed + 6 skipped + 11 subtests |
 | v3.1.0 | 2026.07.09 | Audit-Driven Code Quality Remediation: P0×8 + P1×8 + P2+×15 (断言恒真式 5 + 设计约束 10 + 端到端 2 + E5 测试补强 5) + spec 反向对齐 11 项, 子集回归 754 passed + 1 skipped (零回归), 5 项断言恒真式重写为非平凡验证 (IVX β 真值对照 / SCAD-MCP λ 敏感性 / r_max 计算值断言 / BH 单调性 / 显著交互识别) |
+| v3.3.1 | 2026.07.27 | 插补模块 P2: 向量化 + e2e 因果性 + ablation 对照, 803 passed / 10 skipped |
+| v3.3.2 | 2026.10.21 | 管线级截断不变式测试 + PL-03 标准化 auto→z_score 修复 + ADR 编号治理 + 版本号统一 |
+| v3.3.3 | 2026.10.22 | PL-01 去极值统一逐日横截面 percentile (ADR-037) + 缓存代际 v2.2.1-cache |
+| v3.3.4 | 2026.10.22 | PL-02 变换统一逐日截面 rank→正态 (ADR-038) + 配置面收敛 + 缓存代际 v2.2.2-cache |
+| v3.3.5 | 2026.11.04 | PL-06 Mixed 缩尾统一逐日截面 3σ (ADR-039), 257/1800 → 0/0 + 缓存代际 v2.2.3-cache |
+| v3.3.6 | 2026.11.04 | PL-05 Dynamic AR 因果三段式一步预测 (ADR-040): 前缀冻结 + stride=10 重估 + 冷启动 identity; Dynamic/顶层截断 0/0/0 + 缓存代际 v2.2.4-cache |
 
 ---
 

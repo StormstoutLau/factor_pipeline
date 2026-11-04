@@ -94,7 +94,7 @@ v3.4.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 
 ---
 
-## §3 v3.3.1 详细进度 (当前会话, 2026-07-27)
+## §3 v3.3.1 详细进度 (历史, 2026-07-27)
 
 ### §3.1 任务清单
 
@@ -135,7 +135,16 @@ v3.4.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 
 ---
 
-## §4 待办 (v3.4.0+)
+## §4 待办 (v3.3.6 后)
+
+### §4.0 P1 下一任务
+
+| # | 任务 | 状态 | 依据 |
+|---|------|------|------|
+| 1 | **PL-08-candidate**: `_fit_ar` 统一 `hold_back=max_order`, AIC 跨阶数可比 | 下一任务 | 审计续篇 / PL-05 调研 §10.4; 探针: 阶数均值 4.80→1.23, 输出 2790/3000 格变化 |
+| 2 | v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe vs 旧实现) | 候选 | ADR-040 风险段 (非平稳失配未测) |
+| 3 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler`) | 候选 | 审计遗留 (无生产调用) |
+| 4 | README / PROJECT_STATUS 版本状态同步 | ✅ 已完成 (2026-11-04) | 本次文档同步 |
 
 ### §4.1 P2 远期
 
@@ -161,6 +170,8 @@ v3.4.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 
 | 版本 | 实施文档 | 设计文档 | ADR |
 |------|---------|---------|-----|
+| v3.3.6 | [EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md](EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md) | [analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md](analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md) | ADR-040 |
+| v3.3.5 | [EXECUTION_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md](EXECUTION_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md) | [analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md](analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md) | ADR-039 |
 | v3.3.1 | [EXECUTION_V3.3.1_IMPUTER_P2.md](EXECUTION_V3.3.1_IMPUTER_P2.md) | [analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md](analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md) v2.3 | — |
 | v3.3.0 | [EXECUTION_V3.3.0.md](EXECUTION_V3.3.0.md) | private/DESIGN_DISCUSSION_V3.3.0.md | ADR-028 |
 | v3.2.0 | — | — | ADR-027 |

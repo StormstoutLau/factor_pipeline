@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-07-15
+> **更新日期**: 2026-11-04
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -31,14 +31,22 @@ v3.1.0     (2026-07) 内生性诊断 v1.0 (E1-E6, DESIGN_DISCUSSION)  [x]
 v3.1.0          (2026-07) Audit-Driven Code Quality Remediation    [x]
 v3.1.0          (2026-07) P2+ 断言恒真式 + 设计约束 + 端到端        [x]
 v3.2.0     (2026-07) 学术准则驱动管线重构 (P0 固定方法 + P1 Hard Routing) [x]
-v3.3.0     (2026-07) Layer 3 溢价健康诊断双层体系 (6 任务 + FactorHealthDiagnoser) [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.3.0
-v3.4.0     (远期)  内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计           [ ]
+v3.3.0 (2026-07-15) Layer 3 溢价健康诊断双层体系 (FactorHealthDiagnoser) [x]
+v3.3.1 (2026-07-27) 插补模块 P2 完成 (向量化 + e2e + ablation)                [x]
+v3.3.2 (2026-10-21) 管线级因果性测试 + PL-03 修复 + 版本号统一                 [x]
+v3.3.3 (2026-10-22) PL-01 去极值逐日横截面 (ADR-037)                           [x]
+v3.3.4 (2026-10-22) PL-02 变换逐日截面 rank→正态 (ADR-038)                    [x]
+v3.3.5 (2026-11-04) PL-06 Mixed 缩尾逐日截面 3σ (ADR-039)                      [x]
+v3.3.6 (2026-11-04) PL-05 Dynamic AR 因果三段式一步预测 (ADR-040)              [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.3.6
+v3.3.7 (下一任务) PL-08-candidate: AR 阶数选择 hold_back 可比化                [ ]
+v3.3.8 (候选)     非生产路径治理 (Optimized/TemporalDecoupler)                 [ ]
+v3.4.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.3.0 完成后)
+## §2. 当前待办 (v3.3.6 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -46,7 +54,28 @@ v3.4.0     (远期)  内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
+### ✅ 最近完成 — 因果性修复链 (v3.3.1–v3.3.6)
+
+| 版本 | 缺陷 | 修复 | ADR | 关键实测 |
+|------|------|------|-----|---------|
+| v3.3.6 | PL-05 / PL-07 | Dynamic AR 三段式因果一步预测; 顶层随上游转绿 | ADR-040 | Dynamic 截断 1653/1800 + 8 NaN → 0/0/0; 顶层 1650/1.8397 → 0/0/0 |
+| v3.3.5 | PL-06 | Mixed 缩尾逐日截面 3σ | ADR-039 | 257/1800, 6.98e-01 → 0/0 |
+| v3.3.4 | PL-02 / PL-04 | 变换逐日截面 rank→正态 | ADR-038 | 8.51e-04 (1800 格) → 0 |
+| v3.3.3 | PL-01 | 去极值逐日横截面 percentile | ADR-037 | 1.68e-01 (187 格) → 0 |
+| v3.3.2 | PL-03 | 标准化 auto→z_score 逐日行内 | — | 6.18e-01 (1800 格) → 0 |
+| v3.3.1 | — | 插补 P2 (向量化 + e2e + ablation) | — | — |
+
+> 当前缺陷登记: **无 known-xfail**; `PL-08-candidate` 尚未登记为 xfail, 见下。
+
+### 🟠 P1 — 下一任务 (先后顺序)
+
+| # | 任务 | 状态 | 依据 |
+|---|------|------|------|
+| 1 | **PL-08-candidate**: `_fit_ar` 统一 `hold_back=max_order`, 使 AIC 跨阶数可比 | 下一任务 | audit 续篇 / PL-05 调研 §10.4; 探针: 阶数均值 4.80→1.23, 输出 2790/3000 格变化 |
+| 2 | v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | 候选 | ADR-040 风险段 (非平稳失配未测) |
+| 3 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler` 同类前视) | 候选 | audit 遗留 (无生产调用) |
+
+### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
 > **设计文档**: [docs/private/DESIGN_DISCUSSION_V3.3.0.md](private/DESIGN_DISCUSSION_V3.3.0.md)
 > **实施文档**: [docs/EXECUTION_V3.3.0.md](../EXECUTION_V3.3.0.md)
@@ -167,14 +196,15 @@ v3.4.0     (远期)  内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 > **每次发版必须更新以下文件**，对照勾选防止遗漏。
 
-| 文档 | 更新内容 | v3.3.0 |
+| 文档 | 更新内容 | v3.3.6 (最近发版) |
 |------|---------|--------|
-| [CHANGELOG.md](file:///f:/Coding/factor_pipeline/CHANGELOG.md) | 新版本条目 | ✅ |
-| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 (Layer 2-3 新增) | ✅ |
-| [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | ADR-028 + 路线图 `[ ]`→`[x]` | ✅ |
-| [DESIGN_DISCUSSION_V3.3.0.md](private/DESIGN_DISCUSSION_V3.3.0.md) | 设计讨论文档 (新建) | ✅ |
-| [EXECUTION_V3.3.0.md](../EXECUTION_V3.3.0.md) | 实施文档 (新建) | ✅ |
-| [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) | §2 划掉已完成 + §5 追加执行记录 | ✅ |
+| [CHANGELOG.md](file:///f:/Coding/factor_pipeline/CHANGELOG.md) | 新版本条目 (根因/实测/兼容性/遗留) | ✅ |
+| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 | ⏸ 本次无公开 API/架构变更, 未改 |
+| [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | ADR-040 + 占用表 + 路线图 | ✅ |
+| [EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md](EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md) | 实施文档 v1.3 (含 §7.2 实测回填) | ✅ |
+| [PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md](analysis/PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md) / [DESIGN](analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md) | 调研 v1.4 / 设计 v1.2 + 实施状态 | ✅ |
+| [README.md](file:///f:/Coding/factor_pipeline/README.md) | 版本信息 + 版本历史 | ✅ |
+| [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) | §1 路标 + §2 待办 + §5 执行记录 | ✅ |
 
 ---
 
@@ -182,6 +212,10 @@ v3.4.0     (远期)  内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-11-04 | 7c089f4 | fix(pipeline): v3.3.6 PL-05 Dynamic AR 因果三段式一步预测 (ADR-040) |
+| 2026-11-04 | d04cdc1 | fix(pipeline): v3.3.5 PL-06 Mixed 缩尾逐日截面 3σ (ADR-039) |
+| 2026-10-22 | 4794c6e | fix(pipeline): v3.3.4 PL-02 变换逐日截面 rank→正态 + 配置统一 |
+| 2026-10-22 | 1718348 | fix(pipeline): v3.3.3 PL-01 去极值逐日横截面 + 缓存代际校验 |
 | 2026-07-15 | bcf2cdc | docs(v3.3.0): architecture docs, ADR-028, changelog for Layer 3 FactorHealthDiagnoser |
 | 2026-07-15 | ca7960c | feat(layer3): FactorHealthDiagnoser — LGMM premium + Bai-Perron breakpoint + multi-state diagnosis |
 | 2026-07-15 | d135827 | feat(task5+6): 真实A股全量消融 + Pipeline中间数据日志 (4/4 tests) |
