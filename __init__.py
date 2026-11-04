@@ -55,7 +55,7 @@ except ImportError as _e:
     _V2_AVAILABLE = False
     logger.debug(f"v2 模块不可用: {_e}")
 
-__version__ = "3.3.5"
+__version__ = "3.3.6"
 
 __all__ = [
     # 类型系统

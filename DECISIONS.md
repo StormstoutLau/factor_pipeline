@@ -40,7 +40,8 @@
 | ADR-037 | 去极值统一为逐日横截面 (因果性修复) | v3.3.3, 2026-10-22 |
 | ADR-038 | 变换统一为逐日截面 rank→正态 (因果性修复) | v3.3.4, 2026-10-22 |
 | ADR-039 | Mixed 缩尾统一为逐日截面 3σ (因果性修复) | v3.3.5, 2026-11-04 |
-| ADR-040 起 | 未占用 | — |
+| ADR-040 | AR 解耦改为因果三段式一步预测 (冻结窗口 + 间歇重估) | v3.3.6, 2026-11-04 |
+| ADR-041 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -2717,6 +2718,94 @@ PL-05 / PL-07；B（percentile）；方法选择器；`ProcessingAdapter(outlier
 ### 回滚方案
 
 恢复 `_compute_winsorize_params` 与 per-column `_apply_winsorize`；`CODE_VERSION` 回 `v2.2.2-cache`；项目版本回 v3.3.4；恢复 PL-06 的 `xfail`；恢复 `TestMixedWinsorSigma.test_07/08/09` 的旧语义；删除/重建缓存。
+
+---
+
+## ADR-040: AR 解耦改为因果三段式一步预测 (冻结窗口 + 间歇重估)
+
+**日期**: 2026-11-04
+**状态**: 已实施
+**优先级**: P0
+**关联缺陷**: DEFECT-PL-05
+**关联测试**: `tests/unit/test_ar_decoupler_causality.py`、`tests/integration/test_pipeline_truncation_invariance.py`
+**调研/设计**: [PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md](docs/analysis/PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md) / [PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md](docs/analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md)
+
+### 背景
+
+`ARDecoupler.fit` 全样本 AIC 选阶 + 全样本 OLS，`transform` 用
+`fitted_values.reindex().ffill()` 充当一步预测，构成三层前视：阶数随 T 变、
+系数随 T 变、预测值直接来自全样本拟合。Dynamic 端到端截断 60/100 期实测
+**1653/1800 格差异、8 NaN、max_abs=8.045e-01**（`T=100, N=30, seed=22, ar_low`）。
+
+### 决策
+
+1. `fit` 只用前 `warmup_obs=120` 行估计阶数与系数（冻结模型）；`T < 120` 时退化为全部可用行。
+2. `transform` 三段式：冷启动 `t < max(min_order+6, 2)` 输出 identity；`[early, min_obs)` 固定 `min_order`；`[min_obs, warmup_obs)` 全阶 AIC 每 `_WARMUP_REFIT_STRIDE=10` 行重估；`t >= warmup_obs` 复用冻结一步预测（向量化）。
+3. 移除 `transform` 对 `_results` 的列门控与 `fitted_values.reindex().ffill()`；NaN 经滞后自然传播，不再前导填充。
+4. `_WARMUP_REFIT_STRIDE=10` 为模块私有常量；`warmup_obs` 公开，且必须严格大于 `min_obs`（否则 `ValueError`）。
+5. `AROrderSelector.fit` 拆出无 INFO 日志的 `_fit_best`，供 warm-up 批量复用；`fit` 的日志与语义不变。
+
+### 备选方案 (拒绝/延后)
+
+- **A 逐 t 扩展重估**：结构上 0/0，但 `O(T²·N)`，2500×300 外推约 1.9 小时。
+- **B 前 K 冻结 + identity 冷启动**：`T=60` 时整列 identity，`test_soft_decoupling_strength` 失败。
+- **B' 逐 t warm-up + 冻结**：8.4–19.1s（2500×300），过慢。
+- **C rolling window / RLS**：改变模型类，新增窗口/遗忘因子配置，超出本次范围。
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| 无日志选阶 | `modules/factor_decoupler/core/ar_model.py` `AROrderSelector._fit_best` |
+| 前缀冻结拟合 | 同文件 `ARDecoupler.fit` |
+| 三段式递推 + 冻结分支 | 同文件 `ARDecoupler.transform` / `_predict_one_step` |
+| 步长常量 | 同文件 `_WARMUP_REFIT_STRIDE` |
+| 新单测 | `tests/unit/test_ar_decoupler_causality.py` |
+| 集成摘 xfail + 路由测试 | `tests/integration/test_pipeline_truncation_invariance.py` |
+
+### 实测证据
+
+`T=100, N=30, seed=22, kind='ar_low', t=60, atol=1e-12`：
+
+| 对象 | 修复前 | 修复后 |
+|------|--------|--------|
+| Dynamic 端到端截断不变式 | 1653/1800 格，8 NaN，8.045e-01 | **0/1800，0 NaN，0** |
+| 顶层截断不变式 | 1650 格，1.8397 | **0，0**（路由全程一致） |
+| AR 输出 NaN（T=100/N=30） | 146–149 | **0** |
+| `mean_ar1`（AR(1) φ=0.7, K=120, seed=42, 起点第 60 行） | 0.0029（样本内） | **0.0302** |
+| AR 单步（2500×300，3 次） | 0.48s | **2.10–5.23s**（6 次复测，中位 ≈2.24s；单次负载离群 6.25s） |
+| Dynamic 全管线（2500×300，含行业） | 33.19s | **39.29s**（+18.4%） |
+| 相对旧实现的全样本输出偏移 | — | **2851–2855/3000 格**，`max_abs` 2.1–4.2，`mean_abs` 0.23–0.35 |
+
+### 测试契约
+
+- 新增 10 个单元测试函数（16 个 pytest 用例）：前缀估计 / 多截断点 / 手算公式 / 冷启动 / 无新增 NaN / 列门控缺失 / 参数校验 / 软混合 / mock 前缀长度 / 元数据保留。
+- 集成套件摘除 PL-05/PL-07 两个 `xfail`，新增 3 组 `(seed, kind)` 路由因果性测试；由 `10 passed / 2 xfailed` 变为 `15 passed / 0 xfailed`。
+- 回归：`test_factor_decoupler` 29、`test_pipelines_v2` 13、`test_module_enabled` 20、`test_endogeneity_regularizer` 17、`test_fix3_version_unification` 7。
+
+### 不覆盖范围
+
+- `OptimizedARDecoupler` / `TemporalDecoupler`（非生产路径，存在同类缺陷）。
+- `_fit_ar` 各阶数 `n_obs` 不同导致 AIC 跨阶数不可比（statsmodels `hold_back` 语义），登记 `PL-08-candidate`。
+- 指纹路由分类逻辑；`CompositeDecoupler` 三阶段顺序；配置面 / optimizer。
+
+### 后果
+
+- **正面**：AR 解耦真正因果；输出无前导 NaN；阶数与系数只依赖前缀；冷启动语义由 NaN 改为 identity。
+- **负面/破坏性**：存量 Dynamic 输出约 95% 格子变化，历史 IC/Sharpe 需重算；AR 阶段耗时增至约 4–11×。
+- **风险**：冻结模型对非平稳因子可能失配（本项目 Dynamic 因子以平稳短周期为主，影响有限）；`warmup_obs` 过小会削弱稳定性，由 `ValueError` 与文档约束。
+
+### 学术与工业依据
+
+- Hyndman & Athanasopoulos (2021) §5.10：测试集只能由先于预测点的观测构成。
+- tsibble `stretch_tsibble(.init, .step)`、sktime `InitialWindowSplitter` / `ExpandingWindowSplitter`、skforecast `refit=n`：warm-up 后间歇重估是成本-精度折中（skforecast 记录重估成本约 49×、精度改善约 1.6%）。
+- statsmodels `AutoReg.predict(dynamic=False)` / `apply(refit=False)`：一步预测只用历史一期。
+- Marriott & Pope (1954)、Kendall (1954)：AR(1) OLS 偏差 `≈ -(1+3φ)/n`，构成 `warmup_obs=120` 与容差 0.15 的统计依据。
+- Varma & Simon (2006)：模型选择使用全样本会泄漏；Cawley & Talbot (2010)、Bergmeir & Benítez (2012)：模型选择必须纳入验证流程。
+
+### 回滚方案
+
+恢复 `fit` 全样本 `batch_fit`；恢复 `fitted_values.reindex().ffill()` 与 `_results` 列门控；项目版本回 v3.3.5、缓存回 `v2.2.3-cache`；恢复 PL-05/PL-07 的 2 个 `xfail`；删除并重建缓存。
 
 ---
 

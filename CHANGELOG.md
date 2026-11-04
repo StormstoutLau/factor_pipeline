@@ -1,5 +1,83 @@
 # 开发日志 (Changelog)
 
+## v3.3.6 — PL-05 Dynamic AR 因果性修复: 三段式一步预测 (已实施, 2026-11-04)
+
+### 概览
+
+修复 DEFECT-PL-05: `ARDecoupler.fit` 用全样本 AIC 选阶 + 全样本 OLS，`transform` 用 `fitted_values.reindex().ffill()` 充当一步预测——阶数、系数、预测值三层均依赖未来数据。
+
+**核心产出**:
+- `fit` 只用前 `warmup_obs=120` 行估计阶数与系数（冻结模型）
+- `transform` 三段式因果一步预测: 冷启动 identity → 固定 `min_order` → 全阶 AIC 每 `stride=10` 行重估 → `t >= warmup_obs` 冻结预测
+- 移除 `_results` 列门控与 `fitted_values.reindex().ffill()`；NaN 经滞后自然传播
+- `AROrderSelector.fit` 拆出无日志 `_fit_best`，供 warm-up 批量复用
+- 新增 10 个单测函数（16 个 pytest 用例）；集成套件摘除 PL-05/PL-07 `xfail`，新增 3 组路由因果性测试
+- 新增 **ADR-040**；项目版本 **3.3.6**；缓存 `CODE_VERSION` **v2.2.4-cache**
+
+### 缺陷根因
+
+| # | 根因 | 证据 |
+|---|------|------|
+| 1 | `fit` 全样本 AIC 选阶 | 阶数随 T 变化，前 t 期阶数依赖 t 之后数据 |
+| 2 | `_fit_ar` 全样本 OLS 估系数 | 系数随 T 变化 |
+| 3 | `transform` 用 `fitted_values.reindex().ffill()` 当一步预测 | 预测值直接来自全样本拟合（样本内） |
+| 4 | `transform` 以 `_results` 存在性整列门控 | 前缀有效观测不足时整列退化为 identity，掩盖早期前视 |
+
+**为何长期未被发现**: 旧输出前导 NaN 使截断前后 NaN 模式一致；样本内残差 `mean_ar1 ≈ 0.0029` 看似"去相关更好"，实为过拟合幻觉（因果实现为 0.0302，仍显著优于原始 0.7025）。
+
+### 实测矩阵 (`T=100, N=30, seed=22, kind='ar_low', t=60, atol=1e-12`)
+
+| 层级 | 对象 | 修复前 | 修复后 |
+|------|------|--------|--------|
+| pipeline | Dynamic 端到端 | 1653/1800 格 + 8 NaN, 8.045e-01 | **0 / 0 / 0** |
+| top | FactorProcessingPipelineV2 | 1650 格, 1.8397 | **0 / 0**（路由全程一致） |
+| 诊断 | 违反 / 满足 / 合计 | 1 / 8 / 9（仅 Dynamic FAIL） | **0 / 9 / 9** |
+| unit | 新契约测试 | 15 failed / 1 passed (Red) | **16 passed**（10 函数） |
+| integration | 截断不变式套件 | 10 passed / 2 xfailed | **15 passed / 0 xfailed** |
+
+**输出与 NaN**（`T=100, N=30, seed=7`，新旧实现同进程对比）:
+
+| 面板 | 对象 | 变化格子 | `max_abs` | `mean_abs` | NaN |
+|------|------|---------|-----------|------------|-----|
+| iid | AR | 2854/3000 | 3.7255 | 0.2626 | 146 → 0 |
+| iid | Dynamic | 2855/3000 | 2.1038 | 0.2287 | 145 → 0 |
+| ar70 | AR | 2851/3000 | 4.1873 | 0.3486 | 149 → 0 |
+| ar70 | Dynamic | 2852/3000 | 2.7665 | 0.2829 | 148 → 0 |
+
+**质量**（AR(1) φ=0.7, `T=500, N=30, seed=42`, 统计起点第 60 行）: `mean_ar1` 原始 0.7025 / 旧 0.0029 / 新 **0.0302**（K=120）。
+
+**性能**（2500×300）: AR 单步 `0.48s → 2.10–5.23s`（6 次复测中位 ≈2.24s；单次负载离群 6.25s）；Dynamic 全管线（含行业）`33.19s → 39.29s`（+18.4%）。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| [modules/factor_decoupler/core/ar_model.py](modules/factor_decoupler/core/ar_model.py) | `_fit_best` 拆分; `warmup_obs` + 校验; `fit` 前缀窗口; `transform` 三段式 + `_predict_one_step`; `_WARMUP_REFIT_STRIDE`; docstring |
+| [tests/unit/test_ar_decoupler_causality.py](tests/unit/test_ar_decoupler_causality.py) | **新增** 10 个函数 / 16 个用例 |
+| [tests/integration/test_pipeline_truncation_invariance.py](tests/integration/test_pipeline_truncation_invariance.py) | 摘除 PL-05/PL-07 xfail; 新增 3-seed 路由测试; 更新登记表 |
+| [tests/test_factor_decoupler/test_hidden_effect.py](tests/test_factor_decoupler/test_hidden_effect.py) | φ 断言容差 0.05 → 0.15（n=120 覆盖率 50.3% → 94.8%）; 追加区间断言 |
+| [tests/test_fix3_version_unification.py](tests/test_fix3_version_unification.py) / [tests/test_backtest/verify_fix3_manual.py](tests/test_backtest/verify_fix3_manual.py) | 版本锚点 → 3.3.6; 缓存字面量 → v2.2.4-cache |
+| [pyproject.toml](pyproject.toml) / [__init__.py](__init__.py) / [config_v2.py](config_v2.py) / [reporting.py](reporting.py) | 版本 → 3.3.6 |
+| [backtest/cache_manager.py](backtest/cache_manager.py) | `CODE_VERSION` → v2.2.4-cache |
+| [DECISIONS.md](DECISIONS.md) | 新增 ADR-040 + 占用登记 |
+| [docs/analysis/PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md](docs/analysis/PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md) / [docs/analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md](docs/analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md) / [docs/EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md](docs/EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md) | 调研/设计/实施文档, 状态更新为已实施 |
+
+### 兼容性与缓存
+
+- **行为变更**: Dynamic 输出约 95% 格子改变；历史 IC/Sharpe 需重算。
+- **NaN 语义**: AR 冷启动由 NaN 改为 identity（`t < max(min_order+6, 2)` 不做解耦），输出不再有前导 NaN。
+- **参数**: `ARDecoupler` 新增公开参数 `warmup_obs=120`，必须严格大于 `min_obs`；其余参数语义不变。
+- **缓存代际**: `v2.2.3-cache` → `v2.2.4-cache`。读取时 `meta.code_version` 不一致即 MISS 并删除旧数据/meta。
+
+### 已知遗留
+
+- `OptimizedARDecoupler` / `TemporalDecoupler` 仍为旧实现（非生产路径，同类缺陷不覆盖）。
+- `_fit_ar` 各阶数 `n_obs = n - order` 不同，AIC 跨阶数不可比（statsmodels `hold_back >= maxlag`），登记 `PL-08-candidate`，不纳入本次。
+- 指纹路由分类逻辑本身未改；路由因果性仅由 3-seed 测试守卫。
+- 冻结模型对非平稳因子的失配风险未做专项回测。
+
+---
+
 ## v3.3.5 — PL-06 Mixed 缩尾因果性修复: 逐日截面 3σ (已实施, 2026-11-04)
 
 ### 概览

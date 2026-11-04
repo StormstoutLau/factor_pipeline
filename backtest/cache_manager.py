@@ -55,7 +55,7 @@ ENV_VAR = "FACTOR_PIPELINE_CACHE"
 ENV_DISABLED = "disabled"
 ENV_ENABLED = "enabled"
 
-CODE_VERSION = "v2.2.3-cache"
+CODE_VERSION = "v2.2.4-cache"
 
 
 # =============================================================================

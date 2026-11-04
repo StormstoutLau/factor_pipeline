@@ -79,7 +79,7 @@ class AROrderSelector:
 
     def fit(self, series: pd.Series) -> ARModelResult:
         """
-        拟合并选择最优阶数
+        拟合并选择最优阶数 (保留 INFO 日志)
 
         Parameters
         ----------
@@ -91,6 +91,15 @@ class AROrderSelector:
         ARModelResult
             包含最优阶数和详细结果
         """
+        result = self._fit_best(series)
+        logger.info(
+            f"AR阶数选择完成: order={result.order}, "
+            f"{self.criterion.upper()}={self._get_criterion_value(result):.4f}"
+        )
+        return result
+
+    def _fit_best(self, series: pd.Series) -> ARModelResult:
+        """内部选阶实现 (不产生 INFO 日志), 供 warm-up 批量复用."""
         series = series.dropna()
         if len(series) < self.min_obs:
             raise ValueError(f"数据长度 {len(series)} 少于最小要求 {self.min_obs}")
@@ -121,10 +130,9 @@ class AROrderSelector:
             # 回退：使用AR(1)
             best_order = 1
             best_result = self._fit_ar(series, 1)
-            logger.warning(f"所有AR模型拟合失败，使用AR(1)作为备选")
+            logger.warning("所有AR模型拟合失败，使用AR(1)作为备选")
 
         best_result.order = best_order
-        logger.info(f"AR阶数选择完成: order={best_order}, {self.criterion.upper()}={best_value:.4f}")
 
         return best_result
 
@@ -217,18 +225,33 @@ class AROrderSelector:
         return results
 
 
+# v3.3.6 (ADR-040): warm-up 内每 10 行重估一次系数.
+# 对应 tsibble `.step` / sktime `step_length` / skforecast `refit=n` 的同类实践:
+# 逐点重估成本约 49× 而精度改善仅约 1.6%, 间歇重估是成本-精度折中.
+_WARMUP_REFIT_STRIDE = 10
+
+
 class ARDecoupler(_HiddenEffectDiagnosticMixin):
     """
-    AR解耦器
+    AR解耦器 (v3.3.6: 三段式因果一步预测)
 
-    对时间序列进行AR建模，提取残差作为去相关后的新息。
-    支持：
-    1. 自动阶数选择（AIC/BIC）
+    对时间序列进行AR建模, 提取残差作为去相关后的新息.
+    支持:
+    1. 自动阶数选择 (AIC/BIC)
     2. 固定阶数
-    3. 软解耦（保留部分原始信号）
+    3. 软解耦 (保留部分原始信号)
+
+    因果性 (ADR-040):
+    - ``fit`` 只用前 ``warmup_obs`` 行估计阶数与系数 (冻结模型);
+    - ``transform`` 按行递推, 每个 t 只使用 ``vals[0..t]``:
+      * ``t < min_order+6``: identity (冷启动, 不做解耦);
+      * ``min_order+6 <= t < min_obs``: 固定 ``min_order``, 每 stride 行重估;
+      * ``min_obs <= t < warmup_obs``: 全阶 AIC, 每 stride 行重估;
+      * ``t >= warmup_obs``: 冻结模型一步预测 (向量化).
+    - 不构造 ``fitted_values`` / 不引入 ``ffill``; NaN 经滞后自然传播.
 
     Usage:
-        decoupler = ARDecoupler(max_order=5, criterion='aic')
+        decoupler = ARDecoupler(max_order=5, criterion='aic', warmup_obs=120)
         residuals = decoupler.fit_transform(series)
     """
 
@@ -237,12 +260,19 @@ class ARDecoupler(_HiddenEffectDiagnosticMixin):
                  min_order: int = 1,
                  criterion: str = 'aic',
                  strength: float = 1.0,
-                 min_obs: int = 20):
+                 min_obs: int = 20,
+                 warmup_obs: int = 120):
         self.max_order = max_order
         self.min_order = min_order
         self.criterion = criterion
         self.strength = strength  # 解耦强度 [0, 1]
         self.min_obs = min_obs
+        if warmup_obs <= min_obs:
+            raise ValueError(
+                f"warmup_obs ({warmup_obs}) 必须大于 min_obs ({min_obs}); "
+                f"建议 warmup_obs >= min_obs + 10"
+            )
+        self.warmup_obs = int(warmup_obs)
 
         self._selector = AROrderSelector(
             max_order=max_order,
@@ -255,7 +285,10 @@ class ARDecoupler(_HiddenEffectDiagnosticMixin):
 
     def fit(self, data: pd.DataFrame) -> 'ARDecoupler':
         """
-        拟合AR模型
+        拟合AR模型 (只用前 ``warmup_obs`` 行)
+
+        ``warmup_obs`` 之后的数据不参与阶数选择与系数估计; 由此得到
+        "冻结模型", ``transform`` 在 ``t >= warmup_obs`` 后复用它做一步预测.
 
         Parameters
         ----------
@@ -266,13 +299,14 @@ class ARDecoupler(_HiddenEffectDiagnosticMixin):
         -------
         self
         """
-        self._results = self._selector.batch_fit(data)
+        warm = min(self.warmup_obs, len(data))
+        self._results = self._selector.batch_fit(data.iloc[:warm])
         self.is_fitted = True
-        logger.info(f"AR模型拟合完成: {len(self._results)} 只股票")
+        logger.info(f"AR模型拟合完成: {len(self._results)} 只股票 (窗口={warm} 行)")
         return self
 
     def _get_ar_phi_for_diagnosis(self) -> Optional[float]:
-        """诊断契约钩子 (ADR-030): 返回全样本平均 AR(1) 系数 φ.
+        """诊断契约钩子 (ADR-030): 返回拟合窗口 (前 ``warmup_obs`` 行) 的平均 AR(1) 系数 φ.
 
         由 ``HiddenEffectDiagnosticMixin`` 调用, 使 Mixin 无需探测本类的私有
         ``_results``。**φ 的索引假设只在此处出现一处** —— 若内部存储布局变更,
@@ -295,9 +329,24 @@ class ARDecoupler(_HiddenEffectDiagnosticMixin):
 
         return float(np.mean(phis)) if phis else None
 
+    @staticmethod
+    def _predict_one_step(vals: np.ndarray, t: int,
+                          coef: np.ndarray, p: int) -> float:
+        """一步预测 c0 + Σ c_i·y_{t-i}; 滞后值含 NaN 时返回 NaN."""
+        yhat = coef[0]
+        for i in range(p):
+            yhat += coef[i + 1] * vals[t - 1 - i]
+        return float(yhat)
+
     def transform(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        应用AR解耦
+        应用AR解耦 (三段式因果一步预测)
+
+        冷启动: ``t < min_order+6`` 输出 identity;
+        预热: ``[min_order+6, warmup_obs)`` 每 ``_WARMUP_REFIT_STRIDE`` 行用
+        ``vals[:t]`` 重估阶数与系数 (``t < min_obs`` 时固定 ``min_order``);
+        冻结: ``t >= warmup_obs`` 用 ``fit`` 的前缀模型做向量化一步预测.
+        每个 t 只使用 ``vals[0..t]``; NaN 经滞后自然传播, 不引入 ``ffill``.
 
         Parameters
         ----------
@@ -313,20 +362,43 @@ class ARDecoupler(_HiddenEffectDiagnosticMixin):
             raise ValueError("模型未拟合，请先调用 fit()")
 
         result = data.copy()
+        early = max(self.min_order + 6, 2)      # AR(min_order) 最少观测数
 
-        for col in data.columns:
-            if col not in self._results:
-                continue
+        for col in data.columns:                 # 不以 _results 过滤 (N4)
+            vals = data[col].to_numpy(dtype=float)
+            n = vals.shape[0]
+            res = vals.copy()                    # 冷启动 identity
 
-            ar_result = self._results[col]
-            series = data[col].copy()
+            warm_end = min(self.warmup_obs, n)
+            coef, p, last = None, 0, None
+            for t in range(min(early, warm_end), warm_end):
+                if coef is None or (t - last) >= _WARMUP_REFIT_STRIDE:
+                    ser = pd.Series(vals[:t]).dropna()   # 只用前缀
+                    try:
+                        if len(ser) < self.min_obs:
+                            r = self._selector._fit_ar(ser, self.min_order)
+                        else:
+                            r = self._selector._fit_best(ser)
+                    except Exception as e:
+                        logger.debug(f"股票 {col} warm-up t={t} 拟合失败: {e}")
+                        continue
+                    coef = np.asarray(r.coefficients).flatten()
+                    p = r.order
+                    last = t
+                res[t] = vals[t] - self._predict_one_step(vals, t, coef, p)
 
-            # 计算残差
-            predicted = ar_result.fitted_values.reindex(series.index).ffill()
-            residual = series - predicted
+            frozen = self._results.get(col)      # 冻结模型 (前 K 行)
+            if frozen is not None and n > self.warmup_obs:
+                c = np.asarray(frozen.coefficients).flatten()
+                q = frozen.order
+                pred = np.full(n, c[0])
+                for i in range(1, q + 1):
+                    pred[i:] += c[i] * vals[: n - i]   # 只在已实现的值上累加
+                res[self.warmup_obs:] = (
+                    vals[self.warmup_obs:] - pred[self.warmup_obs:]
+                )
 
-            # 软混合
-            result[col] = (1 - self.strength) * series + self.strength * residual
+            result[col] = (1 - self.strength) * vals + self.strength * res
 
         return result
 

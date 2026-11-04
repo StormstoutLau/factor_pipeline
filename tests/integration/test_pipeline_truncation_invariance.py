@@ -31,12 +31,7 @@ reason 携带缺陷编号与实测数值. 作用: 套件保持绿; 一旦某缺�
 修复不会悄悄发生, 也不会悄悄回归. ``raises=AssertionError`` 确保
 其它异常类型 (ImportError / KeyError 等) 仍作为真错误暴露, 不被 xfail 吞掉.
 
-当前登记 (2026-10 实测, t=60 截断, T=100/N=30):
-
-    | 编号         | 位置                                  | 实测 max_abs_diff |
-    |-------------|--------------------------------------|------------------|
-    | DEFECT-PL-05 | Dynamic 端到端 (+ AR 样本内 fitted_values) | 8.05e-01 (8 NaN) |
-    | DEFECT-PL-07 | 顶层端到端 (全链路放大)                 | 1.84e+00 (1650 格) |
+当前登记: **无** (PL-05 / PL-07 已于 v3.3.6 修复, 详见下).
 
 已修复:
     - DEFECT-PL-03 (2026-08): ``ProcessingAdapter`` 的 standardization 在
@@ -57,6 +52,13 @@ reason 携带缺陷编号与实测数值. 作用: 套件保持绿; 一旦某缺�
     - DEFECT-PL-06 (2026-11-04, v3.3.5): ``MixedFactorPipeline`` 的缩尾由
       "按股票全历史 3σ + fit 保存参数" 改为 "逐日截面 3σ + fit no-op".
       修复前 257/1800 格, max_abs=6.98e-01 (31/60 行) → 修复后 0 / 0.
+    - DEFECT-PL-05 (2026-11-04, v3.3.6): ``ARDecoupler`` 的 AR 解耦由
+      "全样本 AIC/OLS + fitted_values 充当一步预测" 改为 "前缀冻结模型 +
+      三段式因果一步预测". 修复前 1653/1800 格, 8 NaN, max 8.05e-01 → 0 / 0 / 0.
+    - DEFECT-PL-07 (2026-11-04, v3.3.6): 顶层差异由 PL-05 上游污染导致
+      (同面板路由全程一致). 修复前 1650 格, max 1.84e+00 → 0 / 0 / 0.
+      路由因果性另由 ``test_v2_pipeline_routing_is_causal`` 守卫.
+    - 备注: ``PL-08-candidate`` (``_fit_ar`` 的 AIC 跨阶数不可比) **不登记为 xfail**.
 
 已确认**满足**不变式 (6 项, 作为回归基线勿改):
     - 插补 ``ffill_ts``
@@ -311,14 +313,6 @@ class TestSubPipelineInvariance:
 
         _assert_invariant(out_full, out_trunc, 'StaticFactorPipeline', t)
 
-    @pytest.mark.xfail(
-        raises=AssertionError, strict=True,
-        reason="DEFECT-PL-05: 解耦器 AR 缺陷 —— "
-               "ar_model.transform 用样本内 fitted_values.reindex().ffill() 充当 OOS 预测, "
-               "前 t 期残差依赖全序列拟合结果 (且产生 NaN 模式差异). "
-               "Dynamic 管线不含 outlier 步骤, 与 PL-01/02 无关. "
-               "实测 max_abs_diff=8.05e-01, NaN 歧义 8 格",
-    )
     def test_dynamic_pipeline_is_truncation_invariant(self):
         df = _panel(n_periods=100, n_stocks=30, seed=22, kind='ar_low')
         x_full, x_trunc, t = _split(df)
@@ -377,11 +371,6 @@ class TestTopLevelInvariance:
         routes = {n: list(p.keys()) for n, p in getattr(pipe, 'factor_pipelines', {}).items()}
         return out, routes
 
-    @pytest.mark.xfail(
-        raises=AssertionError, strict=True,
-        reason="DEFECT-PL-07: 顶层叠加残留上游缺陷 (PL-05) + 指纹路由决策依赖全样本. "
-               "实测 max_abs_diff=1.84e+00 (1650 格, 全链路放大最严重)",
-    )
     def test_v2_pipeline_is_truncation_invariant(self):
         df = _panel(n_periods=100, n_stocks=30, seed=31, kind='skewed')
         x_full, x_trunc, t = _split(df)
@@ -393,12 +382,21 @@ class TestTopLevelInvariance:
             f"顶层管线未产出因子 f; 全样本路由={routes_full}, 截断路由={routes_trunc}"
         )
 
-        assert routes_full == routes_trunc, (
-            f"路由决策依赖未来数据: 全样本={routes_full}, 截断={routes_trunc}"
-        )
-
         _assert_invariant(out_full_dict['f'], out_trunc_dict['f'],
                           'FactorProcessingPipelineV2', t)
+
+    @pytest.mark.parametrize('seed,kind', [
+        (31, 'skewed'), (22, 'ar_low'), (7, 'smooth'),
+    ])
+    def test_v2_pipeline_routing_is_causal(self, seed, kind):
+        """指纹路由 (模型选择) 必须只依赖前缀 (Varma & Simon 2006)."""
+        df = _panel(n_periods=100, n_stocks=30, seed=seed, kind=kind)
+        _, routes_full = self._run(df)
+        _, routes_trunc = self._run(df.iloc[:int(len(df) * 0.6)])
+        assert routes_full == routes_trunc, (
+            f"路由决策依赖未来数据 (seed={seed}, kind={kind}): "
+            f"全样本={routes_full}, 截断={routes_trunc}"
+        )
 
 
 # =============================================================================

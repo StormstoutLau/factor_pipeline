@@ -507,8 +507,13 @@ class TestDiagnosticContract:
         coeffs = np.asarray(decoupler._results['S'].coefficients).flatten()
 
         assert coeffs.size == 2, f"AR(1)+截距应有 2 个系数, 实际 {coeffs.size}"
-        assert abs(coeffs[1] - 0.7) < 0.05, (
+        # 前缀 OLS 的 T⁻¹ 偏差 ≈ -(1+3φ)/n (Marriott & Pope 1954; Kendall 1954),
+        # 渐近 sd ≈ sqrt((1-φ²)/n); n=120 时 0.05 容差覆盖率约 50%, 故放宽到 0.15.
+        assert abs(coeffs[1] - 0.7) < 0.15, (
             f"coefficients[1] 应为 phi_1 ≈ 0.7, 实际 {coeffs[1]:.4f}"
+        )
+        assert 0.5 < coeffs[1] < 0.9, (
+            f"phi_1 应仍在 AR(1) 量级 (0.5, 0.9), 实际 {coeffs[1]:.4f}"
         )
         assert abs(coeffs[0]) > 5, (
             f"coefficients[0] 应为截距 (≈30), 实际 {coeffs[0]:.4f}. "
@@ -532,6 +537,7 @@ class TestDiagnosticContract:
         phi = decoupler._get_ar_phi_for_diagnosis()
         assert phi is not None, "已 fit 的 ARDecoupler 应能给出 φ"
         assert abs(phi - 0.7) < 0.08, f"φ 应 ≈0.7 (真实系数), 实际 {phi:.4f}"
+        assert 0.5 < phi < 0.9, f"φ 应仍在 AR(1) 量级, 实际 {phi:.4f}"
 
     def test_composite_delegates_hook_to_inner_ar(self):
         """CompositeDecoupler 的钩子须与内部 ARDecoupler 一致 (纯委托, 不假设存储)."""
