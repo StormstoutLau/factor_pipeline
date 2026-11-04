@@ -145,86 +145,79 @@ class TestMixedWinsorSigma(unittest.TestCase):
     """测试 3: MixedFactorPipeline 使用 mixed_winsor_sigma"""
 
     def test_07_mixed_winsor_sigma_default(self):
-        """
-        [P3-Phase2-07] 默认 mixed_winsor_sigma=3.0 时缩尾参数正确。
-        """
+        """[P3-Phase2-07] 默认 sigma=3.0: 逐日截面边界 = row_mean ± 3*row_std."""
         from factor_pipeline.pipelines_v2 import MixedFactorPipeline
+
+        n = 30
+        cols = [f'S{i:03d}' for i in range(n)]
+        data = pd.DataFrame([[0.0] * (n - 1) + [100.0]], columns=cols)
 
         pipeline = MixedFactorPipeline(mixed_winsor_sigma=3.0)
+        out = pipeline._apply_winsorize(data)
 
-        # 手工计算: 对 data，lower = mean - 3*std, upper = mean + 3*std
-        data = pd.DataFrame({
-            'A': [1.0, 2.0, 3.0, 4.0, 100.0],
-            'B': [5.0, 6.0, 7.0, 8.0, -50.0],
-        })
+        mu = data.mean(axis=1)
+        sd = data.std(axis=1, ddof=1)
+        upper = (mu + 3.0 * sd).iloc[0]
+        lower = (mu - 3.0 * sd).iloc[0]
 
-        params = pipeline._compute_winsorize_params(data)
+        self.assertAlmostEqual(out.iloc[0].max(), upper, places=10)
+        self.assertLessEqual(out.iloc[0].max(), upper + 1e-10)
+        self.assertGreaterEqual(out.iloc[0].min(), lower - 1e-10)
+        self.assertNotAlmostEqual(out.iloc[0].max(), data.iloc[0].max(), places=10)
 
-        # 手工计算
-        mean_a, std_a = data['A'].mean(), data['A'].std()
-        expected_lower_a = mean_a - 3.0 * std_a
-        expected_upper_a = mean_a + 3.0 * std_a
-
-        self.assertAlmostEqual(params['lower']['A'], expected_lower_a, places=6)
-        self.assertAlmostEqual(params['upper']['A'], expected_upper_a, places=6)
-
-        print(f"\n  手工校验: 3σ 缩尾")
-        print(f"    A: mean={mean_a:.4f}, std={std_a:.4f}")
-        print(f"    lower={params['lower']['A']:.4f} (expected {expected_lower_a:.4f})")
-        print(f"    upper={params['upper']['A']:.4f} (expected {expected_upper_a:.4f})")
+        print(f"\n  手工校验: 逐日截面 3σ 缩尾")
+        print(f"    mean={mu.iloc[0]:.4f}, std={sd.iloc[0]:.4f}")
+        print(f"    lower={lower:.4f}, upper={upper:.4f}")
+        print(f"    out.max={out.iloc[0].max():.4f} (原始 max=100.0)")
 
     def test_08_custom_mixed_winsor_sigma(self):
-        """
-        [P3-Phase2-08] 自定义 mixed_winsor_sigma=5.0 时缩尾参数正确。
-        """
+        """[P3-Phase2-08] sigma=5.0: 边界随 sigma 改变, 极值仍被截断."""
         from factor_pipeline.pipelines_v2 import MixedFactorPipeline
+
+        n = 30
+        cols = [f'S{i:03d}' for i in range(n)]
+        data = pd.DataFrame([[0.0] * (n - 1) + [100.0]], columns=cols)
 
         pipeline = MixedFactorPipeline(mixed_winsor_sigma=5.0)
+        out = pipeline._apply_winsorize(data)
 
-        data = pd.DataFrame({
-            'A': [1.0, 2.0, 3.0, 4.0, 100.0],
-        })
+        mu = data.mean(axis=1)
+        sd = data.std(axis=1, ddof=1)
+        upper = (mu + 5.0 * sd).iloc[0]
 
-        params = pipeline._compute_winsorize_params(data)
-
-        mean_a, std_a = data['A'].mean(), data['A'].std()
-        expected_lower_a = mean_a - 5.0 * std_a
-        expected_upper_a = mean_a + 5.0 * std_a
-
-        self.assertAlmostEqual(params['lower']['A'], expected_lower_a, places=6)
-        self.assertAlmostEqual(params['upper']['A'], expected_upper_a, places=6)
+        self.assertAlmostEqual(out.iloc[0].max(), upper, places=10)
+        self.assertNotAlmostEqual(out.iloc[0].max(), data.iloc[0].max(), places=10)
 
         print(f"\n  手工校验: 5σ 缩尾")
-        print(f"    lower={params['lower']['A']:.4f} (expected {expected_lower_a:.4f})")
-        print(f"    upper={params['upper']['A']:.4f} (expected {expected_upper_a:.4f})")
+        print(f"    upper={upper:.4f}, out.max={out.iloc[0].max():.4f}")
 
     def test_09_mixed_winsor_sigma_applied_in_fit(self):
-        """
-        [P3-Phase2-09] mixed_winsor_sigma=2.0 时，fit 后缩尾正确生效。
-        """
+        """[P3-Phase2-09] sigma=2.0: fit 的 outlier 中间数据满足逐日截面边界."""
         from factor_pipeline.pipelines_v2 import MixedFactorPipeline
 
+        n = 30
+        cols = [f'S{i:03d}' for i in range(n)]
+        data = pd.DataFrame([[0.0] * (n - 1) + [100.0] for _ in range(5)],
+                            columns=cols)
+
         pipeline = MixedFactorPipeline(mixed_winsor_sigma=2.0)
-
-        data = pd.DataFrame({
-            'A': [1.0, 2.0, 3.0, 4.0, 100.0],
-        })
-
         pipeline.fit(data)
 
-        # 检查中间数据
-        intermediate = pipeline.get_intermediate_data()
-        self.assertIn('outlier', intermediate)
+        outlier_data = pipeline.get_intermediate_data()['outlier']
+        mu = data.mean(axis=1)
+        sd = data.std(axis=1, ddof=1)
+        upper = (mu + 2.0 * sd).to_numpy(dtype=float)
+        lower = (mu - 2.0 * sd).to_numpy(dtype=float)
 
-        outlier_data = intermediate['outlier']
-        # 2σ 缩尾应该把 100.0 截断到 mean + 2*std
-        mean_a = data['A'].mean()
-        std_a = data['A'].std()
-        max_allowed = mean_a + 2.0 * std_a
+        np.testing.assert_allclose(
+            outlier_data.max(axis=1).to_numpy(dtype=float), upper, atol=1e-10,
+        )
+        np.testing.assert_array_less(
+            np.broadcast_to(lower[:, None] - 1e-10, outlier_data.shape),
+            outlier_data.to_numpy(dtype=float),
+        )
 
-        self.assertLessEqual(outlier_data['A'].max(), max_allowed + 1e-10)
-
-        print(f"\n  手工校验: 2σ 缩尾后 max={outlier_data['A'].max():.4f} <= {max_allowed:.4f}")
+        print(f"\n  手工校验: 2σ 缩尾后逐日 max={outlier_data.max(axis=1).to_numpy()}")
 
 
 class TestTransformConfigPassing(unittest.TestCase):

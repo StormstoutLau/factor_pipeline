@@ -368,7 +368,7 @@ class PipelineV2ConfigUnified(BaseModel):
     """
     
     name: str = Field(default="factor_pipeline_v2", description="流水线名称")
-    version: str = Field(default="3.3.4", description="版本")
+    version: str = Field(default="3.3.5", description="版本")
     description: str = Field(default="", description="描述")
     
     # 全局设置

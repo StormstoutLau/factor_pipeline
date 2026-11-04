@@ -1,5 +1,71 @@
 # 开发日志 (Changelog)
 
+## v3.3.5 — PL-06 Mixed 缩尾因果性修复: 逐日截面 3σ (已实施, 2026-11-04)
+
+### 概览
+
+修复 DEFECT-PL-06: `MixedFactorPipeline._compute_winsorize_params` 用 `X.mean(axis=0)` / `X.std(axis=0)` 按股票全历史估计 3σ 边界，`fit` 保存、`transform` 复用——前 t 期边界依赖 t 之后的数据。
+
+**核心产出**:
+- 缩尾边界改为**逐日截面 3σ**（`mu = X.mean(axis=1)`, `sd = X.std(axis=1, ddof=1)`, `clip(axis=0)`），`fit()` 无跨期参数
+- 删除 `_compute_winsorize_params`；`_winsorize_params` 保留为 `None` 状态标记
+- `mixed_winsor_sigma` / `transform_aggressiveness` / optimizer 搜索空间契约不变；无配置迁移
+- 新增 11 例单测；重写 `TestMixedWinsorSigma` test_07/08/09；集成套件由 `9 passed / 3 xfailed` 变为 `10 passed / 2 xfailed`
+- 新增 **ADR-039**；项目版本 **3.3.5**；缓存 `CODE_VERSION` **v2.2.3-cache**
+
+### 缺陷根因
+
+| # | 根因 | 证据 |
+|---|------|------|
+| 1 | `_compute_winsorize_params` 按股票（`axis=0`）用全历史 mean/std 估计 3σ | 截断 60/100 期：257/1800 格差异，`max_abs_diff=6.984e-01`，首个发散日 2020-01-31 |
+| 2 | `fit` 保存边界、`transform` 复用 | 前 t 期边界依赖未来；`transform` 单独调用同样复用 fit 参数 |
+| 3 | 缩尾位于 neutralize / rank 之前 | 通过改变中性化输入间接影响排序；即使后续 rank 也非"无影响" |
+
+**为何长期未被发现**: 截断前后逐日 Spearman 中位 0.999555（最小 0.984872），排序几乎一致；只有值相等的截断不变式能暴露。
+
+### 实测矩阵 (`T=100, N=30, seed=23, kind='skewed', t=60, atol=1e-12`)
+
+| 层级 | 对象 | 修复前 | 修复后 |
+|------|------|--------|--------|
+| pipeline | Mixed 端到端 | 257/1800 格, 6.984e-01 | **0 / 0** |
+| 诊断 | Mixed 行 | FAIL | **PASS** |
+| 诊断 | 违反 / 满足 / 合计 | 4 / 5 / 9 | **1 / 8 / 9**（仅 PL-05） |
+| pipeline | Dynamic | 1653 格 + 8 NaN, 8.05e-01 | 不变（PL-05） |
+| top | FactorProcessingPipelineV2 | 1650 格, 1.84e+00 | 不变（PL-05 + 指纹路由） |
+
+**相对旧实现的全样本输出差异**（同面板，含行业中性化）：561/3000 格，`max_abs=1.0446`，63/100 行；逐日 Spearman 中位 0.999110 / 最小 0.942603。**缩尾触发率**：61/3000（2.03%）→ 77/3000（2.57%）。
+
+**性能**（`T=2500, N=3000`，3 次中位）：`0.281s → 0.184s`（0.175 / 0.184 / 0.193）。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| [pipelines_v2.py](pipelines_v2.py) | `fit` Step 2 no-op; `_apply_winsorize` 逐日截面; 删除 `_compute_winsorize_params`; 类/方法 docstring |
+| [tests/unit/test_mixed_winsorize_cross_sectional.py](tests/unit/test_mixed_winsorize_cross_sectional.py) | **新增** 11 例 |
+| [tests/test_p3_phase2_config_migration.py](tests/test_p3_phase2_config_migration.py) | 重写 `TestMixedWinsorSigma.test_07/08/09` |
+| [tests/integration/test_pipeline_truncation_invariance.py](tests/integration/test_pipeline_truncation_invariance.py) | 摘除 PL-06 xfail; 更新登记表与 PL-07 reason |
+| [tests/test_fix3_version_unification.py](tests/test_fix3_version_unification.py) / [tests/test_backtest/verify_fix3_manual.py](tests/test_backtest/verify_fix3_manual.py) | 版本锚点 → 3.3.5; 缓存字面量 → v2.2.3-cache |
+| [pyproject.toml](pyproject.toml) / [__init__.py](__init__.py) / [config_v2.py](config_v2.py) / [reporting.py](reporting.py) | 版本 → 3.3.5 |
+| [backtest/cache_manager.py](backtest/cache_manager.py) | `CODE_VERSION` → v2.2.3-cache |
+| [DECISIONS.md](DECISIONS.md) | 新增 ADR-039 + 占用登记 |
+| [docs/analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_RESEARCH.md](docs/analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_RESEARCH.md) / [docs/analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md](docs/analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md) / [docs/EXECUTION_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md](docs/EXECUTION_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md) | 调研/设计/实施文档, 状态更新为已实施 |
+
+### 兼容性与缓存
+
+- **行为变更**: 所有 Mixed 输出数值改变；历史 IC/Sharpe 需重算。
+- **配置**: 无迁移；`mixed_winsor_sigma` / `transform_aggressiveness` 语义不变。
+- **缓存代际**: `v2.2.2-cache` → `v2.2.3-cache`。读取时 `meta.code_version` 不一致即 MISS 并删除旧数据/meta。
+- **小截面**: `N<=10` 时 3σ 永不触发（数学性质）；`N=1` / 全 NaN / 零离散度原样返回。不引入数据触发的 pre-test。
+
+### 已知遗留
+
+- PL-05（Dynamic AR `fitted_values`）与 PL-07（顶层指纹路由）仍登记为 `xfail`。
+- B（逐日截面 percentile(1,99)）未实施；Mixed 3σ 与 Static percentile 的方法差异登记为已知遗留。
+- optimizer 未在输出变更后重新调参，另行评估。
+
+---
+
 ## v3.3.4 — PL-02 变换因果性修复: 逐日截面 rank→正态 (已实施, 2026-10-22)
 
 ### 概览

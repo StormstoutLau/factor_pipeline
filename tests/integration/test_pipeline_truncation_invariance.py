@@ -36,7 +36,6 @@ reason 携带缺陷编号与实测数值. 作用: 套件保持绿; 一旦某缺�
     | 编号         | 位置                                  | 实测 max_abs_diff |
     |-------------|--------------------------------------|------------------|
     | DEFECT-PL-05 | Dynamic 端到端 (+ AR 样本内 fitted_values) | 8.05e-01 (8 NaN) |
-    | DEFECT-PL-06 | Mixed 端到端 (自身全样本缩尾)            | 6.98e-01          |
     | DEFECT-PL-07 | 顶层端到端 (全链路放大)                 | 1.84e+00 (1650 格) |
 
 已修复:
@@ -55,6 +54,9 @@ reason 携带缺陷编号与实测数值. 作用: 套件保持绿; 一旦某缺�
       transformation 由 "全 panel flatten 拟合 λ + auto 选型" 改为
       "逐日截面 rank→正态, 构造期固定方法". 修复前 8.51e-04 (1800 格)
       → 隔离测试 0; Static 端到端 4.72e-05 → 0.
+    - DEFECT-PL-06 (2026-11-04, v3.3.5): ``MixedFactorPipeline`` 的缩尾由
+      "按股票全历史 3σ + fit 保存参数" 改为 "逐日截面 3σ + fit no-op".
+      修复前 257/1800 格, max_abs=6.98e-01 (31/60 行) → 修复后 0 / 0.
 
 已确认**满足**不变式 (6 项, 作为回归基线勿改):
     - 插补 ``ffill_ts``
@@ -326,15 +328,8 @@ class TestSubPipelineInvariance:
 
         _assert_invariant(out_full, out_trunc, 'DynamicFactorPipeline', t)
 
-    @pytest.mark.xfail(
-        raises=AssertionError, strict=True,
-        reason="DEFECT-PL-06: Mixed 自有全样本缩尾 (_compute_winsorize_params). "
-               "注意 standardization 用 'z_score', 该步本身因果正确 "
-               "(见 PL-03); Mixed 不经 ProcessingAdapter(outlier), 与 PL-01 无关. "
-               "实测 max_abs_diff=6.98e-01",
-    )
     def test_mixed_pipeline_is_truncation_invariant(self):
-        """Mixed: kind='skewed' 的厚尾数据 + 全样本缩尾参数."""
+        """Mixed: kind='skewed' 的厚尾数据; 缩尾已逐日截面化 (PL-06)."""
         df = _panel(n_periods=100, n_stocks=30, seed=23, kind='skewed')
         x_full, x_trunc, t = _split(df)
 
@@ -384,7 +379,7 @@ class TestTopLevelInvariance:
 
     @pytest.mark.xfail(
         raises=AssertionError, strict=True,
-        reason="DEFECT-PL-07: 顶层叠加残留上游缺陷 (PL-05/06) + 指纹路由决策依赖全样本. "
+        reason="DEFECT-PL-07: 顶层叠加残留上游缺陷 (PL-05) + 指纹路由决策依赖全样本. "
                "实测 max_abs_diff=1.84e+00 (1650 格, 全链路放大最严重)",
     )
     def test_v2_pipeline_is_truncation_invariant(self):

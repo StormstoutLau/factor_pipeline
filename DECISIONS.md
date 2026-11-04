@@ -39,7 +39,8 @@
 | ADR-036 | 消融对照机制 — 四层架构 + Baseline 阶梯 | v3.0.0 决策, 2026-10 补记 |
 | ADR-037 | 去极值统一为逐日横截面 (因果性修复) | v3.3.3, 2026-10-22 |
 | ADR-038 | 变换统一为逐日截面 rank→正态 (因果性修复) | v3.3.4, 2026-10-22 |
-| ADR-039 起 | 未占用 | — |
+| ADR-039 | Mixed 缩尾统一为逐日截面 3σ (因果性修复) | v3.3.5, 2026-11-04 |
+| ADR-040 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -2637,6 +2638,85 @@ Ledoit & Wolf (2008)（HAC）；Benjamini & Hochberg (1995)（BH-FDR）。
 ### 回滚方案
 
 恢复 `AdaptiveTransformer` 的选型链与 `ProcessingAdapter` 的 else 分支；恢复 `MixedFactorPipeline` 的条件变换与 fit 顺序；恢复 `TransformationConfig` / `MixedPipelineConfig` / `PipelineV2Config` 字段；`CODE_VERSION` 回退至 `v2.2.1-cache` 并重建缓存；项目版本回退至 v3.3.3。回滚会使 PL-02/PL-04 的截断测试重新失败，应同时恢复其 `xfail` 登记。
+
+---
+
+## ADR-039: Mixed 缩尾统一为逐日截面 3σ (因果性修复)
+
+**日期**: 2026-11-04
+**状态**: 已实施
+**优先级**: P0
+**关联缺陷**: DEFECT-PL-06
+**关联测试**: `tests/unit/test_mixed_winsorize_cross_sectional.py`、`tests/test_p3_phase2_config_migration.py`、`tests/integration/test_pipeline_truncation_invariance.py`
+**调研/设计**: [PL06_MIXED_WINSORIZE_LOOKAHEAD_RESEARCH.md](docs/analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_RESEARCH.md) / [PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md](docs/analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md)
+
+### 背景
+
+`MixedFactorPipeline._compute_winsorize_params` 用 `X.mean(axis=0)` / `X.std(axis=0)` 按股票全历史估计 3σ 边界；`fit` 保存、`transform` 复用，导致前 t 期边界依赖 t 之后的数据。截断 60/100 期实测：**257/1800 格差异**，`max_abs_diff=6.984e-01`，首个发散日 = 2020-01-31（第 1 期）。PL-02 修复后该值取代 ADR-037 中记录的 2.91e-01。
+
+### 决策
+
+1. **逐日截面**：`mu = X.mean(axis=1)`，`sd = X.std(axis=1, ddof=1)`，`X.clip(lower=mu-σ·sd, upper=mu+σ·sd, axis=0)`。
+2. **fit no-op**：`_winsorize_params = None`；删除 `_compute_winsorize_params`。
+3. **配置契约不变**：`mixed_winsor_sigma` / `transform_aggressiveness` / optimizer 搜索空间保留。
+4. **小截面**：`N<=10` 时 3σ 永不触发（最大 `|z|=(N-1)/√N<3`）；`N=2` no-op；`N=1` / 全 NaN / 零离散度原样返回。不引入数据触发的 pre-test。
+5. **步骤顺序不变**：imputer → winsorize → neutralize → rank → z-score。
+
+### 备选方案 (拒绝/延后)
+
+- **B 逐日截面 percentile(1,99)**：与 PL-01/ADR-037 同口径，但需删除 `mixed_winsor_sigma` / `transform_aggressiveness` 并同步约 10 个测试/脚本；`N<=200` 时每行必截 min/max，`N=2` 两值向内压缩。本次不实施。
+- **C per-stock expanding/rolling**：与项目截面口径不一致；ADR-037 已拒绝。
+- **D 移除缩尾**：非冗余（移除 vs 当前 485/3000 格，max 1.7394）；放弃设计意图。
+- **方法选择器（A+B 并存）**：新增配置面与双套测试，与 ADR-027 收敛方向冲突；独立能力任务。
+- **Mixed 统一走 `ProcessingAdapter(outlier)`**：架构重构，独立任务。
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| `fit` Step 2 no-op | `pipelines_v2.py` `MixedFactorPipeline.fit` |
+| 逐日截面缩尾 | `pipelines_v2.py` `MixedFactorPipeline._apply_winsorize` |
+| 删除全样本参数 | `pipelines_v2.py`（原 `_compute_winsorize_params`） |
+| 新单测 | `tests/unit/test_mixed_winsorize_cross_sectional.py` |
+| 旧语义测试重写 | `tests/test_p3_phase2_config_migration.py::TestMixedWinsorSigma` |
+
+### 实测证据
+
+`T=100, N=30, seed=23, kind='skewed', t=60, atol=1e-12`：
+
+| 对象 | 修复前 | 修复后 |
+|------|--------|--------|
+| Mixed 端到端截断不变式 | 257/1800 格，6.984e-01 | **0/1800，0** |
+| 相对旧实现的全样本输出差异 | — | **561/3000 格，max 1.0446，Spearman 中位 0.999110 / 最小 0.942603** |
+| 缩尾触发率 | 61/3000（2.03%） | **77/3000（2.57%）** |
+| 性能（2500×3000，3 次中位） | 0.281s | **0.184s**（0.175/0.184/0.193） |
+
+### 测试契约
+
+新增 11 个单测（公共 7 + A 专属 4）；集成套件由 `9 passed / 3 xfailed` 变为 `10 passed / 2 xfailed`；`TestMixedWinsorSigma.test_07/08/09` 改为逐日截面语义；既有 `test_pipelines_v2.py` / `test_module_enabled.py` 全绿。
+
+### 不覆盖范围
+
+PL-05 / PL-07；B（percentile）；方法选择器；`ProcessingAdapter(outlier)` 统一路径；Mixed 3σ 与 Static percentile 的方法口径统一；optimizer 重新调参。
+
+### 后果
+
+- **正面**：Mixed 缩尾结构上不再有跨期参数；Mixed 端到端截断不变式归零；性能由 0.281s 降至 0.184s（约 −34%）；配置 / optimizer 契约不变。
+- **负面/破坏性**：所有 Mixed 输出数值变更；历史 IC/Sharpe 需重算；缓存代际 bump 导致价格/收益缓存一次性失效；`N<=10` 时缩尾不动作（需文档化）。
+- **已知遗留**：Mixed 使用 3σ 与 Static 使用 percentile(1,99) 的方法差异；统一需另开任务。
+
+### 学术与工业依据
+
+- MSCI FaCS Methodology (Bonne et al., 2018)：稳健均值 ± 3 稳健标准差（A）。
+- Bali, Engle & Murray (2016)：winsorization vs truncation（A）；"cross-sectional distributions" 逐字引文未验证（U），不作强论据。
+- Hampel (1974)；Rousseeuw & Croux (1993)：稳健尺度（A）。
+- Banz & Breen (1986)；Kaufman et al. (2012)；Kapoor & Narayanan (2023)；Arnott et al. (2019)：样本依赖 / 泄漏（A）。
+- Leeb & Pötscher (2006/2008)：pre-test 估计量分布不可一致估计（A/B）。
+- 详细检索记录与证据等级见调研文档；未核验项不作为本 ADR 的论据。
+
+### 回滚方案
+
+恢复 `_compute_winsorize_params` 与 per-column `_apply_winsorize`；`CODE_VERSION` 回 `v2.2.2-cache`；项目版本回 v3.3.4；恢复 PL-06 的 `xfail`；恢复 `TestMixedWinsorSigma.test_07/08/09` 的旧语义；删除/重建缓存。
 
 ---
 

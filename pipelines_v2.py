@@ -1059,11 +1059,11 @@ class MixedFactorPipeline(_BaseFactorPipeline):
     典型代表：1个月动量、3个月动量
 
     处理流程：
-        缺失插补 → 温和去极值(3σ缩尾) → 原始值中性化 → 固定 rank 变换 → 线性Z-Score
+        缺失插补 → 逐日截面 3σ 缩尾 → 原始值中性化 → 固定 rank 变换 → 线性Z-Score
 
     为何这样处理：
         这类因子介于两者之间，最保守的策略是降级处理。
-        只做温和缩尾和中性化，固定做 rank 变换（I-INT：先中性化再 rank）。
+        只做逐日截面 3σ 缩尾和中性化，固定做 rank 变换（I-INT：先中性化再 rank）。
         宁可保留一些原始噪声，也不冒险破坏其信号结构。
     """
 
@@ -1095,10 +1095,10 @@ class MixedFactorPipeline(_BaseFactorPipeline):
         X = self._imputer.transform(X, **kwargs)
         self._intermediate_data['imputation'] = X.copy()
 
-        # Step 2: 温和缩尾 (PL-06 未修, 仍为全样本参数)
+        # Step 2: 逐日截面 3σ 缩尾 (PL-06: fit no-op, 无跨期参数)
         if self._winsorizer_enabled:
-            logger.info("[MixedPipeline] Applying gentle winsorization...")
-            self._winsorize_params = self._compute_winsorize_params(X)
+            logger.info("[MixedPipeline] Applying cross-sectional winsorization...")
+            self._winsorize_params = None   # 显式标记: 无跨期参数
             X = self._apply_winsorize(X)
         else:
             logger.info("[MixedPipeline] winsorizer disabled, 跳过去极值 (identity)")
@@ -1161,27 +1161,18 @@ class MixedFactorPipeline(_BaseFactorPipeline):
 
         return X
 
-    def _compute_winsorize_params(self, X: pd.DataFrame) -> Dict:
-        """计算 sigma 倍数缩尾参数 (P3-Phase2: 消费 mixed_winsor_sigma 配置)
+    def _apply_winsorize(self, X: pd.DataFrame) -> pd.DataFrame:
+        """逐日截面 3σ 缩尾: 边界只由当日行计算, 无跨期参数.
 
-        lower = mean - sigma * std;  upper = mean + sigma * std
-        sigma 来自 self.mixed_winsor_sigma (默认 3.0).
+        mu = X.mean(axis=1); sd = X.std(axis=1, ddof=1)
+        lower/upper 按 index (日期) 对齐, 因此 clip(axis=0).
         """
         sigma = self.mixed_winsor_sigma
-        mean = X.mean(axis=0)
-        std = X.std(axis=0)
-        lo = (mean - sigma * std)
-        hi = (mean + sigma * std)
-        return {
-            'lower': lo,
-            'upper': hi,
-        }
-
-    def _apply_winsorize(self, X: pd.DataFrame) -> pd.DataFrame:
-        """应用 sigma 倍数缩尾"""
-        return X.clip(lower=self._winsorize_params['lower'],
-                      upper=self._winsorize_params['upper'],
-                      axis=1)
+        mu = X.mean(axis=1)
+        sd = X.std(axis=1, ddof=1)
+        return X.clip(lower=mu - sigma * sd,
+                      upper=mu + sigma * sd,
+                      axis=0)
 
 
 class FactorProcessingPipelineV2:
