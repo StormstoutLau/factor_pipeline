@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.1.0 的"audit-driven code quality remediation (31 项修复 + 22 非平凡测试)"，并正在推进 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR)。核心能力涵盖**因子指纹前置诊断层 (21 维, v3.0.0 T1)**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.3.7 的"**AR 阶数选择信息准则可比性修复**"（ADR-041），并已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.6 的**全链路因果性修复链**。核心能力涵盖**因子指纹前置诊断层 (21 维, v3.0.0 T1)**、**语义-统计融合分类**、**三条差异化处理管道**、**可选 GARCH 白化**、**持续迁移监测**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**双轨漂移融合判定**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -44,6 +44,37 @@
 ---
 
 ## 版本更新摘要
+
+### v3.3.7 AR 阶数选择 hold_back 可比性修复 (2026.11, 已实施)
+
+> **状态**: 已实施, 新单测 22 passed; 靶向回归 72 passed / 1 env-fail (`duckdb`, 与基线同源)
+> **文档**: [实施](docs/EXECUTION_V3.3.7_PL08_AR_ORDER_HOLDBACK.md) v1.2 / [设计](docs/analysis/PL08_AR_ORDER_AIC_COMPARABILITY_DESIGN.md) v1.2 / [调研](docs/analysis/PL08_AR_ORDER_AIC_COMPARABILITY_RESEARCH.md) v1.2 / [ADR-041](DECISIONS.md)
+> **版本 / 缓存**: 3.3.7 / `v2.2.5-cache` (旧代缓存失效, 需重建)
+
+**缺陷 (DEFECT-PL-08)**: `AROrderSelector._fit_ar` 对每个阶数使用 `y[order:]`, 使 `n_obs = n-order` 逐阶递减。AIC/BIC/HQIC 的似然项因此建立在不同样本上, 每多一阶样本因子约降 `ln(2πσ²)+1 ≈ 2.84` (> AIC 参数罚 2), 阶数被系统性推向 `max_order`。
+
+**修复** (仅 `_fit_ar` 一个方法, +25/−11 行):
+
+| 改动 | 内容 |
+|------|------|
+| 统一估计样本 | `hold_back = max_order`, 所有候选阶数共用 `y[H:]` 与 `x[H:]` (对齐 statsmodels `AutoReg(hold_back=maxlag)` 语义) |
+| 有效样本守卫 | `n_obs <= order+5 → ValueError`, 排除 `n_obs = k` 的精确拟合 (`σ²=0` / `ln(0)`) |
+| 索引对齐 | `residuals` / `fitted_values` 索引统一为 `series.index[H:]`, 长度 `n-H` |
+| 不变 | `transform` 三段式 (`early = min_order+6`) / `_fit_best` / AIC 公式 / 公共签名 / 配置面 |
+
+**实测** (合成面板, 步骤 9 落库复测):
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| `n_obs` (AR(1..5), n=100) | 99/98/97/96/95 | **95/95/95/95/95** |
+| 选阶均值 AR(1) (T=100/N=30) | AIC 4.800 / BIC 2.200 / HQIC 3.867 | **1.233 / 1.000 / 1.000** |
+| 选阶均值 AR(2) / AR(3) (T=120) | 4.87 / 4.97 | **2.533 / 3.233** |
+| 输出变化 (T=100 / T=500) | — | **2790/3000 (93.0%) / 14410/15000 (96.1%)** |
+| 尾部一步 MSE | 1.067782 | **1.048759** |
+| 截断不变式 (11 点) | 0/0 | **0/0** |
+| 性能 (2500×300) | 2.76s | **2.64s** |
+
+**兼容性**: 公共 API / 签名 / 配置字段 / `ARModelResult` 字段不变; 数值输出不兼容 (93%–96% 格子变化, 历史 IC/Sharpe 需重算); 固定阶数 `fit` 逐值等价, `transform` warm-up 段变化 (99/96/93 格), 冻结段相同。**不做**: 不修 AIC 方法学不一致性、不新增 AICc、不切换默认准则、不修非生产路径 (`OptimizedARDecoupler` / `TemporalDecoupler`)。
 
 ### v3.1.0 Audit-Driven Code Quality Remediation (2026.07, 已实施)
 
