@@ -52,6 +52,7 @@ test_*.txt
 Thumbs.db
 
 # Project-specific caches (auto-generated)
+cache/
 *.duckdb
 *.duckdb.wal
 factor_db.duckdb
