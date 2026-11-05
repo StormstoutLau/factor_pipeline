@@ -41,7 +41,8 @@
 | ADR-038 | 变换统一为逐日截面 rank→正态 (因果性修复) | v3.3.4, 2026-10-22 |
 | ADR-039 | Mixed 缩尾统一为逐日截面 3σ (因果性修复) | v3.3.5, 2026-11-04 |
 | ADR-040 | AR 解耦改为因果三段式一步预测 (冻结窗口 + 间歇重估) | v3.3.6, 2026-11-04 |
-| ADR-041 起 | 未占用 | — |
+| ADR-041 | AR 阶数选择统一 hold_back 样本 (信息准则可比性) | v3.3.7, 2026-11-04 |
+| ADR-042 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -2806,6 +2807,108 @@ PL-05 / PL-07；B（percentile）；方法选择器；`ProcessingAdapter(outlier
 ### 回滚方案
 
 恢复 `fit` 全样本 `batch_fit`；恢复 `fitted_values.reindex().ffill()` 与 `_results` 列门控；项目版本回 v3.3.5、缓存回 `v2.2.3-cache`；恢复 PL-05/PL-07 的 2 个 `xfail`；删除并重建缓存。
+
+---
+
+## ADR-041: AR 阶数选择统一 hold_back 样本 (信息准则可比性)
+
+**日期**: 2026-11-04
+**状态**: 已实施 (2026-11-04, v3.3.7)
+**优先级**: P1
+**关联缺陷**: DEFECT-PL-08
+**关联测试**: `tests/unit/test_ar_order_holdback.py`
+**调研/设计**: [PL08_AR_ORDER_AIC_COMPARABILITY_RESEARCH.md](docs/analysis/PL08_AR_ORDER_AIC_COMPARABILITY_RESEARCH.md) v1.2 /
+[PL08_AR_ORDER_AIC_COMPARABILITY_DESIGN.md](docs/analysis/PL08_AR_ORDER_AIC_COMPARABILITY_DESIGN.md) v1.2
+
+### 背景
+
+`AROrderSelector._fit_ar` 对每个阶数 `p` 使用 `y[p:]` 作为响应向量，使
+`n_obs = n - p`。AIC/BIC/HQIC 的似然项 `-n_obs/2(ln(2πσ²)+1)` 因此建立在
+不同样本上：每多一阶少 1 个观测，样本因子约降 `ln(2πσ²)+1 ≈ 2.84`，大于
+AIC 的参数罚 `2`，导致阶数被系统性推向 `max_order`。
+
+实测 (`T=100, N=30, seed=22`, AR(1) φ=0.7): AIC 均值 **4.800**、
+BIC **2.200**、HQIC **3.867**（上限 5）。
+
+### 决策
+
+1. `_fit_ar` 统一 `hold_back = self.max_order`；所有阶数使用 `y[H:]` 与
+   `x[H:]`，满足 statsmodels `AutoReg(hold_back=maxlag)` 的可比性语义。
+2. 增加有效样本守卫：`n_obs <= order + 5 → ValueError`；保证
+   `df_resid >= 5`，并排除 `n_obs = k` 的精确拟合（`σ²=0` / `ln(0)`）。
+3. `residuals` / `fitted_values` 索引统一为 `series.index[H:]`。
+4. `transform` 不改（`early = min_order + 6`）；守卫使 warm-up `t=7..11`
+   自然保持 identity。
+5. 默认准则保持 `aic`；不新增 AICc、不切换 BIC/HQIC 默认。
+
+### 备选方案 (拒绝/延后)
+
+- **A 仅 hold_back**：`t=7..11` 出现 `σ²=0` / `ln(0)`，`max_abs=322.68`。
+- **B 守卫 `order+2`**：消除 `σ²=0`，但早期仍用 4–6 个观测（`max_abs=5.3131`）。
+- **D +AICc**：生产窗口 `n_obs=115` 下与 AIC 分布几乎相同，MSE 无改善。
+- **E 默认 BIC**：AR(3) 真值面板均值 2.53（低估）；超出缺陷范围。
+
+### 代码证据
+
+| 组件 | 位置 |
+|------|------|
+| 统一 hold_back + 守卫 + 索引 | `modules/factor_decoupler/core/ar_model.py` `AROrderSelector._fit_ar` |
+| 选阶调用方（不改） | 同文件 `_fit_best` / `ARDecoupler.transform` |
+| 新单测 | `tests/unit/test_ar_order_holdback.py` |
+
+### 实测证据 (步骤 9 正式落库复测)
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| `n_obs` (AR(1..5), n=100) | 99/98/97/96/95 | **95/95/95/95/95** |
+| 阶数均值 (AR(1), T=100) | AIC 4.800 / BIC 2.200 / HQIC 3.867 | **1.233 / 1.000 / 1.000** |
+| 阶数均值 (AR(2), T=120) | 4.87 | **2.533** |
+| 阶数均值 (AR(3), T=120) | 4.97 | **3.233** |
+| 输出偏移 (T=100/N=30) | — | **2790/3000 (93.0%)**, `max_abs=6.9968` |
+| 输出偏移 (T=500/N=30) | — | **14410/15000 (96.1%)**, `max_abs=4.6718` |
+| 尾部一步 MSE (T=500) | 1.067782 | **1.048759** |
+| 截断不变式 (11 点) | 0/0 | **0/0** |
+| AR 性能 (2500×300) | 2.76s | **2.64s** |
+
+### 测试契约
+
+- T1 `n_obs` 全等；T2 statsmodels 逐项一致（参数/`llf`/`σ²`/`nobs`，AIC 差 -2）；
+  T3 守卫边界；T4 索引契约；T5–T7 阶数恢复；T8 固定阶数 `fit` 等价；
+  T9 warm-up 无退化 + early identity；T10 早期截断不变式。
+- 既有行为测试不改；靶向套件 72 passed / 1 env-fail（duckdb）。
+
+### 不覆盖
+
+- `OptimizedARDecoupler._fit_ar_order`（独立副本，非生产路径）。
+- `TemporalDecoupler` 的 AR 方法（共用选择器，阶数被动变化）。
+- AIC 的不一致性（固定概率过选阶；本 ADR 只修可比性）。
+- 常数序列的既有 `σ²=0` 边界。
+- 配置面 / optimizer / `min_obs` 参数校验。
+
+### 后果
+
+- **正面**：信息准则跨阶可比；阶数分布回到合理区间；AR(2)/AR(3) 仍可识别；
+  消除 warm-up 早期退化拟合。
+- **负面/破坏性**：存量 AR/Dynamic 输出 93%–96% 格子变化；历史 IC/Sharpe 需重算；
+  缓存代际 bump。
+- **风险**：固定阶数时 warm-up 段仍变化（冻结模型等价）；极端
+  `min_obs`/`max_order` 配置可能整列不可估（既有降级：跳过该列）。
+
+### 学术与工业依据
+
+- statsmodels `AutoReg` 官方文档 / 源码：`hold_back` 默认 `maxlag`，
+  `hold_back >= maxlag`，`y=y[hold_back:]`、`x=x[hold_back:]`（A）。
+- Cross Validated Q94718 接受答案：不同样本量的模型不能用任何信息准则比较（A）。
+- Shibata (1976, Biometrika 63:117–126)：AIC 有正概率渐近过选阶；
+  BIC/HQIC 强一致（A 元数据 / B 转述）。
+- Hurvich & Tsai (1989, Biometrika 76:297–307)：AICc 小样本修正；
+  Hurvich NYU 讲义给出修正因子（A）。
+- Ing & Wei (2005, Ann. Statist.)：AIC 对一步预测渐近有效（A 摘要）。
+
+### 回滚方案
+
+恢复 `_fit_ar` 的 `y[order:]` / 滞后列 / `n_obs=n-order` / 索引 `index[order:]`；
+删除守卫；版本回 v3.3.6、缓存回 `v2.2.4-cache`；删除并重建缓存。
 
 ---
 

@@ -1026,13 +1026,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.3.6 (Dynamic AR 因果三段式一步预测 + 全链路因果性修复, ADR-040)
+- **Pipeline 版本**: v3.3.7 (AR 阶数选择统一 hold_back 样本 + 全链路因果性修复, ADR-041)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 全量套件未在本轮复跑; v3.3.6 靶向回归 **117 passed** (新单测 16 + 集成 15 + decoupler 29 + 管线 13 + 模块开关 20 + 内生性 17 + 版本 7)
+- **测试基线**: 全量套件未在本轮复跑; v3.3.7 靶向回归 **72 passed / 1 env-fail** (duckdb; causality 16 + hidden_effect 29 + pipeline 12 + integration 15) + 新增 PL-08 单测 **22 passed**
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
 - **构建日期**: 2026.11.04
-- **状态**: STABLE (v3.3.6, 10 步 spec + 审计 PASS)
+- **状态**: STABLE (v3.3.7, 10 步 spec + 审计 PASS)
 
 ### 版本历史
 
@@ -1057,6 +1057,7 @@ factor_pipeline/
 | v3.3.4 | 2026.10.22 | PL-02 变换统一逐日截面 rank→正态 (ADR-038) + 配置面收敛 + 缓存代际 v2.2.2-cache |
 | v3.3.5 | 2026.11.04 | PL-06 Mixed 缩尾统一逐日截面 3σ (ADR-039), 257/1800 → 0/0 + 缓存代际 v2.2.3-cache |
 | v3.3.6 | 2026.11.04 | PL-05 Dynamic AR 因果三段式一步预测 (ADR-040): 前缀冻结 + stride=10 重估 + 冷启动 identity; Dynamic/顶层截断 0/0/0 + 缓存代际 v2.2.4-cache |
+| v3.3.7 | 2026.11.04 | PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041): 信息准则跨阶可比 + 有效样本守卫; AR(1) 选阶均值 4.800→1.233 + 缓存代际 v2.2.5-cache |
 
 ---
 

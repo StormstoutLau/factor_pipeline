@@ -1,6 +1,6 @@
-# 2026-11-04 代码质量审计 — v3.3.5 PL-06 / v3.3.6 PL-05
+# 2026-11-04 代码质量审计 — v3.3.5 PL-06 / v3.3.6 PL-05 / v3.3.7 PL-08
 
-**审计版本**: v1.1 (追加 v3.3.6 续篇; v1.0 为 PL-06 审计)
+**审计版本**: v1.2 (追加 v3.3.7 续篇; v1.1 为 v3.3.6 续篇; v1.0 为 PL-06 审计)
 **日期**: 2026-11-04
 **审计对象**: DEFECT-PL-06 修复 (v3.3.5)
 **审计基准**: [CHECKLIST_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md](CHECKLIST_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md) v1.1 (Gate 0-8)
@@ -274,3 +274,140 @@
 | 审计结论 | **PASS** (无 P0/P1; 1 项 P2 + 1 项 P3 文档项已修复闭环; 3 项记录性遗留) |
 | 阻塞交付 | 无 |
 | 交付建议 | 可提交; 单原子 commit (代码 + 测试 + 版本 + 文档); 提交前 `git diff --cached --check` |
+
+---
+
+# 续篇: v3.3.7 PL-08 AR 阶数选择 hold_back 可比性修复审计
+
+**审计日期**: 2026-11-05 (步骤 10)
+**审计对象**: DEFECT-PL-08 修复 (v3.3.7)
+**审计基准**: [CHECKLIST_V3.3.7_PL08.md](CHECKLIST_V3.3.7_PL08.md) v1.1 (Gate 0-7, 步骤 9 已回填)
+**对齐文档**: [EXECUTION_V3.3.7_PL08_AR_ORDER_HOLDBACK.md](../EXECUTION_V3.3.7_PL08_AR_ORDER_HOLDBACK.md) v1.2 / [ADR-041](../../DECISIONS.md) / [CONSISTENCY_REVIEW_V3.3.7.md](CONSISTENCY_REVIEW_V3.3.7.md) v1.0
+**审计方式**: 单模块小任务 (实施文档 §13.8 裁剪), 主会话逐维审计 + checklist 逐项确认 + 关键实测独立复跑 (未只采信步骤 9 记录), 未派发并行 subagent
+**总评**: **PASS**
+
+---
+
+## Phase 1: Spec Inventory
+
+| 工件 | 内容 | 审查维度 |
+|------|------|---------|
+| EXECUTION v1.2 §0.1 / §3 | E1-E4 任务定义 + 代码实施 (`_fit_ar` hold_back + 守卫 + 索引) | 每项 vs 代码落地 |
+| EXECUTION v1.2 §4 | TDD 测试 (10 函数 / 22 用例; Red 13/9 → Green 22) | 测试契约 |
+| EXECUTION v1.2 §5 | 版本 3.3.7 / 缓存 `v2.2.5-cache` / ADR-041 / CHANGELOG / 架构 | 文档同步 |
+| ADR-041 | 决策 1-5 + 备选 A-E + 实测证据 + 不覆盖 + 回滚 | 决策与代码一致性 |
+| CONSISTENCY_REVIEW v1.0 | C1-C12 对账 + M1-M4 修复 | 修复是否落进最终文档 |
+| DESIGN v1.2 / RESEARCH v1.2 | D1-D10 / 方案 C 数值源 | 上游锚点一致性 |
+
+## Phase 2: Multi-Dimensional Audit
+
+### 2.1 E 任务 vs 代码对齐
+
+| E 任务 | 实施文档声明 | 代码实测 | 结论 |
+|--------|-------------|---------|------|
+| E1 `_fit_ar` 统一 hold_back + 守卫 + 索引 | `hold_back = self.max_order`; `n_obs <= order+5 → ValueError('有效样本不足...')`; 索引 `series.index[H:]`; 滞后列 `y[H-i:n-i]`; AIC/BIC/HQIC 公式不变; `LinAlgError → ValueError("OLS估计失败")` 保留 | [ar_model.py L139-L198](../../modules/factor_decoupler/core/ar_model.py#L139-L198) 与 §3.1 逐行一致 (+25/−11, 含 docstring) | ✅ |
+| E2 新单测 | 10 函数 / 22 用例; Red 预演 13/9 | 文件 10 函数 / 22 collected; Red 正式落库实测 **13 failed / 9 passed (0.65s)**; Green **22 passed (0.29s)** | ✅ |
+| E3 版本 / 缓存 / ADR / 文档 | 3.3.7 / `v2.2.5-cache` / ADR-041 / CHANGELOG / 状态文档 | 版本 4 文件 grep 0 残留; 缓存 6 处字面量统一 (stub 核验 6/6); `ADR-041` 占用表 + 正文 (状态「已实施」); CHANGELOG/README/PROJECT_STATUS/DEV_PROGRESS/ARCHITECTURE 落位 | ✅ |
+| E4 回归 / 性能 / 偏移复测 | 靶向 72/1; ≤3.1s; 偏移与 §1.3 一致 | 复跑靶向 **72 passed / 1 env-fail (43.01s)**; 性能 **2.64s**; 偏移 2790/3000 + 14410/15000 (见 2.5) | ✅ |
+
+### 2.2 跨模块契约 (ADR 不变式)
+
+| 契约 | 验证 | 结论 |
+|------|------|------|
+| `transform` 三段式未改 | `git diff` 仅 `_fit_ar` + docstring; `early = min_order + 6` / `_WARMUP_REFIT_STRIDE` / 冻结分支逐行未动; T9/T10 + 既有 15 用例证明早期 identity 与截断不变式保持 | ✅ |
+| 公共 API 不变 | `AROrderSelector.__init__` / `fit` / `_fit_best` / `batch_fit` / `ARDecoupler.__init__` / `fit` / `transform` 签名零改动; 无新增公开参数 (D9) | ✅ |
+| `_fit_best` 不改 (D6) | diff 未触碰 L101-L137; 总长守卫与 AR(1) 回退原样; 阶数选择语义由 `_fit_ar` 承接 | ✅ |
+| 配置面 / optimizer | `git diff -- config_v2.py` 仅版本行; `optimizer.py` / `pipelines_v2.py` / `adapters.py` **零 diff** | ✅ |
+| PL-05 (ADR-040) 修复保持 | 因果性 16 passed + 集成 15 passed / 0 xfailed (含 3 组路由); 三段式结构未动 | ✅ |
+| PL-06 (ADR-039) 修复保持 | Mixed 管线 12 passed (1 env-fail 与基线同源); pipelines_v2 零 diff | ✅ |
+| 缓存代际自愈 | `CODE_VERSION = "v2.2.5-cache"`; 5 类默认值 stub 核验 6/6 一致; 读取侧零改动 | ✅ |
+| 子包版本隔离 | `git diff -- modules/` 仅 ar_model.py; 无 `__version__` 变更 | ✅ |
+
+### 2.3 接口签名核对 (实际代码 vs 文档声明)
+
+- `AROrderSelector._fit_ar(self, series: pd.Series, order: int) -> ARModelResult` — 签名不变, 实现变更 ✅
+- `ARModelResult` 10 字段不变; 唯一语义变化 = `residuals`/`fitted_values` 索引起点 `H`、长度 `n-H` (T4 锁定) ✅
+- 异常契约: `n_obs <= order+5` → `ValueError` 文案含 `'有效样本不足'` (与 T3 `match` 串一致); `lstsq` 失败路径保留 ✅
+- 无新增公共 API / 参数 / 配置字段; 新增面 = 1 个私有方法实现变更 + 1 测试文件 ✅
+
+### 2.4 测试盲区识别 (4 类)
+
+| 盲区类型 | 检查结果 | 处置 |
+|---------|---------|------|
+| 1. 断言恒真式 | 无。T2 以 statsmodels `AutoReg(hold_back=5)` 为独立参考 (`atol=1e-10` + AIC 恒差 -2); T3 精确边界 `order+5` 抛 / `order+6` 过; T8 手写旧公式 `atol=0`; T9 显式 identity (`iloc[:12]` 逐元素) + 有限性 + 警告捕获; T10 全样本 vs 截断 `atol=1e-12` + NaN 模式 | 无需处置 |
+| 2. 单文件检查盲区 | 单测覆盖 `AROrderSelector`/`ARDecoupler` 隔离行为; `CompositeDecoupler` 组合与路由由集成套件 (15 passed, 3 seeds + 7 截断点) 覆盖; TemporalDecoupler 非生产路径, 依 R4 登记不验收 | 已被集成测试覆盖 |
+| 3. 设计约束无测试 | (a) `_fit_best` 总长守卫与 AR(1) 回退在守卫新语义下无直接单测 — 由 T9/T10 (warm-up 短前缀路径) + 集成间接行使, 且 D6 明确不改; (b) `min_obs <= max_order` 极端配置整列不可估 (R5) 无单测 — 设计 §3.9 明确不加构造校验, 文档写明约束; (c) `verify_fix3_manual` 校验 [3] (缓存独立性) 受 duckdb 阻断 — 由 test_07 (5 类默认值一致性) 等效覆盖 | F-B3 记录, 无行动 |
+| 4. 修正项无测试 | 步骤 8 修正均为文档级 (§5.2 补 L97 / §6.1 口径 / 设计行号); L97 属断言失败消息, 无测试断言消息内容, 由 grep (G4-2) 验证落位 | 已闭环 (grep 证据) |
+
+### 2.5 数值与登记一致性
+
+| 数值 | 代码/测试输出 (步骤 9-10 实测) | CHANGELOG / ADR-041 / EXECUTION §7.2 / checklist | 结论 |
+|------|------------------------------|--------------------------------------------------|------|
+| `n_obs` | 95/95/95/95/95 | 四处一致 95×5 | ✅ |
+| 阶数均值 AR(1) T=100 | AIC 1.233 / BIC 1.000 / HQIC 1.000 (n=30) | 四处一致 | ✅ |
+| AR(2)/AR(3) T=120 | 2.533 / 3.233 | ADR/CHANGELOG/EXECUTION/checklist 一致 (设计 §3.6 目标 2.53/3.23 为舍入口径) | ✅ |
+| 输出偏移 T=100 | 2790/3000 (93.0%), max 6.9968, mean 0.3295 | 四处一致 | ✅ |
+| 输出偏移 T=500 | 14410/15000 (96.1%), max 4.6718, mean 0.1337 | 四处一致 | ✅ |
+| 尾部 MSE | 新 1.048759 / 旧 1.067782 | 四处一致 | ✅ |
+| 性能 | 2.64s (基线 2.76, 预期 2.72, 上限 3.1) | 四处一致 2.64s (F-B4 INFO: 低于调研预期 3%, 单次计时噪声级) | ✅ |
+| 固定阶数 | coef 逐值相同; 99/96/93 格; max 2.694613/5.251495/5.973263; first 7/8/9; last 39 | checklist G5-10 / EXECUTION §7.2 / CHANGELOG 一致; 与设计 §5.2 探针原值吻合 | ✅ |
+| Red / Green | 13/9 (0.65s) → 22 (0.29s) | 四处一致 (预演与正式落库同值) | ✅ |
+| 回归计数 | 靶向 72/1 (43.01s); 合并 6 文件 101 passed / 1 env-fail (19.72s); fix3 隔离 6/1 vs 合并 7/7 | checklist G3-5/G4-3 与 EXECUTION §7.2 双口径一致; **CHANGELOG 回归行只写隔离口径 6/1** | ❌ → F-B2 已修复 |
+| 截断不变式 | 既有 7 点 (15 passed) + T10 5 点 = 11 点 0/0 | 四处一致 | ✅ |
+| 版本 / 缓存 | 3.3.7 / `v2.2.5-cache`; 4+2 文件 grep 0 残留 | 一致 | ✅ |
+
+## Phase 3: Fix Priority Matrix
+
+| 级别 | 发现 | 状态 |
+|------|------|------|
+| P0 Blocker | 无 | — |
+| P1 Critical | 无 | — |
+| P2 Major | 无 | — |
+| P3 Minor | F-B1: `test_fix3` 结果依赖运行组合 (隔离 6 passed / 1 env-fail vs 合并 7 passed)。**机制已定位**: `test_E10` 的失败导入使 `backtest/__init__` 在 L41 (`import duckdb`) 前已把无 duckdb 子模块 (`cache_manager` / `cached_data_loader` 等) 留在 `sys.modules`, 后续 `from factor_pipeline.backtest.<sub> import ...` 命中全名缓存短路成功 (单进程实验复现: bridge fail → 子模块 cached → loader import ok)。属 duckdb 环境缺包的**次生导入序依赖**, PL-08 未引入 (PL-05 环境 duckdb 在装, 无此现象), 生产代码与断言均不受影响 | ⏸ 记录 (checklist G4-3 / EXECUTION §7.2 已双口径如实记录) |
+| P3 Minor | F-B2: CHANGELOG 回归行只写 fix3 隔离口径 "6 passed / 1 env-fail", 与合并运行 7 passed 的记录不一致 (易误读为合并结果) | ✅ 已修复 (补合并口径) |
+| P3 Minor | F-B3: `_fit_best` 总长守卫 / AR(1) 回退 / `min_obs<=max_order` 极端配置无直接单测 | ⏸ 记录 (D6 不改 + R5 文档约束 + 间接覆盖; 见 2.4-3) |
+| INFO | F-B4: 性能 2.64s 低于调研预期 2.72s (−3%), 单次计时噪声级; 2.5 数值表已注明 | ⏸ 不修 |
+
+**Tier 1 (本轮)**: F-B2 已修复。**Tier 2/3**: F-B1 / F-B3 / F-B4 记录性, 无行动项。
+
+## Phase 4: Fix Baseline + Tracking
+
+| 编号 | 严重度 | 描述 | 状态 | 修复验证 |
+|------|--------|------|------|---------|
+| F-B1 | P3 | fix3 测试结果运行组合依赖 (sys.modules 残留短路) | ⏸ 记录 | 机制已实验定位; 双口径在 checklist/EXECUTION 记录; 与 PL-08 无因果 |
+| F-B2 | P3 | CHANGELOG 回归行补合并口径 | ✅ 已修复 | 改为 "隔离 6/1; 合并靶向运行 7 passed", 与 checklist G4-3 / EXECUTION §7.2 三处对齐 |
+| F-B3 | P3 | 守卫交互路径 (总长守卫/回退/极端配置) 无直接单测 | ⏸ 记录 | D6/R5 设计决策 + 间接覆盖成立 |
+| F-B4 | INFO | 计时 2.64s vs 预期 2.72s | ⏸ 记录 | 噪声级, 上限 3.1s 内 |
+
+**回归验证**: F-B2 为文档行编辑, 不触代码; 修复后终态 = 步骤 10 复跑合并靶向 (6 文件) **101 passed / 1 env-fail (19.72s)**, 零回归 (唯一失败与基线同一 duckdb 环境项)。
+
+## 评分 (v3.3.7)
+
+| 维度 | 结论 |
+|------|------|
+| E1-E4 代码 vs 实施文档 | 4/4 对齐 |
+| ADR 不变式 / 跨模块契约 | 8/8 通过 (transform/公共 API/`_fit_best`/配置面/PL-05/PL-06/缓存/子包隔离) |
+| 接口签名 | 一致, 无漂移 (签名不变 + 异常文案对齐) |
+| 测试盲区 | 4 类无阻塞项 (2 项记录性说明) |
+| 数值一致性 | 11/12 组一致; 1 组 (CHANGELOG 回归行口径) 已更正闭环 |
+| Checklist Gate 0-7 | 全部 "必须" 项通过 (G4-3 环境条件项已双口径记录并签注) |
+| 回归 | 合并 6 文件 101 passed / 1 env-fail, 零回归; grep 验收 (V12/白名单/xfail/版本) 全过 |
+| **总评** | **PASS** |
+
+## 遗留与后续 (v3.3.7)
+
+| 项 | 归属 |
+|----|------|
+| `OptimizedARDecoupler` / `TemporalDecoupler` 同类缺陷 | 非生产路径, 独立任务 (P1 候选) |
+| v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe) | 独立任务 (ADR-040 风险段) |
+| AIC 不一致性 (固定概率过选阶) | 方法学性质, 本版只修可比性; 若 `warmup_obs < 60` 场景出现再评估 AICc (R8) |
+| 常数序列 `σ²=0` 既有边界 | 独立任务 (R7) |
+| duckdb 环境缺包 → fix3 运行组合依赖 (F-B1) | 环境项; 如需根治可装 duckdb 或将 fix3 缓存断言改为不触发 `backtest/__init__` 的反射式读取, 另立任务 |
+
+## 审计签署 (v3.3.7)
+
+| 项 | 值 |
+|----|-----|
+| 审计结论 | **PASS** (无 P0/P1/P2; 1 项 P3 文档口径已修复闭环; 3 项记录性遗留) |
+| 阻塞交付 | 无 |
+| 交付建议 | 可提交; 单原子 commit (代码 + 测试 + 版本 + 文档); 提交前 `git diff --cached --check`; 提交后删除并重建回测缓存 (`v2.2.5-cache` 代际) |

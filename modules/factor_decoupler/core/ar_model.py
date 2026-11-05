@@ -137,16 +137,31 @@ class AROrderSelector:
         return best_result
 
     def _fit_ar(self, series: pd.Series, order: int) -> ARModelResult:
-        """拟合指定阶数的AR模型"""
+        """拟合指定阶数的 AR 模型 (v3.3.7 / ADR-041: 所有阶数统一 hold_back 样本).
+
+        ``hold_back = max_order`` 使 AR(1)..AR(max_order) 的响应向量与估计样本
+        完全一致, 满足 statsmodels ``AutoReg(hold_back=maxlag)`` 的可比性语义;
+        AIC/BIC/HQIC 因此可在同一 ``n_obs`` 上比较。
+
+        前置条件: ``series`` 已 dropna; ``order <= self.max_order``。
+        """
         y = series.values
         n = len(y)
+        hold_back = self.max_order              # 所有阶数共享的估计样本起点
 
-        # 构建滞后矩阵
-        X = np.column_stack([y[order - i:None if i == 0 else -i] for i in range(1, order + 1)])
-        y_trimmed = y[order:]
+        y_trimmed = y[hold_back:]
+        n_obs = len(y_trimmed)                   # 所有阶数相同; 也 == len(residuals)
+        if n_obs <= order + 5:                  # 有效样本守卫 (ADR-041)
+            raise ValueError(
+                f"AR({order}) 有效样本不足: n_obs={n_obs} <= order+5={order + 5} "
+                f"(n={n}, hold_back={hold_back})"
+            )
 
-        # 添加常数项
-        X = np.column_stack([np.ones(len(y_trimmed)), X])
+        # 滞后矩阵: 所有列长度均为 n_obs
+        X = np.column_stack([
+            y[hold_back - i:n - i] for i in range(1, order + 1)
+        ])
+        X = np.column_stack([np.ones(n_obs), X])
 
         # OLS估计
         try:
@@ -159,13 +174,12 @@ class AROrderSelector:
         residuals = y_trimmed - fitted
 
         # 统计量计算
-        n_obs = len(residuals)
-        k = len(coefficients)
+        k = len(coefficients)                    # = order + 1
         sigma2 = np.var(residuals, ddof=0)
         log_likelihood = -n_obs / 2 * (np.log(2 * np.pi * sigma2) + 1)
         r_squared = 1 - np.var(residuals) / np.var(y_trimmed) if np.var(y_trimmed) > 0 else 0
 
-        # 信息准则
+        # 信息准则 (公式不变; 仅 n_obs 口径统一)
         aic = -2 * log_likelihood + 2 * k
         bic = -2 * log_likelihood + k * np.log(n_obs)
         hqic = -2 * log_likelihood + 2 * k * np.log(np.log(n_obs))
@@ -173,8 +187,8 @@ class AROrderSelector:
         return ARModelResult(
             order=order,
             coefficients=coefficients,
-            residuals=pd.Series(residuals, index=series.index[order:]),
-            fitted_values=pd.Series(fitted, index=series.index[order:]),
+            residuals=pd.Series(residuals, index=series.index[hold_back:]),
+            fitted_values=pd.Series(fitted, index=series.index[hold_back:]),
             aic=aic,
             bic=bic,
             hqic=hqic,

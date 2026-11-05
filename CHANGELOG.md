@@ -1,5 +1,69 @@
 # 开发日志 (Changelog)
 
+## v3.3.7 — PL-08 AR 阶数选择 hold_back 可比性修复 (已实施, 2026-11-04)
+
+### 概览
+
+修复 DEFECT-PL-08: `AROrderSelector._fit_ar` 对每个阶数使用 `y[order:]`，
+使 AIC/BIC/HQIC 的似然项建立在不同样本上，阶数被系统性推向 `max_order`。
+
+**核心产出**:
+- `_fit_ar` 统一 `hold_back = max_order`，所有阶数使用同一估计样本
+- 增加有效样本守卫 `n_obs <= order+5 → ValueError`，消除 warm-up `σ²=0`
+- `residuals` / `fitted_values` 索引统一为 `series.index[H:]`
+- 新增 10 个单测函数 / 22 个 pytest 用例
+- 新增 **ADR-041**；项目版本 **3.3.7**；缓存 `CODE_VERSION` **v2.2.5-cache**
+
+### 缺陷根因
+
+| # | 根因 | 证据 |
+|---|------|------|
+| 1 | `y_trimmed = y[order:]` | 各阶 `n_obs = n-order` 不同 |
+| 2 | 似然项随 `n_obs` 缩短 | 每阶样本因子约降 2.84 > AIC 罚 2 |
+| 3 | 无有效样本守卫 | warm-up `t=7` 仅 2 个观测，`σ²=0` / `ln(0)` |
+
+### 实测矩阵 (步骤 9 正式落库复测)
+
+| 层级 | 对象 | 修复前 | 修复后 |
+|------|------|--------|--------|
+| unit | `n_obs` (AR(1..5), n=100) | 99/98/97/96/95 | **95×5** |
+| unit | AR(1) 选阶均值 (T=100) | 4.800 | **1.233** (BIC/HQIC 1.000) |
+| unit | AR(2) 选阶均值 (T=120) | 4.87 | **2.533** |
+| unit | AR(3) 选阶均值 (T=120) | 4.97 | **3.233** |
+| unit | 新契约测试 | 13 failed / 9 passed (Red) | **22 passed** (10 函数) |
+| output | T=100/N=30 | — | **2790/3000 (93.0%)**, `max_abs=6.9968` |
+| output | T=500/N=30 | — | **14410/15000 (96.1%)**, `max_abs=4.6718` |
+| quality | 尾部一步 MSE | 1.067782 | **1.048759** |
+| invariant | 截断不变式 (11 点) | 0/0 | **0/0** |
+| perf | AR 2500×300 | 2.76s | **2.64s** |
+
+**回归**: 靶向 4 文件 72 passed / 1 env-fail (`duckdb`, 与基线相同); `tests/test_fix3_version_unification.py` 隔离运行 6 passed / 1 env-fail (duckdb 阻断 `backtest` 包导入), 合并靶向运行 **7 passed** (次生导入序依赖, 见审计 F-B1)。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_decoupler/core/ar_model.py` | `_fit_ar` hold_back + 守卫 + 索引 + docstring |
+| `tests/unit/test_ar_order_holdback.py` | **新增** 10 函数 / 22 用例 |
+| `pyproject.toml` / `__init__.py` / `config_v2.py` / `reporting.py` | 3.3.7 |
+| `backtest/cache_manager.py` | `v2.2.5-cache` |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | 版本/缓存字面量 |
+| `DECISIONS.md` / `CHANGELOG.md` / `README.md` / `docs/PROJECT_STATUS.md` / `docs/DEV_PROGRESS.md` / `docs/ARCHITECTURE.md` | ADR-041 / v3.3.7 |
+
+### 兼容性
+
+- **不兼容**: AR/Dynamic 输出 93%–96% 格子变化；需重建缓存。
+- **兼容**: 公共 API / 签名 / 配置字段 / `ARModelResult` 字段不变。
+- **固定阶数**: `fit` 冻结模型逐值相同；`transform` warm-up 段变化（99/96/93 格），冻结段相同。
+
+### 已知遗留
+
+- `OptimizedARDecoupler` / `TemporalDecoupler` 同类缺陷未修（非生产路径）。
+- AIC 不一致性未修（方法学性质；本版本只修可比性）。
+- 常数序列 `σ²=0` 既有边界未修。
+
+---
+
 ## v3.3.6 — PL-05 Dynamic AR 因果性修复: 三段式一步预测 (已实施, 2026-11-04)
 
 ### 概览

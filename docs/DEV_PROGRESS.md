@@ -28,8 +28,9 @@ v3.3.2 (2026-10-21) 管线级因果性测试 + PL-03 修复 + ADR 编号治理 +
 v3.3.3 (2026-10-22) PL-01 去极值逐日横截面 (ADR-037) + 缓存代际 v2.2.1-cache
 v3.3.4 (2026-10-22) PL-02 变换逐日截面 rank→正态 (ADR-038) + 缓存代际 v2.2.2-cache
 v3.3.5 (2026-11-04) PL-06 Mixed 缩尾逐日截面 3σ (ADR-039) + 缓存代际 v2.2.3-cache
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.3.6
 v3.3.6 (2026-11-04) PL-05 Dynamic AR 因果三段式一步预测 (ADR-040) + 缓存代际 v2.2.4-cache
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.3.7
+v3.3.7 (2026-11-04) PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041) + 缓存代际 v2.2.5-cache
 v3.4.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -135,13 +136,13 @@ v3.4.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 
 ---
 
-## §4 待办 (v3.3.6 后)
+## §4 待办 (v3.3.7 后)
 
 ### §4.0 P1 下一任务
 
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
-| 1 | **PL-08-candidate**: `_fit_ar` 统一 `hold_back=max_order`, AIC 跨阶数可比 | 下一任务 | 审计续篇 / PL-05 调研 §10.4; 探针: 阶数均值 4.80→1.23, 输出 2790/3000 格变化 |
+| 1 | **PL-08**: `_fit_ar` 统一 `hold_back=max_order`, AIC 跨阶数可比 | ✅ 已完成 (v3.3.7, 2026-11-04) | 审计续篇 / PL-05 调研 §10.4; 实测阶数均值 4.800→1.233, 输出 2790/3000 格变化 |
 | 2 | v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe vs 旧实现) | 候选 | ADR-040 风险段 (非平稳失配未测) |
 | 3 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler`) | 候选 | 审计遗留 (无生产调用) |
 | 4 | README / PROJECT_STATUS 版本状态同步 | ✅ 已完成 (2026-11-04) | 本次文档同步 |
@@ -170,6 +171,7 @@ v3.4.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 
 | 版本 | 实施文档 | 设计文档 | ADR |
 |------|---------|---------|-----|
+| v3.3.7 | [EXECUTION_V3.3.7_PL08_AR_ORDER_HOLDBACK.md](EXECUTION_V3.3.7_PL08_AR_ORDER_HOLDBACK.md) | [analysis/PL08_AR_ORDER_AIC_COMPARABILITY_DESIGN.md](analysis/PL08_AR_ORDER_AIC_COMPARABILITY_DESIGN.md) | ADR-041 |
 | v3.3.6 | [EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md](EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md) | [analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md](analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md) | ADR-040 |
 | v3.3.5 | [EXECUTION_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md](EXECUTION_V3.3.5_PL06_MIXED_WINSORIZE_CAUSALITY.md) | [analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md](analysis/PL06_MIXED_WINSORIZE_LOOKAHEAD_DESIGN.md) | ADR-039 |
 | v3.3.1 | [EXECUTION_V3.3.1_IMPUTER_P2.md](EXECUTION_V3.3.1_IMPUTER_P2.md) | [analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md](analysis/IMPUTER_LOOKAHEAD_FIX_PLAN.md) v2.3 | — |
