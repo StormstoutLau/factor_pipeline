@@ -17,6 +17,7 @@ scipy >= 1.7.0
 
 from typing import Dict, Optional, List, Tuple, Callable
 import logging
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -44,16 +45,8 @@ HAS_PIPELINE = True  # 保留向后兼容
 # 搜索空间定义
 # =============================================================================
 
-DEFAULT_SEARCH_SPACE = {
-    'hard_routing_prob':              {'type': 'float', 'low': 0.5,  'high': 1.0},
-    'merge_alpha':                    {'type': 'float', 'low': 0.0,  'high': 1.0},
-    'ks_alpha':                       {'type': 'float', 'low': 0.001, 'high': 0.5},
-    'mixed_winsor_sigma':             {'type': 'float', 'low': 1.0,  'high': 10.0},
-    'transform_aggressiveness':       {'type': 'float', 'low': 0.3,  'high': 5.0},
-    'classification_threshold_static': {'type': 'float', 'low': 0.5, 'high': 1.0},
-    'classification_threshold_dynamic': {'type': 'float', 'low': 0.0, 'high': 0.5},
-    'migration_threshold':            {'type': 'float', 'low': 0.0,  'high': 1.0},
-}
+# v3.4.0 ADR (暂用号 ADR-042): 路由阈值随统一管道退场, 默认无可搜参数
+DEFAULT_SEARCH_SPACE = {}
 
 
 # v2.6.0 P3-13 (E5): 正交化参数搜索空间 (仅 search_orth=True 时激活)
@@ -144,6 +137,15 @@ class EndToEndThresholdOptimizer:
         if search_orth:
             self.search_space.update(DEFAULT_SEARCH_SPACE_ORTH)
 
+        # v3.4.0 ADR: 默认搜索空间为空 (路由阈值已随统一管道退场) → 弃用警告
+        if not self.search_space:
+            warnings.warn(
+                "EndToEndThresholdOptimizer 默认搜索空间为空 (路由阈值已随 v3.4.0 "
+                "统一管道退场); 如需正交化搜索请传 search_orth=True",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # 优化结果
         self.study: Optional['optuna.Study'] = None
         self.best_params: Optional[Dict[str, float]] = None
@@ -154,15 +156,13 @@ class EndToEndThresholdOptimizer:
     # =========================================================================
 
     def _params_to_config(self, params: Dict[str, float]) -> 'PipelineV2Config':
-        """将优化参数字典映射到 PipelineV2Config (P0-2: 完整 8 参数映射)"""
-        # P2.5: HAS_PIPELINE 永远为 True (自身模块), 删除死代码检查
+        """将优化参数字典映射到 PipelineV2Config (v3.4.0: 收敛为 3 参数契约)
 
-        config = PipelineV2Config(
-            hard_routing_prob=params.get('hard_routing_prob', 0.90),
-            merge_alpha=params.get('merge_alpha', 0.50),
-            ks_alpha=params.get('ks_alpha', 0.05),
-            mixed_winsor_sigma=params.get('mixed_winsor_sigma', 3.0),
-        )
+        v3.4.0 ADR: 路由参数 (hard_routing_prob/merge_alpha/ks_alpha/
+        mixed_winsor_sigma/transform_aggressiveness) 已随统一管道退场,
+        传入的此类键被忽略 (不报错); 仅 3 个保留参数可映射。
+        """
+        config = PipelineV2Config()
 
         # classification_threshold_static/dynamic 位于 ClassificationConfig 子配置中
         if 'classification_threshold_static' in params:
@@ -170,20 +170,7 @@ class EndToEndThresholdOptimizer:
         if 'classification_threshold_dynamic' in params:
             config.classification.dynamic_ar1_threshold = params['classification_threshold_dynamic']
 
-        # P0-2: transform_aggressiveness — 通过 MixedFactorPipeline 的 winsor_sigma 间接影响
-        # 用 mixed_winsor_sigma * transform_aggressiveness 组合控制
-        if 'transform_aggressiveness' in params:
-            aggr = params['transform_aggressiveness']
-            # aggressiveness > 1 表示更激进,降低 winsor sigma 阈值
-            config.mixed_winsor_sigma = max(
-                1.0, config.mixed_winsor_sigma / max(aggr, 0.1)
-            )
-
-        # P3-10' (v2.6.0 E2): migration_threshold 字段位置修正
-        # 修正前: 错误设置到 config.monitor.migration_threshold (MonitorConfig 无此字段,
-        #         hasattr 静默跳过, 参数被丢弃)
-        # 修正后: 字段位于 PipelineV2Config.migration_threshold (config 本身),
-        #         默认值 0.10 与 PipelineV2ConfigUnified.migration_threshold 对齐
+        # P3-10' (v2.6.0 E2): migration_threshold 字段位于 config 本身
         if 'migration_threshold' in params:
             config.migration_threshold = params['migration_threshold']
             config.monitor.enable_smooth_transition = True
@@ -211,16 +198,11 @@ class EndToEndThresholdOptimizer:
         return config
 
     def _config_to_params(self, config: 'PipelineV2Config') -> Dict[str, float]:
-        """将 PipelineV2Config 映射回参数字典"""
+        """将 PipelineV2Config 映射回参数字典 (v3.4.0: 3 参数契约)"""
         return {
-            'hard_routing_prob': config.hard_routing_prob,
-            'merge_alpha': config.merge_alpha,
-            'ks_alpha': config.ks_alpha,
-            'mixed_winsor_sigma': config.mixed_winsor_sigma,
-            'transform_aggressiveness': 1.0,  # 默认值
             'classification_threshold_static': config.classification.static_ar1_threshold,
             'classification_threshold_dynamic': config.classification.dynamic_ar1_threshold,
-            'migration_threshold': 0.10,  # 默认值
+            'migration_threshold': getattr(config, 'migration_threshold', 0.10),
         }
 
     # =========================================================================
@@ -784,6 +766,13 @@ class EndToEndThresholdOptimizer:
         if not HAS_OPTUNA:
             raise ImportError("optuna 未安装: pip install optuna")
 
+        # v3.4.0 ADR: 默认搜索空间为空 → 无参数可搜, 直接拒绝 (不建 study)
+        if not self.search_space:
+            raise ValueError(
+                "无参数可搜索: 路由阈值已随统一管道退场; "
+                "如需正交化搜索请传 search_orth=True"
+            )
+
         # P2.5: HAS_PIPELINE 永远为 True (自身模块), 删除死代码检查
 
         n_total = len(factor_data)
@@ -811,7 +800,10 @@ class EndToEndThresholdOptimizer:
                     )
 
             # 约束: 确保静态阈值 > 动态阈值
-            if (params['classification_threshold_static']
+            # v3.4.0 ADR: 默认空间为空时两键不存在 → 守卫跳过 (orth 搜索路径)
+            if ('classification_threshold_static' in params
+                    and 'classification_threshold_dynamic' in params
+                    and params['classification_threshold_static']
                     <= params['classification_threshold_dynamic']):
                 return -1.0  # 惩罚无效配置
 

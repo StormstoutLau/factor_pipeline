@@ -42,7 +42,8 @@
 | ADR-039 | Mixed 缩尾统一为逐日截面 3σ (因果性修复) | v3.3.5, 2026-11-04 |
 | ADR-040 | AR 解耦改为因果三段式一步预测 (冻结窗口 + 间歇重估) | v3.3.6, 2026-11-04 |
 | ADR-041 | AR 阶数选择统一 hold_back 样本 (信息准则可比性) | v3.3.7, 2026-11-04 |
-| ADR-042 起 | 未占用 | — |
+| ADR-042 | 统一横截面秩管道替代三路指纹路由 | v3.4.0, 2026-11-10 |
+| ADR-043 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -2909,6 +2910,53 @@ BIC **2.200**、HQIC **3.867**（上限 5）。
 
 恢复 `_fit_ar` 的 `y[order:]` / 滞后列 / `n_obs=n-order` / 索引 `index[order:]`；
 删除守卫；版本回 v3.3.6、缓存回 `v2.2.4-cache`；删除并重建缓存。
+
+---
+
+## ADR-042: 统一横截面秩管道替代三路指纹路由 (v3.4.0)
+
+**日期**: 2026-11-10
+**状态**: 已实施 (2026-11-10, v3.4.0)
+**优先级**: P1
+**关联测试**: `tests/test_unified_routing.py` (T1-T14) / `tests/test_structural_break_monitor.py` (B1-B6)
+**调研/设计**: [FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md) v1.1 /
+[FACTOR_ROUTING_OVERENGINEERING_DESIGN.md](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) v1.2
+
+### 背景
+
+调研 (docs/analysis/FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md v1.1) 证实:
+软路由/五步多维树/线性混合器零生产调用; 默认 sigmoid 下 static/mixed 硬路由不可达;
+Static 与 Mixed 输出秩相关 0.999998; 指纹与 VR/DF 标签一致率 49.5%;
+12 因子改走 Dynamic 平均 |IC| −37.6%; 路由链无结构突变检测,
+而 AR(1) 本身会被 2σ 均值突变污染。
+
+### 决策
+
+1. `PipelineV2Config.pipeline_mode` 默认 `'unified'`, 所有因子走同一条
+   横截面秩管道 (imputer → 1%/99% 缩尾 → 中性化 → CSRankNorm → z);
+2. 删除 `_get_pipeline_weights` / `_get_multi_dim_pipeline_weights` /
+   `_apply_weighted_transform` 及 5 个只服务路由的配置字段;
+3. 指纹降级为只读诊断, 采样频率写入 `FingerprintMeta`;
+4. 管道选择/采样频率进入 `SpecificationLogger` (opt-in);
+5. 结构突变检测下沉到 `StructuralBreakMonitor`, 只告警;
+6. Dynamic 仅作为整臂 `'dynamic_ab'` 显式实验保留。
+
+### 后果
+
+- 原 static/mixed 因子输出逐位不变; 原 dynamic 因子改走统一管道 (基准稳定化);
+- 配置面缩小, 优化器默认搜索空间清空;
+- 缓存代际 `v2.2.5-cache` → `v2.3.0-cache`。
+
+### 替代方案
+
+- 保留三管道但默认 static — 否决: 分类仍在跑, 标签仍会漂移;
+- 统一 AR 残差化 — 否决: 实测 |IC| 下降;
+- MAD 缩尾 — 延后为独立实验 (O1)。
+
+### 回滚方案
+
+git revert 对应提交; 恢复 3 个路由函数与 5 个配置字段;
+`pipeline_mode` 默认回三路路由; 缓存回 `v2.2.5-cache` 并重建。
 
 ---
 

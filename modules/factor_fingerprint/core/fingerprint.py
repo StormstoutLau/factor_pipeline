@@ -114,6 +114,47 @@ class FingerprintConfig:
     tail_regime_weight: float = 0.5         # tail_regime_score 尾部权重 (M2 修订)
 
 
+def infer_sampling_frequency(index: pd.Index) -> str:
+    """v3.4.0 ADR (暂用号 ADR-042): 按索引相邻间隔中位数判定采样频率 (自然日).
+
+    阈值链: <1 intraday / ≤2 daily / ≤8 weekly / ≤20 biweekly /
+    ≤45 monthly / ≤135 quarterly / ≤400 annual / 其他 irregular.
+    非 DatetimeIndex 或有效间隔 <2 → 'unknown'.
+    (真周频中位 7 天 → weekly 阈值取 8, 设计 m8)
+
+    Args:
+        index: 因子面板的行索引
+
+    Returns:
+        频率标签字符串
+    """
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 3:
+        return 'unknown'
+    deltas = (
+        pd.Series(index.sort_values())
+        .diff().dt.total_seconds().div(86400.0).dropna()
+    )
+    deltas = deltas[deltas > 0]
+    if len(deltas) < 2:
+        return 'unknown'
+    med = float(deltas.median())
+    if med < 1:
+        return 'intraday'
+    if med <= 2:
+        return 'daily'
+    if med <= 8:
+        return 'weekly'
+    if med <= 20:
+        return 'biweekly'
+    if med <= 45:
+        return 'monthly'
+    if med <= 135:
+        return 'quarterly'
+    if med <= 400:
+        return 'annual'
+    return 'irregular'
+
+
 class FactorFingerprinter:
     """
     因子指纹提取器
@@ -275,6 +316,32 @@ class FactorFingerprinter:
             return np.nan
 
         return float(np.median(ar1_values))
+
+    def compute_ar1_path(self, factor_data: pd.DataFrame,
+                         window: int = 250, stride: int = 20) -> pd.Series:
+        """v3.4.0 ADR (暂用号 ADR-042): 逐窗口计算 AR(1) 中位数路径.
+
+        与指纹同一口径 (_compute_ar1_median); 供 StructuralBreakMonitor 消费.
+
+        Args:
+            factor_data: 因子面板 (rows=日期, columns=股票)
+            window: 滚动窗口长度 (正整数)
+            stride: 步长 (正整数)
+
+        Returns:
+            AR(1) 中位数路径, index=窗口末日; 数据不足时返回空 Series.
+            长度 = ⌊(T−w)/s⌋+1 (如 1472/250/20 → 62).
+        """
+        if window <= 0 or stride <= 0:
+            raise ValueError("window/stride 必须为正整数")
+        if factor_data is None or factor_data.empty or len(factor_data) < window:
+            return pd.Series(dtype=float)
+        dates, values = [], []
+        for end in range(window, len(factor_data) + 1, stride):
+            sub = factor_data.iloc[end - window:end]
+            dates.append(factor_data.index[end - 1])
+            values.append(self._compute_ar1_median(sub))
+        return pd.Series(values, index=pd.Index(dates, name='date'), dtype=float)
 
     def _compute_rank_autocorr(self, factor_data: pd.DataFrame, lag: int = 1) -> float:
         """

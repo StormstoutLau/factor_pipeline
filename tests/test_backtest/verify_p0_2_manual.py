@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-P0-2 手工校验: Pipeline-in-the-loop 真实调用验证
+P0-2 手工校验: Pipeline-in-the-loop 真实调用验证 (v3.4.0 弃用)
+
+.. deprecated:: v3.4.0 ADR-042
+   本脚本校验 v3.3.x 路由覆盖注入 (P0-2 fit 后 override);
+   v3.4.0 统一路由后 _override_routing 已删除, 仅作历史参考保留, 不再维护。
 
 手工计算流程:
   1. 构造 3 个模拟因子 (静态/动态/混合)

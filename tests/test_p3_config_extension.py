@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-P3 Phase 1: 配置扩展 — TDD 测试套件
+P3 Phase 1: 配置扩展 — 测试套件
 
-扩展 PipelineV2ConfigUnified 为端到端阈值搜索提供可调参数支持。
+v3.4.0 ADR (暂用号 ADR-042): PipelineV2ConfigUnified 统一路由/诊断/断点监控 8 字段契约。
 
-新增字段:
-  1. hard_routing_prob          = 0.90  [0.5, 1.0]
-  2. merge_alpha                = 0.50  [0.0, 1.0]
-  3. ks_alpha                   = 0.05  [0.001, 0.5]
-  4. mixed_winsor_sigma         = 3.0   [1.0, 10.0]
-  5. transform_aggressiveness   = 1.0   [0.3, 5.0]
-  6. enable_smooth_transition   = True  (已存在但需确认)
+字段契约:
+  1. pipeline_mode                = 'unified'   Literal['unified', 'dynamic_ab']
+  2. enable_fingerprint_diagnostics = True
+  3. ab_experiment_id             = None        Optional[str]
+  4. enable_break_monitor         = False
+  5. break_monitor_window         = 250  (ge=60)
+  6. break_monitor_stride         = 20   (ge=1)
+  7. break_monitor_alpha          = 0.05 (0 < x < 0.5)
+  8. break_monitor_n_bootstrap    = 400  (ge=50)
 """
 
 import unittest
@@ -27,23 +29,29 @@ class TestConfigExtensionDefaultValues(unittest.TestCase):
         """
         [P3-Phase1-01] 默认值正确。
 
-        手工校验: 构造默认 config，验证每个新字段的值。
+        手工校验: 构造默认 config，验证每个统一路由/诊断/断点监控字段的值。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
 
         config = PipelineV2ConfigUnified()
 
-        # 新字段默认值
-        self.assertEqual(config.hard_routing_prob, 0.90,
-            "hard_routing_prob 默认值应为 0.90")
-        self.assertEqual(config.merge_alpha, 0.50,
-            "merge_alpha 默认值应为 0.50")
-        self.assertEqual(config.ks_alpha, 0.05,
-            "ks_alpha 默认值应为 0.05")
-        self.assertEqual(config.mixed_winsor_sigma, 3.0,
-            "mixed_winsor_sigma 默认值应为 3.0")
-        self.assertEqual(config.transform_aggressiveness, 1.0,
-            "transform_aggressiveness 默认值应为 1.0")
+        # 统一路由/诊断/断点监控字段默认值
+        self.assertEqual(config.pipeline_mode, 'unified',
+            "pipeline_mode 默认值应为 'unified'")
+        self.assertEqual(config.enable_fingerprint_diagnostics, True,
+            "enable_fingerprint_diagnostics 默认值应为 True")
+        self.assertIsNone(config.ab_experiment_id,
+            "ab_experiment_id 默认值应为 None")
+        self.assertEqual(config.enable_break_monitor, False,
+            "enable_break_monitor 默认值应为 False")
+        self.assertEqual(config.break_monitor_window, 250,
+            "break_monitor_window 默认值应为 250")
+        self.assertEqual(config.break_monitor_stride, 20,
+            "break_monitor_stride 默认值应为 20")
+        self.assertEqual(config.break_monitor_alpha, 0.05,
+            "break_monitor_alpha 默认值应为 0.05")
+        self.assertEqual(config.break_monitor_n_bootstrap, 400,
+            "break_monitor_n_bootstrap 默认值应为 400")
 
         # 已有字段不受影响
         self.assertEqual(config.classification_threshold_static, 0.80)
@@ -53,11 +61,14 @@ class TestConfigExtensionDefaultValues(unittest.TestCase):
         self.assertEqual(config.fingerprint_window, 24)
 
         print(f"\n  手工校验通过:")
-        print(f"    hard_routing_prob        = {config.hard_routing_prob}")
-        print(f"    merge_alpha              = {config.merge_alpha}")
-        print(f"    ks_alpha                 = {config.ks_alpha}")
-        print(f"    mixed_winsor_sigma       = {config.mixed_winsor_sigma}")
-        print(f"    transform_aggressiveness = {config.transform_aggressiveness}")
+        print(f"    pipeline_mode                = {config.pipeline_mode}")
+        print(f"    enable_fingerprint_diagnostics = {config.enable_fingerprint_diagnostics}")
+        print(f"    ab_experiment_id             = {config.ab_experiment_id}")
+        print(f"    enable_break_monitor         = {config.enable_break_monitor}")
+        print(f"    break_monitor_window         = {config.break_monitor_window}")
+        print(f"    break_monitor_stride         = {config.break_monitor_stride}")
+        print(f"    break_monitor_alpha          = {config.break_monitor_alpha}")
+        print(f"    break_monitor_n_bootstrap    = {config.break_monitor_n_bootstrap}")
 
     def test_02_custom_values(self):
         """
@@ -68,133 +79,140 @@ class TestConfigExtensionDefaultValues(unittest.TestCase):
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
 
         config = PipelineV2ConfigUnified(
-            hard_routing_prob=0.75,
-            merge_alpha=0.30,
-            ks_alpha=0.10,
-            mixed_winsor_sigma=4.5,
-            transform_aggressiveness=2.0,
+            pipeline_mode='dynamic_ab',
+            enable_fingerprint_diagnostics=False,
+            ab_experiment_id='exp-2026-001',
+            enable_break_monitor=True,
+            break_monitor_window=300,
+            break_monitor_stride=10,
+            break_monitor_alpha=0.02,
+            break_monitor_n_bootstrap=500,
         )
 
-        self.assertEqual(config.hard_routing_prob, 0.75)
-        self.assertEqual(config.merge_alpha, 0.30)
-        self.assertEqual(config.ks_alpha, 0.10)
-        self.assertEqual(config.mixed_winsor_sigma, 4.5)
-        self.assertEqual(config.transform_aggressiveness, 2.0)
+        self.assertEqual(config.pipeline_mode, 'dynamic_ab')
+        self.assertEqual(config.enable_fingerprint_diagnostics, False)
+        self.assertEqual(config.ab_experiment_id, 'exp-2026-001')
+        self.assertEqual(config.enable_break_monitor, True)
+        self.assertEqual(config.break_monitor_window, 300)
+        self.assertEqual(config.break_monitor_stride, 10)
+        self.assertEqual(config.break_monitor_alpha, 0.02)
+        self.assertEqual(config.break_monitor_n_bootstrap, 500)
 
         print(f"\n  手工校验通过: 所有自定义值正确")
-        print(f"    hard_routing_prob        = {config.hard_routing_prob} (expected 0.75)")
-        print(f"    merge_alpha              = {config.merge_alpha} (expected 0.30)")
-        print(f"    ks_alpha                 = {config.ks_alpha} (expected 0.10)")
-        print(f"    mixed_winsor_sigma       = {config.mixed_winsor_sigma} (expected 4.5)")
-        print(f"    transform_aggressiveness = {config.transform_aggressiveness} (expected 2.0)")
+        print(f"    pipeline_mode                = {config.pipeline_mode} (expected dynamic_ab)")
+        print(f"    enable_fingerprint_diagnostics = {config.enable_fingerprint_diagnostics} (expected False)")
+        print(f"    ab_experiment_id             = {config.ab_experiment_id} (expected exp-2026-001)")
+        print(f"    enable_break_monitor         = {config.enable_break_monitor} (expected True)")
+        print(f"    break_monitor_window         = {config.break_monitor_window} (expected 300)")
+        print(f"    break_monitor_stride         = {config.break_monitor_stride} (expected 10)")
+        print(f"    break_monitor_alpha          = {config.break_monitor_alpha} (expected 0.02)")
+        print(f"    break_monitor_n_bootstrap    = {config.break_monitor_n_bootstrap} (expected 500)")
 
 
 class TestConfigExtensionConstraints(unittest.TestCase):
     """测试 2: 字段约束"""
 
-    def test_03_hard_routing_prob_bounds(self):
+    def test_03_pipeline_mode_literal_bounds(self):
         """
-        [P3-Phase1-03] hard_routing_prob 边界约束。
+        [P3-Phase1-03] pipeline_mode Literal 约束。
 
-        手工校验: 越界值应抛出 ValidationError。
+        手工校验: 非法模式应抛出 ValidationError; 两个合法模式应通过。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         from pydantic import ValidationError
 
-        # 低于下限
+        # 非法模式
         with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(hard_routing_prob=0.4)
+            PipelineV2ConfigUnified(pipeline_mode='hard_routing')
 
-        # 高于上限
-        with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(hard_routing_prob=1.1)
+        # 合法模式应通过
+        config_unified = PipelineV2ConfigUnified(pipeline_mode='unified')
+        self.assertEqual(config_unified.pipeline_mode, 'unified')
+        config_ab = PipelineV2ConfigUnified(pipeline_mode='dynamic_ab')
+        self.assertEqual(config_ab.pipeline_mode, 'dynamic_ab')
 
-        # 边界值应通过
-        config_lo = PipelineV2ConfigUnified(hard_routing_prob=0.5)
-        self.assertEqual(config_lo.hard_routing_prob, 0.5)
-        config_hi = PipelineV2ConfigUnified(hard_routing_prob=1.0)
-        self.assertEqual(config_hi.hard_routing_prob, 1.0)
+        print(f"\n  手工校验通过: pipeline_mode Literal 约束正确")
+        print(f"    'unified': OK, 'dynamic_ab': OK")
+        print(f"    非法模式: ValidationError (正确)")
 
-        print(f"\n  手工校验通过: 边界约束正确")
-        print(f"    下限 0.5: OK, 上限 1.0: OK")
-        print(f"    低于 0.5: ValidationError (正确)")
-        print(f"    高于 1.0: ValidationError (正确)")
-
-    def test_04_merge_alpha_bounds(self):
+    def test_04_break_monitor_window_bounds(self):
         """
-        [P3-Phase1-04] merge_alpha 边界约束。
+        [P3-Phase1-04] break_monitor_window 下界约束 (ge=60)。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         from pydantic import ValidationError
 
         with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(merge_alpha=-0.1)
-        with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(merge_alpha=1.1)
+            PipelineV2ConfigUnified(break_monitor_window=59)
 
-        config = PipelineV2ConfigUnified(merge_alpha=0.0)
-        self.assertEqual(config.merge_alpha, 0.0)
-        config = PipelineV2ConfigUnified(merge_alpha=1.0)
-        self.assertEqual(config.merge_alpha, 1.0)
+        config_lo = PipelineV2ConfigUnified(break_monitor_window=60)
+        self.assertEqual(config_lo.break_monitor_window, 60)
+        config_hi = PipelineV2ConfigUnified(break_monitor_window=1000)
+        self.assertEqual(config_hi.break_monitor_window, 1000)
 
-        print(f"\n  手工校验通过: merge_alpha [0.0, 1.0] 约束正确")
+        print(f"\n  手工校验通过: break_monitor_window ge=60 约束正确")
+        print(f"    下限 60: OK, 1000: OK")
+        print(f"    低于 60: ValidationError (正确)")
 
-    def test_05_ks_alpha_bounds(self):
+    def test_05_break_monitor_stride_bounds(self):
         """
-        [P3-Phase1-05] ks_alpha 边界约束。
-        """
-        from factor_pipeline.config_v2 import PipelineV2ConfigUnified
-        from pydantic import ValidationError
-
-        with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(ks_alpha=0.0005)
-        with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(ks_alpha=0.6)
-
-        config = PipelineV2ConfigUnified(ks_alpha=0.001)
-        self.assertEqual(config.ks_alpha, 0.001)
-        config = PipelineV2ConfigUnified(ks_alpha=0.5)
-        self.assertEqual(config.ks_alpha, 0.5)
-
-        print(f"\n  手工校验通过: ks_alpha [0.001, 0.5] 约束正确")
-
-    def test_06_mixed_winsor_sigma_bounds(self):
-        """
-        [P3-Phase1-06] mixed_winsor_sigma 边界约束。
+        [P3-Phase1-05] break_monitor_stride 下界约束 (ge=1)。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         from pydantic import ValidationError
 
         with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(mixed_winsor_sigma=0.5)
-        with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(mixed_winsor_sigma=11.0)
+            PipelineV2ConfigUnified(break_monitor_stride=0)
 
-        config = PipelineV2ConfigUnified(mixed_winsor_sigma=1.0)
-        self.assertEqual(config.mixed_winsor_sigma, 1.0)
-        config = PipelineV2ConfigUnified(mixed_winsor_sigma=10.0)
-        self.assertEqual(config.mixed_winsor_sigma, 10.0)
+        config_lo = PipelineV2ConfigUnified(break_monitor_stride=1)
+        self.assertEqual(config_lo.break_monitor_stride, 1)
+        config_hi = PipelineV2ConfigUnified(break_monitor_stride=100)
+        self.assertEqual(config_hi.break_monitor_stride, 100)
 
-        print(f"\n  手工校验通过: mixed_winsor_sigma [1.0, 10.0] 约束正确")
+        print(f"\n  手工校验通过: break_monitor_stride ge=1 约束正确")
+        print(f"    下限 1: OK, 100: OK")
+        print(f"    0: ValidationError (正确)")
 
-    def test_07_transform_aggressiveness_bounds(self):
+    def test_06_break_monitor_alpha_bounds(self):
         """
-        [P3-Phase1-07] transform_aggressiveness 边界约束。
+        [P3-Phase1-06] break_monitor_alpha 开区间约束 (0 < x < 0.5)。
+        """
+        from factor_pipeline.config_v2 import PipelineV2ConfigUnified
+        from pydantic import ValidationError
+
+        # 0 与 0.5 均为开区间端点, 应拒绝
+        with self.assertRaises(ValidationError):
+            PipelineV2ConfigUnified(break_monitor_alpha=0.0)
+        with self.assertRaises(ValidationError):
+            PipelineV2ConfigUnified(break_monitor_alpha=0.5)
+
+        config_lo = PipelineV2ConfigUnified(break_monitor_alpha=0.001)
+        self.assertEqual(config_lo.break_monitor_alpha, 0.001)
+        config_hi = PipelineV2ConfigUnified(break_monitor_alpha=0.499)
+        self.assertEqual(config_hi.break_monitor_alpha, 0.499)
+
+        print(f"\n  手工校验通过: break_monitor_alpha (0, 0.5) 开区间约束正确")
+        print(f"    0.001: OK, 0.499: OK")
+        print(f"    0.0 / 0.5: ValidationError (正确)")
+
+    def test_07_break_monitor_n_bootstrap_bounds(self):
+        """
+        [P3-Phase1-07] break_monitor_n_bootstrap 下界约束 (ge=50)。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         from pydantic import ValidationError
 
         with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(transform_aggressiveness=0.2)
-        with self.assertRaises(ValidationError):
-            PipelineV2ConfigUnified(transform_aggressiveness=6.0)
+            PipelineV2ConfigUnified(break_monitor_n_bootstrap=49)
 
-        config = PipelineV2ConfigUnified(transform_aggressiveness=0.3)
-        self.assertEqual(config.transform_aggressiveness, 0.3)
-        config = PipelineV2ConfigUnified(transform_aggressiveness=5.0)
-        self.assertEqual(config.transform_aggressiveness, 5.0)
+        config_lo = PipelineV2ConfigUnified(break_monitor_n_bootstrap=50)
+        self.assertEqual(config_lo.break_monitor_n_bootstrap, 50)
+        config_hi = PipelineV2ConfigUnified(break_monitor_n_bootstrap=1000)
+        self.assertEqual(config_hi.break_monitor_n_bootstrap, 1000)
 
-        print(f"\n  手工校验通过: transform_aggressiveness [0.3, 5.0] 约束正确")
+        print(f"\n  手工校验通过: break_monitor_n_bootstrap ge=50 约束正确")
+        print(f"    下限 50: OK, 1000: OK")
+        print(f"    低于 50: ValidationError (正确)")
 
 
 class TestConfigExtensionSerialization(unittest.TestCase):
@@ -204,7 +222,7 @@ class TestConfigExtensionSerialization(unittest.TestCase):
         """
         [P3-Phase1-08] JSON 序列化往返。
 
-        手工校验:  config → JSON → config，新字段值不变。
+        手工校验:  config → JSON → config，统一路由/诊断/断点监控字段值不变。
         """
         from factor_pipeline.config_v2 import (
             PipelineV2ConfigUnified,
@@ -214,11 +232,14 @@ class TestConfigExtensionSerialization(unittest.TestCase):
 
         original = PipelineV2ConfigUnified(
             name="test_p3",
-            hard_routing_prob=0.85,
-            merge_alpha=0.45,
-            ks_alpha=0.03,
-            mixed_winsor_sigma=3.5,
-            transform_aggressiveness=1.5,
+            pipeline_mode='dynamic_ab',
+            enable_fingerprint_diagnostics=False,
+            ab_experiment_id='exp-roundtrip-001',
+            enable_break_monitor=True,
+            break_monitor_window=300,
+            break_monitor_stride=15,
+            break_monitor_alpha=0.02,
+            break_monitor_n_bootstrap=600,
         )
 
         with tempfile.NamedTemporaryFile(
@@ -233,25 +254,36 @@ class TestConfigExtensionSerialization(unittest.TestCase):
             with open(tmp_path, 'r', encoding='utf-8') as f:
                 json_content = json.load(f)
             print(f"\n  JSON 内容:")
-            print(f"    hard_routing_prob: {json_content.get('hard_routing_prob')}")
-            print(f"    merge_alpha: {json_content.get('merge_alpha')}")
-            print(f"    ks_alpha: {json_content.get('ks_alpha')}")
-            print(f"    mixed_winsor_sigma: {json_content.get('mixed_winsor_sigma')}")
-            print(f"    transform_aggressiveness: {json_content.get('transform_aggressiveness')}")
+            print(f"    pipeline_mode: {json_content.get('pipeline_mode')}")
+            print(f"    enable_fingerprint_diagnostics: {json_content.get('enable_fingerprint_diagnostics')}")
+            print(f"    ab_experiment_id: {json_content.get('ab_experiment_id')}")
+            print(f"    enable_break_monitor: {json_content.get('enable_break_monitor')}")
+            print(f"    break_monitor_window: {json_content.get('break_monitor_window')}")
+            print(f"    break_monitor_stride: {json_content.get('break_monitor_stride')}")
+            print(f"    break_monitor_alpha: {json_content.get('break_monitor_alpha')}")
+            print(f"    break_monitor_n_bootstrap: {json_content.get('break_monitor_n_bootstrap')}")
 
-            self.assertEqual(json_content['hard_routing_prob'], 0.85)
-            self.assertEqual(json_content['merge_alpha'], 0.45)
-            self.assertEqual(json_content['ks_alpha'], 0.03)
-            self.assertEqual(json_content['mixed_winsor_sigma'], 3.5)
-            self.assertEqual(json_content['transform_aggressiveness'], 1.5)
+            self.assertEqual(json_content['pipeline_mode'], 'dynamic_ab')
+            self.assertEqual(json_content['enable_fingerprint_diagnostics'], False)
+            self.assertEqual(json_content['ab_experiment_id'], 'exp-roundtrip-001')
+            self.assertEqual(json_content['enable_break_monitor'], True)
+            self.assertEqual(json_content['break_monitor_window'], 300)
+            self.assertEqual(json_content['break_monitor_stride'], 15)
+            self.assertEqual(json_content['break_monitor_alpha'], 0.02)
+            self.assertEqual(json_content['break_monitor_n_bootstrap'], 600)
 
             # 反序列化
             loaded = load_config_from_json(tmp_path)
-            self.assertEqual(loaded.hard_routing_prob, original.hard_routing_prob)
-            self.assertEqual(loaded.merge_alpha, original.merge_alpha)
-            self.assertEqual(loaded.ks_alpha, original.ks_alpha)
-            self.assertEqual(loaded.mixed_winsor_sigma, original.mixed_winsor_sigma)
-            self.assertEqual(loaded.transform_aggressiveness, original.transform_aggressiveness)
+            self.assertEqual(loaded.pipeline_mode, original.pipeline_mode)
+            self.assertEqual(loaded.enable_fingerprint_diagnostics,
+                             original.enable_fingerprint_diagnostics)
+            self.assertEqual(loaded.ab_experiment_id, original.ab_experiment_id)
+            self.assertEqual(loaded.enable_break_monitor, original.enable_break_monitor)
+            self.assertEqual(loaded.break_monitor_window, original.break_monitor_window)
+            self.assertEqual(loaded.break_monitor_stride, original.break_monitor_stride)
+            self.assertEqual(loaded.break_monitor_alpha, original.break_monitor_alpha)
+            self.assertEqual(loaded.break_monitor_n_bootstrap,
+                             original.break_monitor_n_bootstrap)
 
             print(f"\n  手工校验通过: JSON 往返一致")
         finally:
@@ -259,33 +291,42 @@ class TestConfigExtensionSerialization(unittest.TestCase):
 
     def test_09_model_dump_includes_new_fields(self):
         """
-        [P3-Phase1-09] model_dump() 包含新字段。
+        [P3-Phase1-09] model_dump() 包含统一路由/诊断/断点监控字段。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
 
         config = PipelineV2ConfigUnified(
-            hard_routing_prob=0.77,
-            merge_alpha=0.33,
-            ks_alpha=0.07,
-            mixed_winsor_sigma=2.5,
-            transform_aggressiveness=0.8,
+            pipeline_mode='dynamic_ab',
+            enable_fingerprint_diagnostics=False,
+            ab_experiment_id='exp-dump-001',
+            enable_break_monitor=True,
+            break_monitor_window=300,
+            break_monitor_stride=15,
+            break_monitor_alpha=0.02,
+            break_monitor_n_bootstrap=600,
         )
 
         dumped = config.model_dump()
 
-        self.assertIn('hard_routing_prob', dumped)
-        self.assertIn('merge_alpha', dumped)
-        self.assertIn('ks_alpha', dumped)
-        self.assertIn('mixed_winsor_sigma', dumped)
-        self.assertIn('transform_aggressiveness', dumped)
+        self.assertIn('pipeline_mode', dumped)
+        self.assertIn('enable_fingerprint_diagnostics', dumped)
+        self.assertIn('ab_experiment_id', dumped)
+        self.assertIn('enable_break_monitor', dumped)
+        self.assertIn('break_monitor_window', dumped)
+        self.assertIn('break_monitor_stride', dumped)
+        self.assertIn('break_monitor_alpha', dumped)
+        self.assertIn('break_monitor_n_bootstrap', dumped)
 
-        self.assertEqual(dumped['hard_routing_prob'], 0.77)
-        self.assertEqual(dumped['merge_alpha'], 0.33)
-        self.assertEqual(dumped['ks_alpha'], 0.07)
-        self.assertEqual(dumped['mixed_winsor_sigma'], 2.5)
-        self.assertEqual(dumped['transform_aggressiveness'], 0.8)
+        self.assertEqual(dumped['pipeline_mode'], 'dynamic_ab')
+        self.assertEqual(dumped['enable_fingerprint_diagnostics'], False)
+        self.assertEqual(dumped['ab_experiment_id'], 'exp-dump-001')
+        self.assertEqual(dumped['enable_break_monitor'], True)
+        self.assertEqual(dumped['break_monitor_window'], 300)
+        self.assertEqual(dumped['break_monitor_stride'], 15)
+        self.assertEqual(dumped['break_monitor_alpha'], 0.02)
+        self.assertEqual(dumped['break_monitor_n_bootstrap'], 600)
 
-        print(f"\n  手工校验通过: model_dump() 包含全部新字段")
+        print(f"\n  手工校验通过: model_dump() 包含全部统一路由/诊断/断点监控字段")
 
 
 class TestConfigExtensionBackwardCompat(unittest.TestCase):
@@ -295,7 +336,7 @@ class TestConfigExtensionBackwardCompat(unittest.TestCase):
         """
         [P3-Phase1-10] 已有字段不受影响。
 
-        手工校验: 只使用已有字段构造 config，验证新字段取默认值。
+        手工校验: 只使用已有字段构造 config，验证统一路由/诊断/断点监控字段取默认值。
         """
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
 
@@ -315,16 +356,19 @@ class TestConfigExtensionBackwardCompat(unittest.TestCase):
         self.assertEqual(config.migration_threshold, 0.12)
         self.assertEqual(config.fingerprint_window, 36)
 
-        # 新字段应取默认值
-        self.assertEqual(config.hard_routing_prob, 0.90)
-        self.assertEqual(config.merge_alpha, 0.50)
-        self.assertEqual(config.ks_alpha, 0.05)
-        self.assertEqual(config.mixed_winsor_sigma, 3.0)
-        self.assertEqual(config.transform_aggressiveness, 1.0)
+        # 统一路由/诊断/断点监控字段应取默认值
+        self.assertEqual(config.pipeline_mode, 'unified')
+        self.assertEqual(config.enable_fingerprint_diagnostics, True)
+        self.assertIsNone(config.ab_experiment_id)
+        self.assertEqual(config.enable_break_monitor, False)
+        self.assertEqual(config.break_monitor_window, 250)
+        self.assertEqual(config.break_monitor_stride, 20)
+        self.assertEqual(config.break_monitor_alpha, 0.05)
+        self.assertEqual(config.break_monitor_n_bootstrap, 400)
 
         print(f"\n  手工校验通过: 向后兼容")
         print(f"    已有字段: 自定义值正确")
-        print(f"    新字段: 默认值正确")
+        print(f"    统一路由/诊断/断点监控字段: 默认值正确")
 
     def test_11_sub_configs_unaffected(self):
         """
@@ -371,8 +415,8 @@ class TestConfigExtensionBackwardCompat(unittest.TestCase):
 
         config = PipelineV2ConfigUnified(
             name="compat_test",
-            hard_routing_prob=0.88,
-            merge_alpha=0.55,
+            pipeline_mode='dynamic_ab',
+            enable_break_monitor=True,
         )
 
         # 兼容层转换不应报错
@@ -380,8 +424,10 @@ class TestConfigExtensionBackwardCompat(unittest.TestCase):
             legacy = config.to_pipeline_config()
             self.assertIsNotNone(legacy)
             self.assertEqual(legacy.name, "compat_test")
+            self.assertEqual(len(legacy.steps), 5)
             print(f"\n  手工校验通过: to_pipeline_config() 兼容层正常")
             print(f"    legacy.name = {legacy.name}")
+            print(f"    legacy.steps = {len(legacy.steps)}")
         except Exception as e:
             self.fail(f"to_pipeline_config() 失败: {e}")
 
@@ -393,7 +439,7 @@ class TestConfigExtensionBackwardCompat(unittest.TestCase):
 def run_all_tests():
     """运行所有 Phase 1 配置扩展测试"""
     print("=" * 70)
-    print("P3 Phase 1: 配置扩展 — TDD 测试套件")
+    print("P3 Phase 1: 配置扩展 — 测试套件")
     print("=" * 70)
     print()
 

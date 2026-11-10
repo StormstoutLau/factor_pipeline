@@ -1,5 +1,76 @@
 # 开发日志 (Changelog)
 
+## v3.4.0 — 因子路由统一化治理 (已实施, 2026-11-10)
+
+### 概览
+
+统一横截面秩管道替代三路指纹路由 (**ADR-042**): 默认 `pipeline_mode='unified'`,
+所有因子走同一条管道 (ffill → 1%/99% 缩尾 → 中性化 → rank→normal → z-score),
+不再按 VR/DF 分类逐因子选管道; 指纹降级为只读诊断;
+`DynamicFactorPipeline` 仅经 `pipeline_mode='dynamic_ab'` 整臂保留。
+
+**核心产出**:
+- 删除 3 个路由函数: `_get_pipeline_weights` / `_get_multi_dim_pipeline_weights` /
+  `_apply_weighted_transform`
+- 配置面: dataclass 删 5 字段 (`hard_routing_prob` / `merge_alpha` / `ks_alpha` /
+  `mixed_winsor_sigma` / `enable_multi_dim_routing`), Pydantic 删 5 字段
+  (上述 4 共享字段 + `transform_aggressiveness`); 新增 8 字段
+  (`pipeline_mode` / `enable_fingerprint_diagnostics` / `ab_experiment_id` /
+  `enable_break_monitor` / `break_monitor_window` / `break_monitor_stride` /
+  `break_monitor_alpha` / `break_monitor_n_bootstrap`)
+- 优化器 (ADR-042 联动): `DEFAULT_SEARCH_SPACE` 清空 — 默认实例化发
+  `DeprecationWarning`, `optimize` 空空间抛 `ValueError`; `_params_to_config`/
+  `_config_to_params` 收敛为 3 参数契约
+- 消融适配: `AblationConfig.routing_mode` 收缩为 'full'/'unified'/'dynamic';
+  `run_l2` 5 配置 → 2 臂 + 可选参照; 删 `_override_routing`
+- Mixed 管道不再自动创建; `mixed_winsor_sigma` 改由 `MixedFactorPipeline`
+  默认值 3.0 承担; D9: Mixed/Dynamic 类保留 (仅供显式 A/B 与直调)
+- 新增 `get_routing_summary()` / `monitor_structural_breaks()` 管道方法;
+  管道选择与采样频率写入 `SpecificationLogger` (opt-in)
+- 项目版本 **3.4.0**; 缓存 `CODE_VERSION` **v2.3.0-cache**
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `pipelines_v2.py` | 配置 8 加 5 删; `fit`/`transform` 统一路由; 删 3 个路由函数; 新增 `FactorRoutingRecord`/`FingerprintMeta` |
+| `config_v2.py` | Pydantic 5 删 8 加; 桥接映射; 版本 |
+| `optimizer.py` | 搜索空间清空 + 弃用警告 + `optimize` 守卫 |
+| `backtest/ablation_runner.py` | `routing_mode` 收缩 3 值; `run_l2` 2 臂; 删 `_override_routing` |
+| `backtest/structural_break_monitor.py` | **新增** sup-F / CUSUM 断点监控 (自助 p 值, 只告警) |
+| `modules/factor_fingerprint/` | `infer_sampling_frequency` / `compute_ar1_path` |
+| `backtest/cache_manager.py` | `v2.3.0-cache` |
+| 版本链 6 处 / 文档 6 份 | 3.4.0 / ADR-042 |
+
+### 兼容性
+
+- **不兼容**: 原 dynamic 因子输出变化 (改走统一管道, 历史基准需重算);
+  配置面删字段; 需重建缓存 (`v2.2.5-cache` → `v2.3.0-cache`)。
+- **兼容**: 旧配置 JSON 可加载 (`extra='ignore'` 忽略已删字段); 三管道类保留;
+  公共 `fit`/`transform` 签名不变。
+- **迁移**: 依赖 `hard_routing_prob` 等已删字段的代码需删除;
+  依赖路由阈值的优化器调用改 `search_orth=True` 或迁移到统一管道语义。
+
+### 已知遗留
+
+- 断点监控为 opt-in 只告警, 未接入调度 (O6);
+- MAD 缩尾 / Dynamic 组件解耦 / DuckDB schema 迁移延后 (O1/O2/O5)。
+
+### 实测矩阵 (步骤 9 TDD 正式落库)
+
+| 层级 | 对象 | 实施前 (Red) | 实施后 (Green) |
+|------|------|-------------|---------------|
+| unit | 统一路由 T1–T14 | 14 failed / 2 passed | **22 passed** (含 T13 两方法) |
+| unit | 断点监控 B1–B6 | 模块不存在 (收集错误) | **6 passed** (B1 sup-F 检出 p≈0.0025) |
+| unit | E7 动态 (ablation + task1) | 104 passed (基线) | **95 passed** (2 臂口径; 删 10 增 1) |
+| regression | 靶向 16 文件 | 基线 279 例全绿 | **273 passed / 1 语义 skip / 0 failed** |
+| regression | 版本统一 | 7 passed | **7 passed** (6 处 3.4.0 + v2.3.0-cache) |
+| perf | fit+transform 12 因子×750 行 | T0 = 12.246s (0ff2420, min-of-5) | **12.359s → ratio 1.0092 ≤ 1.05** |
+| invariant | 统一逐位等价 (T2) / dynamic_ab 等价 (T3) | — | `check_exact=True` 全等 |
+| grep | 5 已删字段 / 3 已删函数 | — | pytest 收集文件与生产代码 **0 残留** |
+
+**回归**: 靶向批 1 (11 文件) 115 passed / 1 skipped (78.75s) + 批 2 (5 文件) 158 passed (595.69s); duckdb 2.0.0 / optuna 5.0.0 已装, 历史环境例外全部消除。
+
 ## v3.3.7 — PL-08 AR 阶数选择 hold_back 可比性修复 (已实施, 2026-11-04)
 
 ### 概览

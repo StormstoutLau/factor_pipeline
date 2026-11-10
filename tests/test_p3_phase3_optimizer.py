@@ -31,57 +31,34 @@ class TestOptimizerInit(unittest.TestCase):
 
     def test_01_optimizer_creation(self):
         """
-        [P3-Phase3-01] 优化器创建成功，搜索空间包含 8 维参数。
+        [P3-Phase3-01] v3.4.0 新契约: 优化器创建成功, 默认搜索空间为空.
+
+        路由阈值随统一管道退场 → DEFAULT_SEARCH_SPACE == {},
+        空空间触发 DeprecationWarning 提示 search_orth=True.
         """
+        import warnings
+
+        from factor_pipeline import optimizer as optimizer_mod
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
-        optimizer = EndToEndThresholdOptimizer(n_trials=10)
+        # 模块常量: 默认无可搜参数
+        self.assertEqual(optimizer_mod.DEFAULT_SEARCH_SPACE, {},
+                         "v3.4.0 ADR: DEFAULT_SEARCH_SPACE 应为空字典")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            optimizer = EndToEndThresholdOptimizer(n_trials=10)
 
         self.assertIsNotNone(optimizer)
         self.assertEqual(optimizer.n_trials, 10)
-        self.assertEqual(len(optimizer.search_space), 8,
-            f"搜索空间应有 8 维，实际 {len(optimizer.search_space)}")
+        self.assertEqual(optimizer.search_space, {},
+                         "search_orth=False 时 search_space 应为空字典")
+        self.assertTrue(
+            any(issubclass(x.category, DeprecationWarning) for x in w),
+            "空默认搜索空间应触发 DeprecationWarning")
 
-        expected_params = [
-            'hard_routing_prob', 'merge_alpha', 'ks_alpha',
-            'mixed_winsor_sigma', 'transform_aggressiveness',
-            'classification_threshold_static', 'classification_threshold_dynamic',
-            'migration_threshold',
-        ]
-        for param in expected_params:
-            self.assertIn(param, optimizer.search_space,
-                f"搜索空间应包含 {param}")
-
-        print(f"\n  手工校验通过: 搜索空间 {len(optimizer.search_space)} 维")
-        for name, spec in optimizer.search_space.items():
-            print(f"    {name}: [{spec['low']}, {spec['high']}] ({spec.get('type', 'float')})")
-
-    def test_02_search_space_bounds(self):
-        """
-        [P3-Phase3-02] 搜索空间边界正确。
-        """
-        from factor_pipeline.optimizer import EndToEndThresholdOptimizer
-
-        optimizer = EndToEndThresholdOptimizer(n_trials=10)
-        bounds = {
-            'hard_routing_prob':              (0.5, 1.0),
-            'merge_alpha':                    (0.0, 1.0),
-            'ks_alpha':                       (0.001, 0.5),
-            'mixed_winsor_sigma':             (1.0, 10.0),
-            'transform_aggressiveness':       (0.3, 5.0),
-            'classification_threshold_static': (0.5, 1.0),
-            'classification_threshold_dynamic': (0.0, 0.5),
-            'migration_threshold':            (0.0, 1.0),
-        }
-
-        for name, (lo, hi) in bounds.items():
-            spec = optimizer.search_space[name]
-            self.assertAlmostEqual(spec['low'], lo, places=6,
-                msg=f"{name} 下限应为 {lo}")
-            self.assertAlmostEqual(spec['high'], hi, places=6,
-                msg=f"{name} 上限应为 {hi}")
-
-        print(f"\n  手工校验通过: 8 维搜索空间边界全部正确")
+        print(f"\n  手工校验通过: DEFAULT_SEARCH_SPACE 为空, "
+              f"optimizer.search_space = {optimizer.search_space}")
 
 
 # =============================================================================
@@ -496,8 +473,10 @@ class TestParamMapping(unittest.TestCase):
 
     def test_08_params_to_config(self):
         """
-        [P3-Phase3-08] 优化参数正确映射到 PipelineV2Config。
-        P0-2 更新: transform_aggressiveness 会调整 mixed_winsor_sigma
+        [P3-Phase3-08] v3.4.0 新契约: 优化参数正确映射到 PipelineV2Config (3 参数契约).
+
+        仅 classification_threshold_static/dynamic 与 migration_threshold 可映射;
+        其余键不在 _params_to_config 消费列表中 (未传入, 故不覆盖).
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
         from factor_pipeline.pipelines_v2 import PipelineV2Config
@@ -505,11 +484,6 @@ class TestParamMapping(unittest.TestCase):
         optimizer = EndToEndThresholdOptimizer(n_trials=10)
 
         params = {
-            'hard_routing_prob': 0.85,
-            'merge_alpha': 0.45,
-            'ks_alpha': 0.03,
-            'mixed_winsor_sigma': 3.5,
-            'transform_aggressiveness': 1.0,  # 1.0 = 不调整
             'classification_threshold_static': 0.75,
             'classification_threshold_dynamic': 0.35,
             'migration_threshold': 0.15,
@@ -518,41 +492,53 @@ class TestParamMapping(unittest.TestCase):
         config = optimizer._params_to_config(params)
 
         self.assertIsInstance(config, PipelineV2Config)
-        self.assertEqual(config.hard_routing_prob, 0.85)
-        self.assertEqual(config.merge_alpha, 0.45)
-        self.assertEqual(config.ks_alpha, 0.03)
-        # transform_aggressiveness=1.0 时不调整
-        self.assertEqual(config.mixed_winsor_sigma, 3.5)
+        self.assertEqual(config.classification.static_ar1_threshold, 0.75)
+        self.assertEqual(config.classification.dynamic_ar1_threshold, 0.35)
+        self.assertEqual(config.migration_threshold, 0.15)
+        # migration_threshold 联动启用平滑过渡
+        self.assertTrue(config.monitor.enable_smooth_transition)
 
-        print(f"\n  手工校验: 参数映射到配置")
-        print(f"    hard_routing_prob={config.hard_routing_prob}")
-        print(f"    merge_alpha={config.merge_alpha}")
-        print(f"    ks_alpha={config.ks_alpha}")
-        print(f"    mixed_winsor_sigma={config.mixed_winsor_sigma}")
+        print(f"\n  手工校验: 3 参数契约映射到配置")
+        print(f"    static={config.classification.static_ar1_threshold}")
+        print(f"    dynamic={config.classification.dynamic_ar1_threshold}")
+        print(f"    migration_threshold={config.migration_threshold}")
 
     def test_09_config_roundtrip(self):
         """
-        [P3-Phase3-09] 配置 → 参数字典 → 配置 往返一致。
+        [P3-Phase3-09] v3.4.0 新契约: 配置 → 3 参数字典 → 配置 往返一致.
+
+        _config_to_params 仅返回 3 个保留参数键.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         optimizer = EndToEndThresholdOptimizer(n_trials=10)
 
-        original = PipelineV2Config(
-            hard_routing_prob=0.77,
-            merge_alpha=0.33,
-            ks_alpha=0.07,
-            mixed_winsor_sigma=2.5,
-        )
+        original = PipelineV2Config()
+        original.classification.static_ar1_threshold = 0.77
+        original.classification.dynamic_ar1_threshold = 0.33
+        original.migration_threshold = 0.20
 
         params = optimizer._config_to_params(original)
+
+        # 3 参数契约: 键集合精确
+        self.assertEqual(
+            set(params.keys()),
+            {'classification_threshold_static',
+             'classification_threshold_dynamic',
+             'migration_threshold'},
+            msg="_config_to_params 应精确返回 3 个保留参数键")
+
         restored = optimizer._params_to_config(params)
 
-        for field in ['hard_routing_prob', 'merge_alpha', 'ks_alpha', 'mixed_winsor_sigma']:
-            self.assertEqual(getattr(restored, field), getattr(original, field))
+        self.assertEqual(restored.classification.static_ar1_threshold,
+                         original.classification.static_ar1_threshold)
+        self.assertEqual(restored.classification.dynamic_ar1_threshold,
+                         original.classification.dynamic_ar1_threshold)
+        self.assertEqual(restored.migration_threshold,
+                         original.migration_threshold)
 
-        print(f"\n  手工校验: 配置往返一致")
+        print(f"\n  手工校验: 3 参数契约往返一致")
 
     # =====================================================================
     # E2 (v2.6.0): migration_threshold 字段位置修正
@@ -670,19 +656,23 @@ class TestParamMapping(unittest.TestCase):
     # =====================================================================
 
     def test_e5_01_search_space_orth_default_off(self):
-        """[v2.6.0-E5-01] search_orth=False (默认) 时, search_space 不含 orth_* 键.
+        """[v2.6.0-E5-01] search_orth=False (默认) 时, search_space 与 DEFAULT_SEARCH_SPACE 一致.
 
-        向后兼容: 未启用正交化搜索时, 搜索空间与 v2.5.0 一致 (8 维).
+        v3.4.0: DEFAULT_SEARCH_SPACE 为空字典 → 默认 search_space 也为空.
         """
+        from factor_pipeline import optimizer as optimizer_mod
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         optimizer = EndToEndThresholdOptimizer(n_trials=1)  # 默认 search_orth=False
 
+        self.assertEqual(optimizer.search_space, optimizer_mod.DEFAULT_SEARCH_SPACE,
+                         msg="search_orth=False 时 search_space 应与模块常量一致")
         orth_keys = [k for k in optimizer.search_space if k.startswith('orth_')]
         self.assertEqual(len(orth_keys), 0,
                          msg=f"search_orth=False 时不应有 orth_* 键, 实际: {orth_keys}")
 
-        print(f"\n  手工校验 E5-01: search_orth=False, orth 键数 = {len(orth_keys)}")
+        print(f"\n  手工校验 E5-01: search_orth=False, search_space = "
+              f"{optimizer.search_space}")
 
     def test_e5_02_search_space_orth_enabled(self):
         """[v2.6.0-E5-02] search_orth=True 时, search_space 含 3 个 orth_* 键.
@@ -851,41 +841,109 @@ class TestParamMapping(unittest.TestCase):
         print(f"    ridge:    ridge_lambda = {config_ridge.orthogonalization.ridge_lambda}")
         print(f"    symmetric: ridge_lambda = {config_sym.orthogonalization.ridge_lambda} (默认)")
 
-    def test_e5_08_search_orth_backward_compatible(self):
-        """[v2.6.0-E5-08] search_orth=False 时, search_space 维度=8 (与 v2.5.0 一致).
 
-        回归测试: 启用 E5 后, 默认行为不变, 不影响 860 基线.
+# =============================================================================
+# G. v3.4.0 搜索空间收敛 (统一路由治理)
+# =============================================================================
+
+class TestV340SearchSpaceConvergence(unittest.TestCase):
+    """测试 G: optimize() 空空间拒绝 + 约束守卫"""
+
+    def _make_factor_and_returns(self, n_stocks=50, n_periods=30, seed=42):
+        rng = np.random.default_rng(seed)
+        dates = pd.date_range("2020-01-01", periods=n_periods, freq="ME")
+        stocks = [f"S{i:03d}" for i in range(n_stocks)]
+        factor_raw = rng.standard_normal((n_periods, n_stocks))
+        factor_data = {
+            "f1": pd.DataFrame(factor_raw, index=dates, columns=stocks),
+        }
+        forward_returns = pd.DataFrame(
+            0.3 * factor_raw + rng.standard_normal((n_periods, n_stocks)) * 0.9,
+            index=dates, columns=stocks,
+        )
+        return factor_data, forward_returns
+
+    def test_v340_01_optimize_empty_search_space_raises(self):
+        """[v3.4.0-G-01] 默认空搜索空间下 optimize() 直接抛 ValueError.
+
+        路由阈值退场后无参数可搜 → 不建 study, 显式失败 (非静默空跑).
         """
+        import re
+
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
-        # search_orth=False (默认)
-        optimizer_default = EndToEndThresholdOptimizer(n_trials=1)
-        # search_orth=False 显式
-        optimizer_explicit = EndToEndThresholdOptimizer(n_trials=1, search_orth=False)
+        optimizer = EndToEndThresholdOptimizer(n_trials=5)
+        factor_data, fwd = self._make_factor_and_returns()
 
-        self.assertEqual(len(optimizer_default.search_space), 8,
-                         "默认 search_space 应为 8 维 (v2.5.0 一致)")
-        self.assertEqual(len(optimizer_explicit.search_space), 8,
-                         "search_orth=False 应为 8 维 (v2.5.0 一致)")
+        with self.assertRaises(ValueError) as ctx:
+            optimizer.optimize(factor_data, fwd, show_progress=False)
 
-        # 验证 8 维键名 (v2.5.0 基线)
-        expected_v250_keys = {
-            'hard_routing_prob', 'merge_alpha', 'ks_alpha',
-            'mixed_winsor_sigma', 'transform_aggressiveness',
-            'classification_threshold_static', 'classification_threshold_dynamic',
-            'migration_threshold',
-        }
-        self.assertEqual(set(optimizer_default.search_space.keys()), expected_v250_keys,
-                         "search_space 键名应与 v2.5.0 一致")
+        # 错误信息应引导正确用法 (search_orth=True)
+        msg = str(ctx.exception)
+        self.assertIn("search_orth", msg,
+                      msg=f"错误信息应提示 search_orth=True, 实际: {msg}")
+        # 空空间拒绝发生在建 study 之前
+        self.assertIsNone(optimizer.study,
+                          msg="空空间下 optimize() 不应创建 study")
 
-        # search_orth=True: 维度=11 (8 + 3 orth_*)
-        optimizer_orth = EndToEndThresholdOptimizer(n_trials=1, search_orth=True)
-        self.assertEqual(len(optimizer_orth.search_space), 11,
-                         "search_orth=True 应为 11 维 (8 + 3 orth_*)")
+        print(f"\n  手工校验 G-01: 空空间 optimize() 抛 ValueError: "
+              f"{re.sub(chr(10), ' ', msg)}")
 
-        print(f"\n  手工校验 E5-08: 向后兼容")
-        print(f"    search_orth=False: {len(optimizer_default.search_space)} 维")
-        print(f"    search_orth=True:  {len(optimizer_orth.search_space)} 维")
+    def test_v340_02_constraint_guard_penalizes_invalid_config(self):
+        """[v3.4.0-G-02] 约束守卫: static <= dynamic 的 trial 被惩罚为 -1.0.
+
+        注入重叠的阈值搜索区间以触发守卫分支;
+        守卫应在 Pipeline 评估之前短路返回 -1.0.
+        """
+        from unittest import mock
+
+        from factor_pipeline.optimizer import EndToEndThresholdOptimizer
+
+        optimizer = EndToEndThresholdOptimizer(
+            n_trials=40, cv_min_train=10, cv_test_size=3,
+            random_seed=42, search_orth=True,
+        )
+        # 注入重叠区间 → 部分 trial 必然违反 static > dynamic 约束
+        optimizer.search_space['classification_threshold_static'] = {
+            'type': 'float', 'low': 0.0, 'high': 1.0}
+        optimizer.search_space['classification_threshold_dynamic'] = {
+            'type': 'float', 'low': 0.0, 'high': 1.0}
+
+        factor_data, fwd = self._make_factor_and_returns()
+
+        with mock.patch(
+            "factor_pipeline.optimizer.FactorProcessingPipelineV2"
+        ) as MockPipeline:
+            mock_instance = mock.MagicMock()
+            MockPipeline.return_value = mock_instance
+            mock_instance.fit.return_value = mock_instance
+            mock_instance.transform.side_effect = lambda fd: fd
+
+            optimizer.optimize(factor_data, fwd, show_progress=False)
+
+        self.assertIsNotNone(optimizer.study)
+        self.assertGreater(len(optimizer.study.trials), 0)
+
+        violated = [
+            t for t in optimizer.study.trials
+            if t.params['classification_threshold_static']
+            <= t.params['classification_threshold_dynamic']
+        ]
+        # TPE 随机启动阶段在 [0,1]^2 采样 → 应出现违反约束的 trial
+        self.assertGreater(
+            len(violated), 0,
+            msg="40 个 trial 应采到违反约束的样本 (覆盖守卫分支)")
+        for t in violated:
+            self.assertEqual(
+                t.value, -1.0,
+                msg=f"trial {t.number}: static="
+                    f"{t.params['classification_threshold_static']:.4f} <= "
+                    f"dynamic={t.params['classification_threshold_dynamic']:.4f} "
+                    f"应被守卫惩罚为 -1.0, 实际 {t.value}")
+
+        print(f"\n  手工校验 G-02: 约束守卫")
+        print(f"    总 trial 数 = {len(optimizer.study.trials)}, "
+              f"违反约束 = {len(violated)} (全部惩罚为 -1.0)")
 
 
 # =============================================================================
@@ -1329,8 +1387,6 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
 
         # 使用默认参数构造 best_params
         best_params = {
-            'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-            'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
             'classification_threshold_static': 0.7,
             'classification_threshold_dynamic': 0.3,
             'migration_threshold': 0.1,
@@ -1355,8 +1411,6 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
         factor_dict, fwd = self._make_factor_and_returns(K=3, N=80, T=15)
 
         best_params = {
-            'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-            'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
             'classification_threshold_static': 0.7,
             'classification_threshold_dynamic': 0.3,
             'migration_threshold': 0.1,
@@ -1383,8 +1437,6 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
         factor_dict, fwd = self._make_factor_and_returns(K=5, N=80, T=15, seed=123)
 
         best_params = {
-            'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-            'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
             'classification_threshold_static': 0.7,
             'classification_threshold_dynamic': 0.3,
             'migration_threshold': 0.1,
@@ -1408,17 +1460,19 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
     def test_e7_04_no_warning_when_high_ratio(self):
         """[v2.6.0-E7-04] significance_ratio >= 0.5 时, warning 为 None.
 
-        构造强 alpha 因子 (fwd = factor_0 * 0.5 + noise), 显著性比例高.
+        构造强 alpha 因子 (f0/f1 均含真实信号, fwd = 0.5*f0 + 0.5*f1 + noise),
+        3 因子中 2 个显著 → ratio >= 0.5.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         optimizer = EndToEndThresholdOptimizer(n_trials=1)
         rng = np.random.default_rng(42)
         N, T, K = 80, 15, 3
-        # f0 有真实 alpha
+        # f0/f1 有真实 alpha (K=3 中 2 个显著 → ratio ≈ 0.67 >= 0.5)
         f0 = rng.standard_normal((N, T))
+        f1 = rng.standard_normal((N, T))
         fwd = pd.DataFrame(
-            (f0 * 0.5 + rng.standard_normal((N, T)) * 0.1).T,  # 强信号
+            (f0 * 0.5 + f1 * 0.5 + rng.standard_normal((N, T)) * 0.1).T,  # 强信号
             index=pd.date_range('2020-01-01', periods=T, freq='D'),
             columns=[f's{i:03d}' for i in range(N)],
         )
@@ -1427,8 +1481,12 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
                 f0, index=[f's{i:03d}' for i in range(N)],
                 columns=pd.date_range('2020-01-01', periods=T, freq='D'),
             ),
+            'f1': pd.DataFrame(
+                f1, index=[f's{i:03d}' for i in range(N)],
+                columns=pd.date_range('2020-01-01', periods=T, freq='D'),
+            ),
         }
-        for k in range(1, K):
+        for k in range(2, K):
             factor_dict[f'f{k}'] = pd.DataFrame(
                 rng.standard_normal((N, T)),
                 index=[f's{i:03d}' for i in range(N)],
@@ -1436,8 +1494,6 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
             )
 
         best_params = {
-            'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-            'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
             'classification_threshold_static': 0.7,
             'classification_threshold_dynamic': 0.3,
             'migration_threshold': 0.1,
@@ -1457,22 +1513,19 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
     def test_e7_05_optimize_significance_off_by_default(self):
         """[v2.6.0-E7-05] validate_significance=False (默认) 时, significance_report 为 None.
 
-        向后兼容: 默认行为不变, 不运行 Layer 3 验证.
+        v3.4.0: 默认搜索空间为空 → 需 search_orth=True 才能运行 optimize;
+        validate_significance 默认 False, 不运行 Layer 3 验证.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
-        optimizer = EndToEndThresholdOptimizer(n_trials=2)
+        optimizer = EndToEndThresholdOptimizer(n_trials=2, search_orth=True)
         factor_dict, fwd = self._make_factor_and_returns(K=3, N=30, T=15)
 
         # 默认 validate_significance=False
         optimizer.optimize(factor_dict, fwd, show_progress=False)
 
-        self.assertFalse(hasattr(optimizer, 'significance_report') and optimizer.significance_report is not None,
-                         "默认应不运行显著性验证 (significance_report 为 None)")
-        # 或属性不存在 / 或为 None
-        if hasattr(optimizer, 'significance_report'):
-            self.assertIsNone(optimizer.significance_report,
-                              "默认 significance_report 应为 None")
+        self.assertIsNone(optimizer.significance_report,
+                          "默认应不运行显著性验证 (significance_report 为 None)")
 
         print(f"\n  手工校验 E7-05: 默认不运行显著性验证")
 
@@ -1480,10 +1533,11 @@ class TestLayer3SignificanceValidation(unittest.TestCase):
         """[v2.6.0-E7-06] validate_significance=True 时, significance_report 非 None.
 
         集成测试: optimize() 后, significance_report 应为字典.
+        v3.4.0: 需 search_orth=True 以提供可搜空间.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
-        optimizer = EndToEndThresholdOptimizer(n_trials=2)
+        optimizer = EndToEndThresholdOptimizer(n_trials=2, search_orth=True)
         factor_dict, fwd = self._make_factor_and_returns(K=3, N=30, T=15)
 
         optimizer.optimize(
@@ -1626,6 +1680,7 @@ def run_all_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestObjectiveFunction))
     suite.addTests(loader.loadTestsFromTestCase(TestParamMapping))
     suite.addTests(loader.loadTestsFromTestCase(TestExpandingWindowCV))
+    suite.addTests(loader.loadTestsFromTestCase(TestV340SearchSpaceConvergence))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

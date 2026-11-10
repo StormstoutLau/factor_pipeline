@@ -323,8 +323,8 @@ class AblationConfig:
     # None = 全启用; {'imputer': False, ...} = 指定关闭
 
     # ── L2 路由模式 ──
-    routing_mode: str = 'full'          # 'static' | 'dynamic' | 'mixed' | 'random' | 'full'
-    random_seed: Optional[int] = None   # routing_mode='random' 时的 seed
+    routing_mode: str = 'full'          # v3.4.0 ADR-042: 'full'(默认) | 'unified' | 'dynamic'
+    random_seed: Optional[int] = None   # v3.4.0: 字段保留 (无消费者), 避免破坏外部构造
 
     # ── L3 参数覆盖 ──
     cusum_k: Optional[float] = None
@@ -548,15 +548,21 @@ class AblationRunner:
         self._apply_l3_overrides(modified_config, config)
         self._apply_l4_overrides(modified_config, config)
 
+        # v3.4.0 ADR-042: L2 路由模式 → 统一管道注入 (fit 前, 整臂 A/B)
+        if config.routing_mode not in ('full', 'unified', 'dynamic'):
+            raise ValueError(
+                f"未知 routing_mode={config.routing_mode!r}; "
+                f"合法值: 'full' | 'unified' | 'dynamic'"
+            )
+        if config.routing_mode == 'dynamic':
+            modified_config.pipeline_mode = 'dynamic_ab'
+        else:
+            modified_config.pipeline_mode = 'unified'
+
         # 运行管线
         pipeline = FactorProcessingPipelineV2(modified_config)
         pipeline.fit(factor_data, industry_data=industry_data,
                      market_cap_data=market_cap_data)
-
-        # P0-2 (spec §2.5/§4.3): fit 后、transform 前覆盖路由分类
-        # (分类在 fit 阶段确定, 故必须在 fit 后覆盖)
-        if config.routing_mode != 'full':
-            self._override_routing(pipeline, config.routing_mode, config.random_seed)
 
         processed_data = pipeline.transform(factor_data)
 
@@ -571,64 +577,6 @@ class AblationRunner:
     # -------------------------------------------------------------------------
     # P0-2/P0-3/P0-4: 参数注入方法 (audit 修复)
     # -------------------------------------------------------------------------
-
-    def _override_routing(
-        self,
-        pipeline: Any,
-        routing_mode: str,
-        random_seed: Optional[int] = None,
-    ) -> None:
-        """P0-2: fit 后覆盖 factor_classifications, 强制单一类型或随机路由.
-
-        Spec §2.5/§4.3. 在 pipeline.fit() 后、pipeline.transform() 前调用,
-        因为分类结果在 fit 阶段由指纹驱动产生, 必须在 fit 后才能覆盖.
-
-        Args:
-            pipeline: FactorProcessingPipelineV2 实例 (已 fit)
-            routing_mode: 'static' | 'dynamic' | 'mixed' | 'random' | 'full'
-            random_seed: routing_mode='random' 时的种子 (None → 42)
-
-        Behavior:
-            - 'full': 不修改 (保留指纹驱动路由)
-            - 'static'/'dynamic'/'mixed': 所有因子分类强制为单一类型,
-              is_hard=True, primary_prob=1.0
-            - 'random': 用 random_seed 固定 RNG, 对每个因子随机分配
-              STATIC/DYNAMIC/MIXED (E2 修正: 控制组, 排除路由 vs 不路由混淆)
-        """
-        if routing_mode == 'full':
-            return  # 不修改, 保留指纹驱动路由
-
-        from factor_pipeline.modules.factor_fingerprint import (
-            FactorType, ClassificationResult,
-        )
-
-        factor_names = list(pipeline.factor_classifications.keys())
-
-        if routing_mode in ('static', 'dynamic', 'mixed'):
-            force_type = FactorType[routing_mode.upper()]
-            for name in factor_names:
-                pipeline.factor_classifications[name] = ClassificationResult(
-                    primary_type=force_type,
-                    primary_prob=1.0,
-                    secondary_type=None,
-                    secondary_prob=0.0,
-                    is_hard=True,
-                )
-        elif routing_mode == 'random':
-            rng = np.random.default_rng(
-                random_seed if random_seed is not None else 42
-            )
-            types = [FactorType.STATIC, FactorType.DYNAMIC, FactorType.MIXED]
-            for name in factor_names:
-                idx = int(rng.integers(0, len(types)))
-                pipeline.factor_classifications[name] = ClassificationResult(
-                    primary_type=types[idx],
-                    primary_prob=1.0,
-                    secondary_type=None,
-                    secondary_prob=0.0,
-                    is_hard=True,
-                )
-
     def _apply_l3_overrides(
         self,
         modified_config: Any,
@@ -980,22 +928,16 @@ class AblationRunner:
         market_cap_data: Optional[pd.DataFrame] = None,
         b3_full_result: Optional[AblationResult] = None,
     ) -> List[AblationResult]:
-        """L2 路由消融: 5 配置
+        """L2 路由消融: 2 臂 (v3.4.0 ADR-042)
 
-        返回 5 个 AblationResult:
-        - L2_all_static (全 static 管道)
-        - L2_all_dynamic (全 dynamic 管道)
-        - L2_all_mixed (全 mixed 管道)
-        - L2_random_routing (随机路由, seed=42)
-        - L2_full_routing (完整 5 叉路由, 参照; M6 修正: 若 b3_full_result
-          提供, 引用复用, 不重复 run_single)
+        返回 2 个 AblationResult (b3_full_result 提供时追加为第 3 个参照):
+        - L2_unified (统一横截面秩管道, 默认)
+        - L2_dynamic (整臂 A/B 动态管道)
         """
         results = []
         routing_configs = [
-            ('L2_all_static', 'static'),
-            ('L2_all_dynamic', 'dynamic'),
-            ('L2_all_mixed', 'mixed'),
-            ('L2_random_routing', 'random'),
+            ('L2_unified', 'unified'),
+            ('L2_dynamic', 'dynamic'),
         ]
 
         for name, mode in routing_configs:
@@ -1003,23 +945,13 @@ class AblationRunner:
                 name=name,
                 layer='L2',
                 routing_mode=mode,
-                random_seed=42 if mode == 'random' else None,
                 baseline_level='B3',
             )
             results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
 
-        # L2_full_routing (参照): M6 修正 — 引用复用 B3_full, 不重复 run_single
-        # (默认配置 = 完整路由, 与 B3_full 运行层面等价, 见 §7.2 M6 修正)
+        # 参照: M6 修正 — 引用复用 B3_full, 不重复 run_single
         if b3_full_result is not None:
             results.append(b3_full_result)
-        else:
-            full_config = AblationConfig(
-                name='L2_full_routing',
-                layer='L2',
-                routing_mode='full',
-                baseline_level='B3',
-            )
-            results.append(self.run_single(full_config, factor_data, fwd_returns, industry_data))
 
         return results
 
@@ -1407,7 +1339,7 @@ class AblationRunner:
         1. 标题 + 元信息 (alpha, n_bootstrap, 实验数)
         2. Baseline 阶梯表 (B0-B3 + IC/ICIR/Sharpe/MaxDD/HitRate)
         3. L1 组件消融表 (5 模块 + ΔIC + ΔSharpe + p_HAC + p_Boot + 显著性)
-        4. L2 路由消融表 (5 配置)
+        4. L2 路由消融表 (2 臂 + 可选参照)
         5. L3 参数消融表 (~25 配置)
         6. L4 前置处理 OAT 表 (~20 配置)
         7. 排序保持性 ρ_step 表 (5 步骤)

@@ -44,8 +44,6 @@ def test_validate_significance_dict_structure():
     factor_dict, fwd = _make_factor_and_returns(K=3, N=80, T=15)
 
     best_params = {
-        'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-        'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
         'classification_threshold_static': 0.7,
         'classification_threshold_dynamic': 0.3,
         'migration_threshold': 0.1,
@@ -72,8 +70,6 @@ def test_significance_ratio_range():
     factor_dict, fwd = _make_factor_and_returns(K=3, N=80, T=15)
 
     best_params = {
-        'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-        'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
         'classification_threshold_static': 0.7,
         'classification_threshold_dynamic': 0.3,
         'migration_threshold': 0.1,
@@ -96,8 +92,6 @@ def test_warning_logic():
     factor_dict, fwd = _make_factor_and_returns(K=5, N=80, T=15, seed=123)
 
     best_params = {
-        'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-        'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
         'classification_threshold_static': 0.7,
         'classification_threshold_dynamic': 0.3,
         'migration_threshold': 0.1,
@@ -121,7 +115,7 @@ def test_optimize_default_off():
     """校验 4: optimize() 默认不运行显著性验证 (向后兼容)"""
     from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
-    optimizer = EndToEndThresholdOptimizer(n_trials=2)
+    optimizer = EndToEndThresholdOptimizer(n_trials=2, search_orth=True)  # v3.4.0 ADR-042
     factor_dict, fwd = _make_factor_and_returns(K=3, N=30, T=15)
 
     optimizer.optimize(factor_dict, fwd, show_progress=False)
@@ -136,7 +130,7 @@ def test_optimize_with_significance():
     """校验 5: optimize(validate_significance=True) 生成报告"""
     from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
-    optimizer = EndToEndThresholdOptimizer(n_trials=2)
+    optimizer = EndToEndThresholdOptimizer(n_trials=2, search_orth=True)  # v3.4.0 ADR-042
     factor_dict, fwd = _make_factor_and_returns(K=3, N=30, T=15)
 
     optimizer.optimize(
@@ -164,8 +158,6 @@ def test_exception_handling():
 
     # 构造空 factor_data (会触发 Pipeline 处理后无因子)
     best_params = {
-        'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-        'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
         'classification_threshold_static': 0.7,
         'classification_threshold_dynamic': 0.3,
         'migration_threshold': 0.1,

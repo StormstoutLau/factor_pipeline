@@ -92,13 +92,13 @@ def test_4_e5_orthogonalization_search_space():
         EndToEndThresholdOptimizer, DEFAULT_SEARCH_SPACE_ORTH,
     )
 
-    # 默认 search_orth=False: 8 维
+    # v3.4.0 ADR-042: 默认 search_orth=False: 0 维 (路由阈值随统一管道退场)
     opt_default = EndToEndThresholdOptimizer(n_trials=1)
-    assert len(opt_default.search_space) == 8
+    assert len(opt_default.search_space) == 0
 
-    # search_orth=True: 11 维 (8 + 3 orth_*)
+    # search_orth=True: 3 维 (仅 orth_*)
     opt_orth = EndToEndThresholdOptimizer(n_trials=1, search_orth=True)
-    assert len(opt_orth.search_space) == 11
+    assert len(opt_orth.search_space) == 3
     assert 'orth_method' in opt_orth.search_space
     assert 'orth_align_mode' in opt_orth.search_space
     assert 'orth_ridge_lambda' in opt_orth.search_space
@@ -110,7 +110,7 @@ def test_4_e5_orthogonalization_search_space():
     assert opt_orth.search_space['orth_method']['type'] == 'categorical'
     assert 'symmetric' in opt_orth.search_space['orth_method']['choices']
 
-    print(f"✓ 4. E5 正交化搜索空间 (default=8维, orth=11维)")
+    print(f"✓ 4. E5 正交化搜索空间 (default=0维, orth=3维)")
 
 
 def test_5_e6_redundancy_penalty_vrr():
@@ -194,8 +194,6 @@ def test_6_e7_layer3_significance():
     )
 
     best_params = {
-        'hard_routing_prob': 0.9, 'merge_alpha': 0.5, 'ks_alpha': 0.05,
-        'mixed_winsor_sigma': 3.0, 'transform_aggressiveness': 1.0,
         'classification_threshold_static': 0.7,
         'classification_threshold_dynamic': 0.3,
         'migration_threshold': 0.1,

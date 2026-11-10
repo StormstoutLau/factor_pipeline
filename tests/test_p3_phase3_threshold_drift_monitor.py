@@ -26,14 +26,14 @@ class TestThresholdDriftMonitor(unittest.TestCase):
 
         monitor = ThresholdDriftMonitor(
             best_score=0.05,
-            best_params={'hard_routing_prob': 0.9},
+            best_params={'winsorize_ratio': 0.01},
             halflife=63,
             decay_threshold=0.2,
             min_observations=5,
         )
 
         self.assertEqual(monitor.best_score, 0.05)
-        self.assertEqual(monitor.best_params, {'hard_routing_prob': 0.9})
+        self.assertEqual(monitor.best_params, {'winsorize_ratio': 0.01})
         self.assertEqual(monitor.halflife, 63)
         self.assertEqual(monitor.decay_threshold, 0.2)
         self.assertEqual(monitor.min_observations, 5)
@@ -259,7 +259,8 @@ class TestThresholdDriftMonitor(unittest.TestCase):
         from factor_pipeline.backtest.threshold_drift_monitor import ThresholdDriftMonitor
         import pandas as pd
 
-        optimizer = EndToEndThresholdOptimizer(n_trials=2)
+        # v3.4.0 ADR-042: 路由阈值搜索空间已退场, 正交化搜索需显式开启
+        optimizer = EndToEndThresholdOptimizer(n_trials=2, search_orth=True)
 
         # 构造小规模因子数据
         rng = np.random.default_rng(42)

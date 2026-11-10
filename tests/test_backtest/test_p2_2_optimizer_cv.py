@@ -340,6 +340,7 @@ class TestOptimizeUsesCV:
 
         opt = EndToEndThresholdOptimizer(
             n_trials=3, cv_min_train=10, cv_test_size=5, random_seed=42,
+            search_orth=True,  # v3.4.0 ADR-042: 默认路由阈值空间已空
         )
 
         with mock.patch.object(
@@ -366,6 +367,7 @@ class TestOptimizeUsesCV:
 
         opt = EndToEndThresholdOptimizer(
             n_trials=2, cv_min_train=10, cv_test_size=5, random_seed=42,
+            search_orth=True,  # v3.4.0 ADR-042: 默认路由阈值空间已空
         )
 
         with mock.patch(

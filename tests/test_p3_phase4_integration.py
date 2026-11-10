@@ -61,7 +61,10 @@ class TestOptimizerIntegration(unittest.TestCase):
     def test_01_optimization_runs(self):
         """
         [P3-Phase4-01] 小规模优化完成，返回最优参数。
+
+        v3.4.0: 默认搜索空间为空 → search_orth=True 提供可搜空间.
         """
+        from factor_pipeline.optimizer import DEFAULT_SEARCH_SPACE_ORTH
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         optimizer = EndToEndThresholdOptimizer(
@@ -69,6 +72,7 @@ class TestOptimizerIntegration(unittest.TestCase):
             cv_min_train=10,
             cv_test_size=3,
             random_seed=42,
+            search_orth=True,
         )
 
         best_params = optimizer.optimize(
@@ -79,44 +83,59 @@ class TestOptimizerIntegration(unittest.TestCase):
 
         self.assertIsInstance(best_params, dict)
         self.assertGreater(len(best_params), 0)
+        # orth 搜索路径: best_params 应精确覆盖 orth 搜索空间键
+        self.assertEqual(set(best_params.keys()),
+                         set(DEFAULT_SEARCH_SPACE_ORTH.keys()),
+                         msg=f"best_params 应为 orth 参数, 实际 {sorted(best_params)}")
 
         print(f"\n  手工校验: 优化完成")
         print(f"    best_score={optimizer.best_score:.6f}")
         for name, val in sorted(best_params.items()):
-            print(f"    {name}: {val:.6f}")
+            print(f"    {name}: {val}")
 
     def test_02_best_params_in_bounds(self):
         """
         [P3-Phase4-02] 最优参数在搜索空间边界内。
+
+        float 参数检查 low/high, categorical 参数检查 choices.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         optimizer = EndToEndThresholdOptimizer(
             n_trials=20, cv_min_train=10, cv_test_size=3, random_seed=42,
+            search_orth=True,
         )
         best_params = optimizer.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
         )
 
         for name, spec in optimizer.search_space.items():
-            if name in best_params:
-                val = best_params[name]
+            if name not in best_params:
+                continue
+            val = best_params[name]
+            if spec['type'] == 'float':
                 self.assertGreaterEqual(val, spec['low'],
                     f"{name}={val} 低于下限 {spec['low']}")
                 self.assertLessEqual(val, spec['high'],
                     f"{name}={val} 高于上限 {spec['high']}")
+            elif spec['type'] == 'categorical':
+                self.assertIn(val, spec['choices'],
+                    f"{name}={val} 不在 choices 中")
 
         print(f"\n  手工校验: 所有参数在搜索空间边界内")
 
     def test_03_best_config_valid(self):
         """
         [P3-Phase4-03] 最优配置可正确创建 PipelineV2Config。
+
+        v3.4.0: orth 参数映射到 config.orthogonalization (自动启用).
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         optimizer = EndToEndThresholdOptimizer(
             n_trials=20, cv_min_train=10, cv_test_size=3, random_seed=42,
+            search_orth=True,
         )
         optimizer.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
@@ -125,26 +144,32 @@ class TestOptimizerIntegration(unittest.TestCase):
         best_config = optimizer.get_best_config()
         self.assertIsInstance(best_config, PipelineV2Config)
 
-        # 验证关键字段已设置
-        self.assertIsInstance(best_config.hard_routing_prob, float)
-        self.assertIsInstance(best_config.merge_alpha, float)
-        self.assertIsInstance(best_config.ks_alpha, float)
-        self.assertIsInstance(best_config.mixed_winsor_sigma, float)
+        # orth 参数已映射: 正交化自动启用, method/align_mode 与 best_params 一致
+        self.assertIsNotNone(best_config.orthogonalization,
+                             "设置 orth_method 后 orthogonalization 应实例化")
+        self.assertTrue(best_config.orthogonalization.enabled,
+                        "设置 orth_method 后应自动启用正交化")
+        self.assertEqual(best_config.orthogonalization.method,
+                         optimizer.best_params['orth_method'])
+        self.assertEqual(best_config.orthogonalization.align_mode,
+                         optimizer.best_params['orth_align_mode'])
 
         print(f"\n  手工校验: 最优配置")
-        print(f"    hard_routing_prob={best_config.hard_routing_prob:.4f}")
-        print(f"    merge_alpha={best_config.merge_alpha:.4f}")
-        print(f"    ks_alpha={best_config.ks_alpha:.4f}")
-        print(f"    mixed_winsor_sigma={best_config.mixed_winsor_sigma:.4f}")
+        print(f"    orth_method={best_config.orthogonalization.method}")
+        print(f"    orth_align_mode={best_config.orthogonalization.align_mode}")
+        print(f"    enabled={best_config.orthogonalization.enabled}")
 
     def test_04_reproducibility(self):
         """
         [P3-Phase4-04] 相同种子产生相同结果。
+
+        v3.4.0: orth 参数含 categorical (str) 与 float (数值), 分别比较.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         opt1 = EndToEndThresholdOptimizer(
             n_trials=20, cv_min_train=10, cv_test_size=3, random_seed=42,
+            search_orth=True,
         )
         params1 = opt1.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
@@ -152,15 +177,21 @@ class TestOptimizerIntegration(unittest.TestCase):
 
         opt2 = EndToEndThresholdOptimizer(
             n_trials=20, cv_min_train=10, cv_test_size=3, random_seed=42,
+            search_orth=True,
         )
         params2 = opt2.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
         )
 
         # 相同种子 + 相同数据 → 相同结果
+        self.assertEqual(set(params1.keys()), set(params2.keys()))
         for key in params1:
-            self.assertAlmostEqual(params1[key], params2[key], places=6,
-                msg=f"{key}: {params1[key]} != {params2[key]}")
+            if isinstance(params1[key], str):
+                self.assertEqual(params1[key], params2[key],
+                    msg=f"{key}: {params1[key]} != {params2[key]}")
+            else:
+                self.assertAlmostEqual(params1[key], params2[key], places=6,
+                    msg=f"{key}: {params1[key]} != {params2[key]}")
 
         self.assertAlmostEqual(opt1.best_score, opt2.best_score, places=6)
 
@@ -171,11 +202,14 @@ class TestOptimizerIntegration(unittest.TestCase):
     def test_05_param_importance(self):
         """
         [P3-Phase4-05] 参数重要性分析返回有效值。
+
+        v3.4.0: orth 搜索路径下重要性基于 3 个 orth 参数.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         optimizer = EndToEndThresholdOptimizer(
             n_trials=30, cv_min_train=10, cv_test_size=3, random_seed=42,
+            search_orth=True,
         )
         optimizer.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
@@ -202,11 +236,14 @@ class TestOptimizerIntegration(unittest.TestCase):
     def test_06_different_seeds_different_results(self):
         """
         [P3-Phase4-06] 不同种子产生不同结果（优化非确定性）。
+
+        v3.4.0: categorical (str) 与数值参数分别比较.
         """
         from factor_pipeline.optimizer import EndToEndThresholdOptimizer
 
         opt1 = EndToEndThresholdOptimizer(
             n_trials=20, cv_min_train=10, cv_test_size=3, random_seed=42,
+            search_orth=True,
         )
         params1 = opt1.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
@@ -214,6 +251,7 @@ class TestOptimizerIntegration(unittest.TestCase):
 
         opt2 = EndToEndThresholdOptimizer(
             n_trials=20, cv_min_train=10, cv_test_size=3, random_seed=123,
+            search_orth=True,
         )
         params2 = opt2.optimize(
             self.factor_data, self.forward_returns, show_progress=False,
@@ -222,9 +260,15 @@ class TestOptimizerIntegration(unittest.TestCase):
         # 不同种子产生不同结果
         any_different = False
         for key in params1:
-            if key in params2 and abs(params1[key] - params2[key]) > 1e-6:
-                any_different = True
-                break
+            if key in params2:
+                v1, v2 = params1[key], params2[key]
+                if isinstance(v1, str) or isinstance(v2, str):
+                    if v1 != v2:
+                        any_different = True
+                        break
+                elif abs(v1 - v2) > 1e-6:
+                    any_different = True
+                    break
 
         # 注意: 小样本下可能偶然相同，这是可接受的
         print(f"\n  手工校验: 不同种子")

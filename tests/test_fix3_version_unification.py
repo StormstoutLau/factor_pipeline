@@ -9,11 +9,12 @@ Fix 3: 版本号统一 — TDD 测试
   - test_config_v2.py:  期望 '2.0.0' (历史失败)
   - test_reporting.py:  期望 "2.0.0"
 
-统一目标 (v3.3.7, 2026-11-04): 四处声明保持一致
+统一目标 (v3.4.0, 2026-11-10): 四处声明保持一致
   - __init__.py / config_v2.py / reporting.py / pyproject.toml
-  - 缓存 code_version = "v2.2.5-cache" (缓存语义版本, 非项目版本;
+  - 缓存 code_version = "v2.3.0-cache" (缓存语义版本, 非项目版本;
     因 PL-02 变换 / PL-06 Mixed 缩尾 / PL-05 AR 解耦 / PL-08 AR 阶数选择
-    算法变更需失效旧缓存而 bump, 仍不跟随项目版本)
+    算法变更需失效旧缓存而 bump, 仍不跟随项目版本;
+    v3.4.0: 统一路由改写 fit/transform 链路, 中间产物数值变更 → v2.2.5-cache → v2.3.0-cache)
   - 本文件的 EXPECTED_VERSION 是唯一绝对锚点; 其余字段级测试比对本值而非字面量,
     避免每处各存一个字面量 (上一轮 2.5.0 就是这样漂移的)
 """
@@ -30,14 +31,14 @@ for ext in ["F:/Coding/Factor_Fingerprint", "F:/Coding/Factor_Decoupler"]:
         sys.path.insert(0, ext)
 
 # 期望的统一版本号
-EXPECTED_VERSION = "3.3.7"
+EXPECTED_VERSION = "3.4.0"
 
 
 class TestFix3VersionUnification(unittest.TestCase):
     """Fix 3: 版本号统一测试"""
 
     def test_01_project_version_is_unified(self):
-        """test_01: 项目主版本号 __version__ 统一到 3.3.7"""
+        """test_01: 项目主版本号 __version__ 统一到 3.4.0"""
         import factor_pipeline
         self.assertEqual(
             factor_pipeline.__version__, EXPECTED_VERSION,
@@ -45,7 +46,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         )
 
     def test_02_unified_config_version_default(self):
-        """test_02: PipelineV2ConfigUnified.version 默认值为 3.3.7"""
+        """test_02: PipelineV2ConfigUnified.version 默认值为 3.4.0"""
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         config = PipelineV2ConfigUnified()
         self.assertEqual(
@@ -54,7 +55,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         )
 
     def test_03_reporting_pipeline_version_default(self):
-        """test_03: PipelineExecutionReport.pipeline_version 默认值为 3.3.7"""
+        """test_03: PipelineExecutionReport.pipeline_version 默认值为 3.4.0"""
         from factor_pipeline.reporting import PipelineExecutionReport
         report = PipelineExecutionReport()
         self.assertEqual(
@@ -77,7 +78,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         self.assertEqual(v1, EXPECTED_VERSION, f"统一版本号应为 {EXPECTED_VERSION}")
 
     def test_05_cache_code_version_independent(self):
-        """test_05: 缓存 code_version 为 'v2.2.5-cache' (缓存语义版本)
+        """test_05: 缓存 code_version 为 'v2.3.0-cache' (缓存语义版本)
 
         缓存 code_version 用于缓存失效, 不跟随项目版本号变化.
         仅当缓存格式/计算逻辑变更时 bump: PL-02 将变换从全 panel 拟合
@@ -85,7 +86,9 @@ class TestFix3VersionUnification(unittest.TestCase):
         PL-06 将 Mixed 缩尾改为逐日截面 3σ, 故 v2.2.2-cache → v2.2.3-cache;
         PL-05 将 AR 解耦改为前缀冻结 + 三段式因果一步预测, 故
         v2.2.3-cache → v2.2.4-cache;
-        PL-08 将 AR 阶数选择统一 hold_back 样本, 故 v2.2.4-cache → v2.2.5-cache.
+        PL-08 将 AR 阶数选择统一 hold_back 样本, 故 v2.2.4-cache → v2.2.5-cache;
+        v3.4.0 统一路由改写 fit/transform 链路 (ADR-042), 中间产物数值变更,
+        故 v2.2.5-cache → v2.3.0-cache.
         """
         from factor_pipeline.backtest.cached_data_loader import CachedDataLoader
         import inspect
@@ -94,8 +97,8 @@ class TestFix3VersionUnification(unittest.TestCase):
         sig = inspect.signature(CachedDataLoader.__init__)
         code_version_default = sig.parameters['code_version'].default
         self.assertEqual(
-            code_version_default, "v2.2.5-cache",
-            f"缓存 code_version 应为 'v2.2.5-cache', 实际为 {code_version_default!r}"
+            code_version_default, "v2.3.0-cache",
+            f"缓存 code_version 应为 'v2.3.0-cache', 实际为 {code_version_default!r}"
         )
 
     def test_07_all_cache_code_versions_consistent(self):
@@ -110,7 +113,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         from factor_pipeline.backtest.price_cache import PriceMatrixCache
         from factor_pipeline.backtest.fwd_returns_cache import FwdReturnsCache
 
-        expected = "v2.2.5-cache"
+        expected = "v2.3.0-cache"
         self.assertEqual(CODE_VERSION, expected, "cache_manager.CODE_VERSION 不一致")
 
         for cls in (CacheManager, CachedDataLoader, FactorMatrixCache,

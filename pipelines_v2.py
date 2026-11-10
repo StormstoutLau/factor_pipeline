@@ -37,6 +37,7 @@ from factor_pipeline.modules.factor_fingerprint import (
     AdaptiveFactorClassifier, ClassificationConfig, ClassificationResult,
     FactorFingerprintMonitor, MonitorConfig,
     SemanticStatisticalFusion, SemanticPrior, ArbitratedResult,
+    infer_sampling_frequency,
 )
 # 引入因子解耦模块
 from factor_pipeline.modules.factor_decoupler import (
@@ -45,230 +46,6 @@ from factor_pipeline.modules.factor_decoupler import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# P0-1: 软路由 — 模块级函数
-# =============================================================================
-
-def _get_pipeline_weights(classification: 'ClassificationResult',
-                         hard_routing_prob: float = 0.9) -> Dict[str, float]:
-    """
-    从 ClassificationResult 中提取管道权重，实现概率加权路由。
-
-    规则：
-    1. 高置信度 (is_hard=True 且 primary_prob > hard_routing_prob): 主类型权重 = 1.0
-    2. 中等置信度: primary_type 和 secondary_type 按概率加权
-    3. 所有权重归一化至和为 1.0
-
-    Args:
-        classification: 分类结果，包含 primary_type, primary_prob,
-                       secondary_type, secondary_prob, is_hard
-        hard_routing_prob: 硬路由概率阈值（默认 0.9）
-
-    Returns:
-        Dict[str, float]: {'static': 0.7, 'mixed': 0.3} 形式的权重字典
-    """
-    from factor_pipeline.modules.factor_fingerprint import FactorType
-
-    weights: Dict[str, float] = {}
-
-    # 高置信度硬分类：仅使用主管道
-    if classification.is_hard and classification.primary_prob > hard_routing_prob:
-        weights[classification.primary_type.value.lower()] = 1.0
-        return weights
-
-    # 添加主管道概率
-    primary_key = classification.primary_type.value.lower()
-    weights[primary_key] = classification.primary_prob
-
-    # 添加次管道概率（如果有）
-    if (classification.secondary_type is not None and
-            classification.secondary_prob is not None and
-            classification.secondary_prob > 0.01):
-        secondary_key = classification.secondary_type.value.lower()
-        weights[secondary_key] = classification.secondary_prob
-
-    # 归一化
-    total = sum(weights.values())
-    if total > 0:
-        weights = {k: v / total for k, v in weights.items()}
-
-    return weights
-
-
-# =============================================================================
-# P3: 多维分类决策 — 利用13维指纹做多维度路由权重
-# =============================================================================
-
-def _get_multi_dim_pipeline_weights(
-    fingerprint: 'FactorFingerprint',
-    classification: 'ClassificationResult',
-    hard_routing_prob: float = 0.9,
-) -> Dict[str, float]:
-    """多维指纹驱动的管道权重计算。
-
-    五叉决策树 (v3.0.0 T1 扩展至 5 步):
-    1. 基底权重: 从 ar1_median 确定初始管道概率（复用 _get_pipeline_weights）
-    2. 分布形状修正: skewness/kurtosis 极端 → 向混合偏移 +0.15
-    3. 稳定性修正: 低 SNR → 向动态偏移 +0.15
-    4. T1 新维度修正 (v3.0.0 T1):
-       4a. 尾部严重度 (gpd_shape/hill_estimator > 0.3): 重尾 → 向 mixed 偏移 +0.10
-       4b. 体制不稳定 (regime_transition_prob > 0.1): → 向 dynamic 偏移 +0.10
-    5. 归一化: 权重和为 1
-
-    手工计算验证 (既有 3 步):
-      基底: static=0.90, mixed=0.10, dynamic=0.00
-      分布修正: skew=2.5 > 1.5, kurt=8.0 > 5.0 → mixed 偏差 +0.20
-      稳定性修正: snr=1.0 → 不触发
-      调整后: static=0.90, mixed=0.10+0.20=0.30, dynamic=0.00
-      归一化: static=0.75, mixed=0.25, dynamic=0.00
-      总和=1.0 ✓
-
-    Args:
-        fingerprint: 21维因子指纹 (v3.0.0 T1, 仅用 skewness/kurtosis/snr/gpd_shape/hill_estimator/regime_transition_prob)
-        classification: 分类结果（含 ar1 驱动的初始概率）
-        hard_routing_prob: 硬路由阈值
-
-    Returns:
-        Dict[str, float]: {'static': w, 'dynamic': w, 'mixed': w}
-    """
-    # Step 1: 基底权重（复用 ar1 驱动的分类结果）
-    base_weights = _get_pipeline_weights(classification, hard_routing_prob)
-
-    # 确保三个键都存在
-    weights = {'static': base_weights.get('static', 0.0),
-               'dynamic': base_weights.get('dynamic', 0.0),
-               'mixed': base_weights.get('mixed', 0.0)}
-
-    # Step 2: 分布形状修正
-    # 提取指纹维度，处理 NaN
-    skew = fingerprint.skewness_std
-    kurt = fingerprint.kurtosis_std
-
-    skew_valid = not (skew is None or (isinstance(skew, float) and np.isnan(skew)))
-    kurt_valid = not (kurt is None or (isinstance(kurt, float) and np.isnan(kurt)))
-
-    if skew_valid or kurt_valid:
-        # 偏度修正: |skew| > 1.5 → 向 mixed 偏移
-        if skew_valid and abs(skew) > 1.5:
-            # 偏度越大，偏移越大（最多 0.15）
-            skew_shift = min(0.15, (abs(skew) - 1.5) / 10.0)
-            if weights['static'] > 0:
-                weights['static'] = max(0.0, weights['static'] - skew_shift)
-            if weights['dynamic'] > 0:
-                weights['dynamic'] = max(0.0, weights['dynamic'] - skew_shift * 0.5)
-            weights['mixed'] = weights['mixed'] + skew_shift + skew_shift * 0.5
-
-        # 峰度修正: kurt > 5 → 向 mixed 偏移
-        if kurt_valid and kurt > 5.0:
-            kurt_shift = min(0.15, (kurt - 5.0) / 20.0)
-            if weights['static'] > 0:
-                weights['static'] = max(0.0, weights['static'] - kurt_shift)
-            if weights['dynamic'] > 0:
-                weights['dynamic'] = max(0.0, weights['dynamic'] - kurt_shift * 0.5)
-            weights['mixed'] = weights['mixed'] + kurt_shift + kurt_shift * 0.5
-
-    # Step 3: 稳定性修正（SNR）
-    snr = fingerprint.snr_estimate
-    snr_valid = not (snr is None or (isinstance(snr, float) and np.isnan(snr)))
-
-    if snr_valid and snr < 1.0:
-        # 低 SNR → 预测不稳定 → 向 dynamic 偏移
-        snr_shift = min(0.15, (1.0 - snr) / 5.0)
-        if weights['static'] > 0:
-            weights['static'] = max(0.0, weights['static'] - snr_shift * 0.5)
-        if weights['mixed'] > 0:
-            weights['mixed'] = max(0.0, weights['mixed'] - snr_shift * 0.5)
-        weights['dynamic'] = weights['dynamic'] + snr_shift
-
-    # Step 4: T1 新维度修正 (v3.0.0 T1, E2)
-    # 4a: 尾部严重度修正 — 重尾因子需复杂处理 → 向 mixed 偏移
-    gpd_shape = fingerprint.gpd_shape
-    hill_est = fingerprint.hill_estimator
-    gpd_valid = not (gpd_shape is None or (isinstance(gpd_shape, float) and np.isnan(gpd_shape)))
-    hill_valid = not (hill_est is None or (isinstance(hill_est, float) and np.isnan(hill_est)))
-
-    # 尾部严重度: 优先用 gpd_shape, 否则 hill_estimator
-    tail_severity = None
-    if gpd_valid:
-        tail_severity = abs(gpd_shape)
-    elif hill_valid:
-        tail_severity = abs(hill_est)
-
-    if tail_severity is not None and tail_severity > 0.3:
-        # 重尾阈值 0.3: 超过 → 向 mixed 偏移 (最多 0.10)
-        tail_shift = min(0.10, (tail_severity - 0.3) / 3.0)
-        if weights['static'] > 0:
-            weights['static'] = max(0.0, weights['static'] - tail_shift)
-        weights['mixed'] = weights['mixed'] + tail_shift
-
-    # 4b: 体制不稳定修正 — regime 频繁转换 → 向 dynamic 偏移
-    regime_trans_prob = fingerprint.regime_transition_prob
-    regime_valid = not (regime_trans_prob is None or
-                       (isinstance(regime_trans_prob, float) and np.isnan(regime_trans_prob)))
-
-    if regime_valid and regime_trans_prob > 0.1:
-        # 体制不稳定阈值 0.1: 超过 → 向 dynamic 偏移 (最多 0.10)
-        regime_shift = min(0.10, (regime_trans_prob - 0.1) / 2.0)
-        if weights['static'] > 0:
-            weights['static'] = max(0.0, weights['static'] - regime_shift * 0.5)
-        if weights['mixed'] > 0:
-            weights['mixed'] = max(0.0, weights['mixed'] - regime_shift * 0.5)
-        weights['dynamic'] = weights['dynamic'] + regime_shift
-
-    # Step 5: 归一化
-    total = sum(weights.values())
-    if total > 0:
-        weights = {k: v / total for k, v in weights.items()}
-
-    return weights
-
-
-def _apply_weighted_transform(
-    data: pd.DataFrame,
-    pipelines: Dict[str, Any],
-    weights: Dict[str, float],
-    **kwargs
-) -> pd.DataFrame:
-    """
-    使用概率权重对多个管道输出进行加权混合。
-
-    手工计算验证:
-      pipeline_A 输出全 10.0, pipeline_B 输出全 20.0
-      weights = {A: 0.6, B: 0.4}
-      期望: 10.0 * 0.6 + 20.0 * 0.4 = 14.0 ✓
-
-    Args:
-        data: 输入因子数据
-        pipelines: {'static': pipeline_instance, 'mixed': pipeline_instance, ...}
-        weights: {'static': 0.6, 'mixed': 0.4}
-        **kwargs: 传递给 pipeline.transform() 的额外参数
-
-    Returns:
-        pd.DataFrame: 加权混合后的因子数据
-    """
-    if len(weights) == 0:
-        raise ValueError("权重字典不能为空")
-
-    # 单管道路由：直接返回（退化为硬路由）
-    if len(weights) == 1:
-        pipeline_name = list(weights.keys())[0]
-        return pipelines[pipeline_name].transform(data, **kwargs)
-
-    # 多管道加权混合
-    result = None
-    for pipeline_name, weight in weights.items():
-        if weight < 0.001:
-            continue
-        pipeline = pipelines[pipeline_name]
-        transformed = pipeline.transform(data, **kwargs)
-        if result is None:
-            result = transformed * weight
-        else:
-            result = result + transformed * weight
-
-    return result
 
 
 # =============================================================================
@@ -702,12 +479,6 @@ class PipelineV2Config:
     static_garch_vol: str = 'Garch'
     static_garch_min_obs: int = 50
 
-    # v2.1 端到端阈值搜索新增配置 (P3 Phase 2)
-    hard_routing_prob: float = 0.90
-    merge_alpha: float = 0.50
-    ks_alpha: float = 0.05
-    mixed_winsor_sigma: float = 3.0
-
     # v2.6.0 E2 (P3-10'): migration_threshold 字段位置修正
     # 修正前: optimizer.py:155-158 错误设置到 config.monitor.migration_threshold
     #         (MonitorConfig 无此字段, hasattr 静默跳过, 参数被丢弃)
@@ -718,10 +489,19 @@ class PipelineV2Config:
     # 接收 OrthogonalizationConfig (Pydantic) 整对象, enabled=False 时 None
     orthogonalization: Optional[Any] = None
 
-    # v3.0.0 T1 (E2): 多维指纹路由开关 (默认 False, 向后兼容)
-    # True: transform 使用 _get_multi_dim_pipeline_weights (含 T1 tail/regime 修正)
-    # False: 走旧路径 _get_pipeline_weights (仅 ar1 驱动)
-    enable_multi_dim_routing: bool = False
+    # v3.4.0 ADR (暂用号 ADR-042): 统一管道模式 ('unified' | 'dynamic_ab')
+    pipeline_mode: str = 'unified'
+    # 指纹诊断标签开关 (只读, 不参与路由; 指纹提取本身不受此开关影响)
+    enable_fingerprint_diagnostics: bool = True
+    # A/B 实验标识 (写入规格日志; 非 A/B 为 None)
+    ab_experiment_id: Optional[str] = None
+
+    # v3.4.0 ADR (暂用号 ADR-042): 结构突变监控 (opt-in, 只告警)
+    enable_break_monitor: bool = False
+    break_monitor_window: int = 250
+    break_monitor_stride: int = 20
+    break_monitor_alpha: float = 0.05
+    break_monitor_n_bootstrap: int = 400
 
     # v3.0.0 T3.4: CUSUM 在线漂移监测开关 (默认 False, 向后兼容)
     # True: 启用 CUSUM 监测因子值矩阵的横截面统计量 (均值/标准差)
@@ -813,6 +593,14 @@ class PipelineV2Config:
     bridge_learning_rate: float = 0.1                      # Q2 soft-update 学习率
     bridge_decision_freq: str = 'M'                        # 决策频率 ('D'/'W'/'M'/'Q')
 
+    def __post_init__(self):
+        """v3.4.0 ADR (暂用号 ADR-042): pipeline_mode 合法性校验."""
+        if self.pipeline_mode not in ('unified', 'dynamic_ab'):
+            raise ValueError(
+                f"pipeline_mode 必须为 'unified' 或 'dynamic_ab', "
+                f"实际: {self.pipeline_mode!r}"
+            )
+
     @classmethod
     def from_unified(cls, unified) -> 'PipelineV2Config':
         """从 PipelineV2ConfigUnified (Pydantic) 构造 dataclass — 桥接层 (Fix 2)
@@ -827,6 +615,33 @@ class PipelineV2Config:
             PipelineV2Config (dataclass)
         """
         return unified.to_pipeline_v2_config()
+
+
+# =============================================================================
+# v3.4.0 ADR (暂用号 ADR-042): 统一路由记录数据类
+# =============================================================================
+
+@dataclass(frozen=True)
+class FingerprintMeta:
+    """指纹采集元数据 — 不进入 21 维数值指纹契约."""
+    sampling_frequency: str = 'unknown'
+    n_obs: int = 0
+    n_columns: int = 0
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class FactorRoutingRecord:
+    """单因子的执行事实 + 诊断标签 (唯一可信来源)."""
+    factor_name: str
+    pipeline_mode: str
+    execution_pipe_type: str
+    diagnostic_type: str
+    diagnostic_prob: float
+    diagnostic_confidence: float
+    ar1_median: float
+    fingerprint_meta: FingerprintMeta
 
 
 class _BaseFactorPipeline:
@@ -1215,6 +1030,10 @@ class FactorProcessingPipelineV2:
         # 状态追踪
         self.factor_classifications: Dict[str, ClassificationResult] = {}
         self.factor_pipelines: Dict[str, Any] = {}
+        # v3.4.0 ADR: 统一路由记录 (执行事实 + 诊断标签)
+        self.factor_routing: Dict[str, FactorRoutingRecord] = {}
+        # v3.4.0 ADR: 结构突变告警 (只读, monitor_structural_breaks 填充)
+        self.break_alerts: Dict[str, Dict] = {}
         self.is_fitted = False
 
         # P2: 中间数据日志 — 每个因子的每步输出 (transform 后填充)
@@ -1320,73 +1139,60 @@ class FactorProcessingPipelineV2:
             logger.error(f"指纹提取失败: {e}")
             raise RuntimeError(f"指纹提取失败，请检查数据格式: {e}") from e
 
-        # Step 2: 分类（支持语义-统计融合）
-        logger.info("Step 2: Classifying factors...")
-        if descriptions:
-            # 使用语义-统计融合
-            logger.info("Using semantic-statistical fusion...")
-            data_months = kwargs.get('data_months', {})
-            classifications = {}
-            for name in factor_data:
-                desc = descriptions.get(name, "")
-                fp = fingerprints.get(name, FactorFingerprint())
-                months = data_months.get(name, 0) if isinstance(data_months, dict) else 0
-                
-                if desc:
-                    result = self.semantic_fusion.classify(desc, fp, months)
-                else:
-                    result = self.classifier.classify(fp)
-                classifications[name] = result
-                
-                if hasattr(result, 'conflict_reason') and result.conflict_reason:
-                    logger.warning(
-                        f"Factor {name}: semantic-statistical conflict - "
-                        f"{result.conflict_reason}"
-                    )
-        else:
-            # 纯统计分类
-            classifications = self.classifier.batch_classify(fingerprints)
+        # Step 2: 诊断标签 (受开关控制; 只产标签, 不选管道)
+        # v3.4.0 ADR: 指纹提取与 monitor.add_fingerprint 始终执行,
+        #   开关只控制分类标签 (否则连带关闭 get_fingerprint_summary/check_migrations)
+        logger.info("Step 2: Classifying factors (diagnostics only)...")
+        classifications = self._classify_diagnostics(
+            fingerprints, descriptions, kwargs)
 
-        # Step 3+4: 为每个因子创建独立的管道实例并拟合
-        # P4'.3 修复: 原"共享管道+concat"方案在多因子场景下存在两个致命问题:
-        #   (a) 不同因子列名相同 → concat 产生重复列 → pandas 3.0 stack_v3 崩溃
-        #   (b) 加前缀避免重复 → industry_data 的 stock 名无法匹配 → KeyError
-        # 正确方案: 每个因子创建独立 pipeline 实例, 单因子 fit/transform,
-        #   列名天然唯一, industry 匹配正常, 软路由通过拟合次类型管道支持
-        # Step 7: Hard routing — 基于 StatisticalClassifier 的确定分类
-        from factor_pipeline.modules.statistical_classifier import StatisticalClassifier
-        stat_clf = StatisticalClassifier(alpha=0.05, vr_q=5)
-
+        # Step 3+4: 执行管道由 pipeline_mode 唯一决定 (不再调用 StatisticalClassifier;
+        # 保留 P4'.3 per-factor 方案: 每因子独立 pipeline 实例, 列名唯一)
         logger.info("Step 3+4: Creating and fitting per-factor pipelines...")
-        neutralizer_params = {}
-        if industry_data is not None:
-            neutralizer_params['industry_data'] = industry_data
-        # P0-5: market_cap_data 透传 + 自动切换 neutralization_type
-        if market_cap_data is not None:
-            neutralizer_params['market_cap_data'] = market_cap_data
-            neutralizer_params['neutralization_type'] = 'industry_marketcap'
+        neutralizer_params = self._build_neutralizer_params(
+            industry_data, market_cap_data)
 
-        for name, classification in classifications.items():
-            self.factor_classifications[name] = classification
+        pipe_type = 'static' if self.config.pipeline_mode == 'unified' else 'dynamic'
+        logger.info(
+            f"  pipeline_mode={self.config.pipeline_mode} → execution pipe '{pipe_type}'"
+        )
 
-            # Step 7: Statistical classifier overrides fingerprint-based classification
-            pipe_type = stat_clf.classify(factor_data[name])
-            logger.info(f"  {name} → {pipe_type} (StatisticalClassifier, was {classification.primary_type.value})")
-
-            factor_pipes = {}
-            factor_pipes[pipe_type] = self._create_pipeline(
+        for name, df in factor_data.items():
+            pipe = self._create_pipeline(
                 pipe_type, neutralizer_params, self.config.module_enabled)
             logger.info(f"Fitting {name} → {pipe_type} pipeline")
-            factor_pipes[pipe_type].fit(factor_data[name], **kwargs)
+            pipe.fit(df, **kwargs)
+            self.factor_pipelines[name] = {pipe_type: pipe}
 
-            self.factor_pipelines[name] = factor_pipes
+            # v3.4.0 ADR: 诊断标签 (开关关闭时为 unknown) + 路由记录
+            fp = fingerprints.get(name, FactorFingerprint())
+            cls = classifications.get(name, self._unknown_classification())
+            self.factor_classifications[name] = cls
+
+            self.factor_routing[name] = FactorRoutingRecord(
+                factor_name=name,
+                pipeline_mode=self.config.pipeline_mode,
+                execution_pipe_type=pipe_type,
+                diagnostic_type=cls.primary_type.value,
+                diagnostic_prob=cls.primary_prob,
+                diagnostic_confidence=cls.confidence,
+                ar1_median=fp.ar1_median,
+                fingerprint_meta=FingerprintMeta(
+                    sampling_frequency=infer_sampling_frequency(df.index),
+                    n_obs=int(df.shape[0]),
+                    n_columns=int(df.shape[1]),
+                    start=self._fmt_ts(df.index.min()) if len(df.index) else None,
+                    end=self._fmt_ts(df.index.max()) if len(df.index) else None,
+                ),
+            )
+            self._log_spec(self.factor_routing[name])
 
         # Backward compat: 保留共享管道属性引用 (测试中可能被 mock)
         if self.factor_pipelines:
             first_pipes = next(iter(self.factor_pipelines.values()))
-            self.static_pipeline = first_pipes.get('static', self.static_pipeline)
-            self.dynamic_pipeline = first_pipes.get('dynamic', self.dynamic_pipeline)
-            self.mixed_pipeline = first_pipes.get('mixed', self.mixed_pipeline)
+            self.static_pipeline = first_pipes.get('static')
+            self.dynamic_pipeline = first_pipes.get('dynamic')
+            self.mixed_pipeline = None
 
         # Step 5: 记录到监测器
         logger.info("Step 5: Recording to monitor...")
@@ -1401,12 +1207,13 @@ class FactorProcessingPipelineV2:
                   factor_data: Dict[str, pd.DataFrame],
                   **kwargs) -> Dict[str, pd.DataFrame]:
         """
-        应用流水线（P0-1 修复：使用概率加权软路由）
+        应用流水线（v3.4.0 ADR-042: 统一执行）
 
         路由规则：
-        - 高置信度 (is_hard=True, primary_prob > 0.9): 单管道硬路由
-        - 中等置信度: primary_type + secondary_type 概率加权混合
-        - 边界因子: 两个管道按概率加权混合输出
+        - 生产路径: 按 fit 阶段写入的 `factor_pipelines[name]` 取管道
+          (unified → 'static'; dynamic_ab → 'dynamic'), 每因子单管道
+        - 兜底路径 (mock / 旧调用): fit 未写 `factor_pipelines` 时按
+          `diagnostic_type` 取扁平属性; 两者皆无 → 跳过 (strict_mode 抛错)
 
         Parameters
         ----------
@@ -1429,25 +1236,24 @@ class FactorProcessingPipelineV2:
                 continue
 
             classification = self.factor_classifications.get(name)
-            if classification is None:
-                logger.warning(f"因子 {name} 未分类，跳过")
-                if self.strict_mode:
-                    raise ValueError(f"因子 {name} 未在 fit 阶段分类，请在 strict_mode=False 时使用或重新拟合")
-                continue
-
-            # Step 7: Hard routing — 单管道变换, 无加权
-            factor_pipes = self.factor_pipelines.get(name, {})
-            pipe_keys = list(factor_pipes.keys())
-            if not pipe_keys:
-                # P0-1 fallback: 当 fit() 未填充 factor_pipelines 时 (如测试场景
-                # 直接 mock 静态/动态/混合扁平属性), 按 primary_type 取扁平属性.
+            factor_pipes = self.factor_pipelines.get(name)
+            if factor_pipes:
+                # v3.4.0 ADR: 生产路径 — fit 恒填 factor_pipelines, 键恒为
+                # 'static' (unified) 或 'dynamic' (dynamic_ab)
+                pipe_type = next(iter(factor_pipes))
+                pipe = factor_pipes[pipe_type]
+            else:
+                # 兜底 (mock/旧调用): 按诊断类型取扁平属性; 仅当 fit 未填
+                # factor_pipelines 时可达, 生产路径不会进入
+                if classification is None:
+                    if self.strict_mode:
+                        raise ValueError(f"因子 {name} 未在 fit 阶段分类/拟合，请在 strict_mode=False 时使用或重新拟合")
+                    logger.warning(f"因子 {name} 未拟合，跳过")
+                    continue
                 pipe = self._get_pipeline(classification.primary_type)
                 if pipe is None:
-                    logger.warning(f"因子 {name} 无可用管线, 跳过")
+                    logger.warning(f"因子 {name} 无可用管线，跳过")
                     continue
-            else:
-                pipe_type = pipe_keys[0]  # exactly one pipeline (hard routing)
-                pipe = factor_pipes[pipe_type]
             try:
                 processed = pipe.transform(data)
             except (ValueError, TypeError, RuntimeError) as e:
@@ -1524,8 +1330,9 @@ class FactorProcessingPipelineV2:
                 module_enabled=module_enabled,
             )
         elif pipe_type == 'mixed':
+            # v3.4.0 ADR: mixed_winsor_sigma 配置字段已删; winsor 阈值由
+            # MixedFactorPipeline.__init__ 默认值 3.0 承担
             return MixedFactorPipeline(
-                mixed_winsor_sigma=self.config.mixed_winsor_sigma,
                 transformation_params={
                     'method': self.config.mixed_transformation_method,
                     'target_distribution': self.config.mixed_target_distribution,
@@ -1537,12 +1344,184 @@ class FactorProcessingPipelineV2:
             raise ValueError(f"Unknown pipeline type: {pipe_type}")
 
     def _get_pipeline(self, factor_type: FactorType):
-        """根据因子类型获取对应管道"""
-        return {
+        """mock/旧调用兜底: 按类型取扁平属性, 再按 pipeline_mode 兜底.
+
+        v3.4.0 ADR: 生产 fit 总会填充 factor_pipelines, 因此生产路径不调用本方法;
+        保留是为兼容 test_fix1_self_factors_bug / test_p0_fixes 的 mock 场景
+        (直接注入 self.static_pipeline 等扁平属性).
+        """
+        # 兼容 mock: 优先按类型取扁平属性 (既有测试直接注入三条管道)
+        pipe = {
             FactorType.STATIC: self.static_pipeline,
             FactorType.DYNAMIC: self.dynamic_pipeline,
             FactorType.MIXED: self.mixed_pipeline,
         }.get(factor_type)
+        if pipe is not None:
+            return pipe
+        # 模式兜底
+        if self.config.pipeline_mode == 'dynamic_ab':
+            return self.dynamic_pipeline
+        return self.static_pipeline
+
+    # ------------------------------------------------------------------
+    # v3.4.0 ADR (暂用号 ADR-042): 统一路由私有方法
+    # ------------------------------------------------------------------
+
+    def _classify_diagnostics(
+        self,
+        fingerprints: Dict[str, FactorFingerprint],
+        descriptions: Optional[Dict[str, str]],
+        kwargs: dict,
+    ) -> Dict[str, ClassificationResult]:
+        """只产诊断标签, 不选管道. 逻辑与 v3.3.7 fit Step 2 一致.
+
+        enable_fingerprint_diagnostics=False 时返回 {} (调用方回填 unknown 标签);
+        指纹提取与 monitor.add_fingerprint 不受此开关影响 (E1 设计决策).
+        """
+        if not getattr(self.config, 'enable_fingerprint_diagnostics', True):
+            return {}
+        if descriptions:
+            logger.info("Using semantic-statistical fusion...")
+            data_months = kwargs.get('data_months', {})
+            out = {}
+            for name in fingerprints:
+                desc = descriptions.get(name, "")
+                fp = fingerprints.get(name, FactorFingerprint())
+                months = data_months.get(name, 0) if isinstance(data_months, dict) else 0
+                if desc:
+                    result = self.semantic_fusion.classify(desc, fp, months)
+                else:
+                    result = self.classifier.classify(fp)
+                out[name] = result
+                if hasattr(result, 'conflict_reason') and result.conflict_reason:
+                    logger.warning(
+                        f"Factor {name}: semantic-statistical conflict - "
+                        f"{result.conflict_reason}"
+                    )
+            return out
+        # 纯统计分类
+        return self.classifier.batch_classify(fingerprints)
+
+    @staticmethod
+    def _build_neutralizer_params(industry_data, market_cap_data) -> dict:
+        """构造中性化参数 (P0-5: market_cap 透传 + 自动切换 neutralization_type)."""
+        params = {}
+        if industry_data is not None:
+            params['industry_data'] = industry_data
+        if market_cap_data is not None:
+            params['market_cap_data'] = market_cap_data
+            params['neutralization_type'] = 'industry_marketcap'
+        return params
+
+    @staticmethod
+    def _unknown_classification() -> ClassificationResult:
+        """诊断开关关闭 / 指纹缺失时的占位标签."""
+        return ClassificationResult(
+            primary_type=FactorType.UNKNOWN, primary_prob=0.0, confidence=0.0)
+
+    @staticmethod
+    def _fmt_ts(ts) -> Optional[str]:
+        if ts is None or pd.isna(ts):
+            return None
+        try:
+            return pd.Timestamp(ts).isoformat()
+        except Exception:
+            return None
+
+    def _log_spec(self, record: FactorRoutingRecord) -> Optional[str]:
+        """v3.4.0 ADR: 规格日志 — 按执行臂派生 winsor/transformation (E4).
+
+        全函数 try/except 包裹, 失败仅 warning 不影响拟合;
+        懒初始化的是管道侧 self._spec_logger (SpecificationLogger.__init__
+        本身构造即建目录, 因此"关闭时目录不创建"由"构造从未发生"保证).
+        """
+        if not getattr(self.config, 'enable_specification_logger', False):
+            return None
+        try:
+            if self._spec_logger is None:
+                from backtest.specification_logger import SpecificationLogger
+                self._spec_logger = SpecificationLogger(
+                    log_dir=self.config.spec_log_dir)
+            try:
+                from backtest.cache_manager import CODE_VERSION as _CACHE_VERSION
+            except Exception:
+                _CACHE_VERSION = 'unknown'
+            is_static = record.execution_pipe_type == 'static'
+            return self._spec_logger.log_run(
+                config={
+                    'pipeline_mode': record.pipeline_mode,
+                    'execution_pipe_type': record.execution_pipe_type,
+                    'diagnostic_type': record.diagnostic_type,
+                    'diagnostic_prob': record.diagnostic_prob,
+                    'ar1_median': record.ar1_median,
+                    'sampling_frequency': record.fingerprint_meta.sampling_frequency,
+                    'n_obs': record.fingerprint_meta.n_obs,
+                    'n_columns': record.fingerprint_meta.n_columns,
+                    'winsor': 'percentile(1,99)' if is_static else 'none',
+                    'transformation': (
+                        f"{self.config.static_transformation_method}"
+                        f"->{self.config.static_target_distribution}"
+                        if is_static else 'ar_residual->z_score'),
+                    'ab_experiment_id': self.config.ab_experiment_id,
+                    'cache_version': _CACHE_VERSION,
+                },
+                result={'n_columns': record.fingerprint_meta.n_columns},
+                run_type=('validation' if self.config.ab_experiment_id
+                          else 'exploratory'),
+                factor_name=record.factor_name,
+            )
+        except Exception as e:
+            logger.warning(f"规格日志写入失败 (不影响拟合): {e}")
+            return None
+
+    def monitor_structural_breaks(
+        self,
+        factor_data: Dict[str, pd.DataFrame],
+        *,
+        method: str = 'sup_f',
+        window: Optional[int] = None,
+        stride: Optional[int] = None,
+    ) -> Dict[str, Dict]:
+        """v3.4.0 ADR: 结构突变监控 (只告警, 不改因子值/不参与路由).
+
+        Args:
+            factor_data: Dict[因子名, DataFrame(rows=日期)]
+            method: 'sup_f' | 'cusum'
+            window/stride: 滚动窗口与步长; None 时取 config.break_monitor_*.
+                用 `is not None` 而非 `or` — 显式传 0 时应交给
+                compute_ar1_path 抛 ValueError, 不被 falsy 吞掉回退默认.
+
+        Returns:
+            {因子名: 告警字典}; enable_break_monitor=False 时返回 {}.
+            触发告警的因子写入 self.break_alerts (只读) 并 logger.warning.
+        """
+        if not getattr(self.config, 'enable_break_monitor', False):
+            return {}
+        from backtest.structural_break_monitor import (
+            BreakMonitorConfig, StructuralBreakMonitor,
+        )
+        cfg = BreakMonitorConfig(
+            method=method,
+            window=window if window is not None else self.config.break_monitor_window,
+            stride=stride if stride is not None else self.config.break_monitor_stride,
+            alpha=self.config.break_monitor_alpha,
+            n_bootstrap=self.config.break_monitor_n_bootstrap,
+        )
+        monitor = StructuralBreakMonitor(cfg)
+        out = {}
+        for name, df in factor_data.items():
+            if df is None or df.empty:
+                continue
+            path = self.fingerprinter.compute_ar1_path(
+                df, cfg.window, cfg.stride)
+            res = monitor.detect(path)
+            out[name] = res
+            if res.get('detected'):
+                self.break_alerts[name] = res
+                logger.warning(
+                    f"结构突变告警: {name} ({res['method']}), "
+                    f"p={res['p_value']:.4f}, date={res.get('break_date')}")
+        return out
 
     def monitor_cusum_drift(
         self,
@@ -2137,8 +2116,43 @@ class FactorProcessingPipelineV2:
         return diag
 
     def get_classification_summary(self) -> pd.DataFrame:
-        """获取分类汇总表"""
-        return self.classifier.get_classification_summary(self.factor_classifications)
+        """获取分类汇总表 (v3.4.0 ADR: 保留旧列 + 追加 2 列执行事实)"""
+        rows = []
+        for name, cls in self.factor_classifications.items():
+            rec = self.factor_routing.get(name)
+            rows.append({
+                'factor_name': name,
+                'primary_type': cls.primary_type.value,
+                'primary_prob': cls.primary_prob,
+                'secondary_type': cls.secondary_type.value if cls.secondary_type else None,
+                'secondary_prob': cls.secondary_prob,
+                'confidence': cls.confidence,
+                'is_hard': cls.is_hard,
+                'execution_pipe_type': rec.execution_pipe_type if rec else None,
+                'sampling_frequency': (
+                    rec.fingerprint_meta.sampling_frequency if rec else None),
+            })
+        return pd.DataFrame(rows)
+
+    def get_routing_summary(self) -> pd.DataFrame:
+        """v3.4.0 ADR: 路由记录汇总表 (执行事实 + 指纹元数据, 行数 = 因子数)"""
+        rows = []
+        for name, r in self.factor_routing.items():
+            rows.append({
+                'factor_name': name,
+                'pipeline_mode': r.pipeline_mode,
+                'execution_pipe_type': r.execution_pipe_type,
+                'diagnostic_type': r.diagnostic_type,
+                'diagnostic_prob': r.diagnostic_prob,
+                'diagnostic_confidence': r.diagnostic_confidence,
+                'ar1_median': r.ar1_median,
+                'sampling_frequency': r.fingerprint_meta.sampling_frequency,
+                'n_obs': r.fingerprint_meta.n_obs,
+                'n_columns': r.fingerprint_meta.n_columns,
+                'start': r.fingerprint_meta.start,
+                'end': r.fingerprint_meta.end,
+            })
+        return pd.DataFrame(rows)
 
     def get_fingerprint_summary(self) -> pd.DataFrame:
         """获取指纹汇总表"""
@@ -2171,26 +2185,28 @@ class FactorProcessingPipelineV2:
         return alerts
 
     def get_execution_summary(self) -> str:
-        """获取执行摘要"""
+        """获取执行摘要 (v3.4.0 ADR: 执行管道 + 指纹诊断两段, 不再把诊断标签写成执行结果)"""
         lines = ["=" * 60]
         lines.append("FactorProcessingPipelineV2 执行摘要")
         lines.append("=" * 60)
 
-        # 分类结果
-        lines.append("\n[因子分类结果]")
+        # 第一段: 执行管道事实 (唯一可信来源 = factor_routing)
+        lines.append("\n[执行管道]")
+        routing = self.get_routing_summary()
+        if not routing.empty:
+            for _, row in routing.iterrows():
+                lines.append(
+                    f"  {row['factor_name']}: pipe={row['execution_pipe_type']} "
+                    f"(mode={row['pipeline_mode']}, freq={row['sampling_frequency']}, "
+                    f"n_obs={row['n_obs']}, ar1={row['ar1_median']:.4f})")
+
+        # 第二段: 指纹诊断 (只读标签, 不代表实际执行)
+        lines.append("\n[指纹诊断标签]")
         summary = self.get_classification_summary()
         if not summary.empty:
             for _, row in summary.iterrows():
                 lines.append(f"  {row['factor_name']}: {row['primary_type']} "
-                           f"(prob={row['primary_prob']:.2f}, confidence={row['confidence']:.2f})")
-
-        # 指纹摘要
-        lines.append("\n[因子指纹摘要]")
-        fp_summary = self.get_fingerprint_summary()
-        if not fp_summary.empty:
-            for _, row in fp_summary.iterrows():
-                lines.append(f"  {row['factor_name']}: AR(1)={row['ar1_median']:.4f}, "
-                           f"SD_Score={row['sd_score']:.4f}, SNR={row['snr_estimate']:.4f}")
+                             f"(prob={row['primary_prob']:.2f}, confidence={row['confidence']:.2f})")
 
         lines.append("\n" + "=" * 60)
         return "\n".join(lines)

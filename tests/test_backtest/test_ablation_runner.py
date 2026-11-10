@@ -417,16 +417,16 @@ class TestAblationConfig:
         assert config.module_enabled == {'imputer': False}
 
     def test_l2_config_routing_mode(self):
-        """L2 config → routing_mode='random' + seed"""
+        """L2 config → routing_mode='unified' 可构造 (v3.4.0 ADR-042: 值收缩为 full/unified/dynamic)"""
         config = AblationConfig(
-            name='L2_random_routing',
+            name='L2_unified',
             layer='L2',
-            routing_mode='random',
-            random_seed=42,
+            routing_mode='unified',
         )
         assert config.layer == 'L2'
-        assert config.routing_mode == 'random'
-        assert config.random_seed == 42
+        assert config.name == 'L2_unified'
+        assert config.routing_mode == 'unified'
+        assert config.baseline_level is None
 
 
 # =============================================================================
@@ -617,8 +617,8 @@ class TestAblationRunnerBatch:
         assert any('neutralizer' in n for n in names)
         assert any('orthogonalizer' in n for n in names)
 
-    def test_run_l2_returns_5_results(self, monkeypatch):
-        """run_l2 → 5 个 AblationResult"""
+    def test_run_l2_returns_2_results(self, monkeypatch):
+        """run_l2 → 2 个 AblationResult (v3.4.0 ADR-042: 2 臂)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
@@ -633,14 +633,11 @@ class TestAblationRunnerBatch:
         monkeypatch.setattr(runner, 'run_single', mock_run_single)
         results = runner.run_l2(factor_data, fwd_returns)
 
-        assert len(results) == 5
-        assert call_count[0] == 5
+        assert len(results) == 2
+        assert call_count[0] == 2
         names = [r.config.name for r in results]
-        assert any('static' in n for n in names)
-        assert any('dynamic' in n for n in names)
-        assert any('mixed' in n for n in names)
-        assert any('random' in n for n in names)
-        assert any('full' in n for n in names)
+        assert 'L2_unified' in names
+        assert 'L2_dynamic' in names
 
     def test_run_baselines_returns_4_results(self, monkeypatch):
         """run_baselines → 4 个 (B0-B3)"""
@@ -1085,105 +1082,102 @@ class TestL1Ablation:
 
 
 # =============================================================================
-# E4: L2 路由消融 (8 tests)
+# E4: L2 路由消融 (7 tests)
 # =============================================================================
 
 class TestL2Ablation:
     """E4: L2 路由消融行为测试 (规格 §4.5)"""
 
-    def test_all_static_uses_static_pipeline(self, monkeypatch):
-        """routing_mode='static' → config 正确设置"""
+    def test_unified_sets_routing_mode(self, monkeypatch):
+        """routing_mode='unified' → captured config 正确设置 (v3.4.0 ADR-042)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
         captured = _capture_pipeline_configs(monkeypatch, runner)
         results = runner.run_l2(_make_factor_data(), _make_fwd_returns())
 
-        static_caps = [c for c in captured if c['config'].name == 'L2_all_static']
-        assert len(static_caps) == 1
-        assert static_caps[0]['config'].routing_mode == 'static'
+        unified_caps = [c for c in captured if c['config'].name == 'L2_unified']
+        assert len(unified_caps) == 1
+        assert unified_caps[0]['config'].routing_mode == 'unified'
 
-    def test_all_dynamic_uses_dynamic_pipeline(self, monkeypatch):
-        """routing_mode='dynamic' → config 正确设置"""
+    def test_dynamic_sets_routing_mode(self, monkeypatch):
+        """routing_mode='dynamic' → captured config 正确设置 (v3.4.0 ADR-042)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
         captured = _capture_pipeline_configs(monkeypatch, runner)
         results = runner.run_l2(_make_factor_data(), _make_fwd_returns())
 
-        dyn_caps = [c for c in captured if c['config'].name == 'L2_all_dynamic']
+        dyn_caps = [c for c in captured if c['config'].name == 'L2_dynamic']
         assert len(dyn_caps) == 1
         assert dyn_caps[0]['config'].routing_mode == 'dynamic'
 
-    def test_random_routing_reproducible(self, monkeypatch):
-        """相同 seed → 相同 random_seed 配置 (可重现)"""
+    def test_run_pipeline_injects_mode(self):
+        """直接单测注入逻辑: routing_mode → modified_config.pipeline_mode (v3.4.0 ADR-042)
+
+        patch FactorProcessingPipelineV2 构造点, 捕获 _run_pipeline 传入的
+        modified_config: dynamic → 'dynamic_ab', unified → 'unified'.
+        (_capture_pipeline_configs stub 场景下原 _run_pipeline 不执行,
+        captured['config'] 为 AblationConfig 无 pipeline_mode 字段,
+        注入观测只能走本用例的真实路径.)
+        """
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
-        captured = _capture_pipeline_configs(monkeypatch, runner)
-        runner.run_l2(_make_factor_data(), _make_fwd_returns())
+        factor_data = _make_factor_data()
+        fwd_returns = _make_fwd_returns()
 
-        random_caps = [c for c in captured if c['config'].name == 'L2_random_routing']
-        assert len(random_caps) == 1
-        assert random_caps[0]['config'].routing_mode == 'random'
-        assert random_caps[0]['config'].random_seed == 42
+        with patch('factor_pipeline.pipelines_v2.FactorProcessingPipelineV2') as mock_cls:
+            mock_instance = MagicMock()
+            # transform 返回输入副本, 保证 _collect_rho_steps 可安全消费
+            mock_instance.transform.side_effect = (
+                lambda fd: {name: df.copy() for name, df in fd.items()}
+            )
+            mock_cls.return_value = mock_instance
 
-    def test_random_routing_different_from_full(self, monkeypatch):
-        """随机路由 routing_mode != 完整路由 routing_mode"""
-        from factor_pipeline.pipelines_v2 import PipelineV2Config
+            runner._run_pipeline(
+                AblationConfig(routing_mode='dynamic'), factor_data, fwd_returns)
+            assert mock_cls.call_args[0][0].pipeline_mode == 'dynamic_ab'
 
-        runner = AblationRunner(PipelineV2Config())
-        captured = _capture_pipeline_configs(monkeypatch, runner)
-        runner.run_l2(_make_factor_data(), _make_fwd_returns())
+            runner._run_pipeline(
+                AblationConfig(routing_mode='unified'), factor_data, fwd_returns)
+            assert mock_cls.call_args[0][0].pipeline_mode == 'unified'
 
-        random_cfg = next(c['config'] for c in captured
-                         if c['config'].name == 'L2_random_routing')
-        full_cfg = next(c['config'] for c in captured
-                       if c['config'].name == 'L2_full_routing')
-        assert random_cfg.routing_mode != full_cfg.routing_mode
-        assert full_cfg.routing_mode == 'full'
+            # 'full' 为 v3.4.0 前默认口径 → 注入为 unified
+            runner._run_pipeline(
+                AblationConfig(routing_mode='full'), factor_data, fwd_returns)
+            assert mock_cls.call_args[0][0].pipeline_mode == 'unified'
 
-    def test_full_vs_random_significant_or_not(self):
-        """full vs random: 显著或诚实接受不显著"""
-        from factor_pipeline.pipelines_v2 import PipelineV2Config
+            import pytest
+            with pytest.raises(ValueError) as ctx:
+                runner._run_pipeline(
+                    AblationConfig(routing_mode='x'), factor_data, fwd_returns)
+            assert all(v in str(ctx.value)
+                       for v in ('full', 'unified', 'dynamic'))
 
-        runner = AblationRunner(PipelineV2Config(), n_bootstrap=200)
-        full = _make_layer_result('L2_full_routing', 'L2', ic_mean=0.03, seed=10)
-        random_r = _make_layer_result('L2_random_routing', 'L2',
-                                      ic_mean=0.02, seed=11)
-
-        comp = runner.compare(random_r, full)
-        # 诚实立场: 接受显著或不显著
-        assert isinstance(comp.is_significant, bool)
-        assert comp.experiment == 'L2_random_routing'
-        assert comp.reference == 'L2_full_routing'
-
-    def test_full_vs_static(self):
-        """full vs static 比较 + HAC p 值"""
+    def test_unified_vs_dynamic_comparison(self):
+        """unified 臂 vs dynamic 臂比较 + HAC p 值 (2 臂口径, v3.4.0 ADR-042)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config(), n_bootstrap=200)
-        full = _make_layer_result('L2_full_routing', 'L2', ic_mean=0.04, seed=20)
-        static_r = _make_layer_result('L2_all_static', 'L2',
-                                      ic_mean=0.01, seed=21)
+        dynamic_r = _make_layer_result('L2_dynamic', 'L2', ic_mean=0.04, seed=20)
+        unified_r = _make_layer_result('L2_unified', 'L2', ic_mean=0.01, seed=21)
 
-        comp = runner.compare(static_r, full)
-        assert comp.experiment == 'L2_all_static'
-        assert comp.reference == 'L2_full_routing'
+        comp = runner.compare(unified_r, dynamic_r)
+        assert comp.experiment == 'L2_unified'
+        assert comp.reference == 'L2_dynamic'
         assert not np.isnan(comp.p_value_hac)
         assert 0.0 <= comp.p_value_hac <= 1.0
 
-    def test_l2_bh_fdr_4_comparisons(self, monkeypatch):
-        """4 比较经 BH-FDR 校正 (4 消融 vs full 参照)"""
+    def test_l2_bh_fdr_2_comparisons(self, monkeypatch):
+        """2 比较经 BH-FDR 校正 (2 臂 vs 参照, v3.4.0 ADR-042)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config(), n_bootstrap=100)
-        reference = _make_layer_result('L2_full_routing', 'L2', seed=99)
+        reference = _make_layer_result('B3_full', 'baseline', seed=99)
         results = [
-            _make_layer_result('L2_all_static', 'L2', seed=1),
-            _make_layer_result('L2_all_dynamic', 'L2', seed=2),
-            _make_layer_result('L2_all_mixed', 'L2', seed=3),
-            _make_layer_result('L2_random_routing', 'L2', seed=4),
+            _make_layer_result('L2_unified', 'L2', seed=1),
+            _make_layer_result('L2_dynamic', 'L2', seed=2),
         ]
 
         with patch('factor_pipeline.backtest.ablation_runner.apply_bh_fdr',
@@ -1191,31 +1185,31 @@ class TestL2Ablation:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called
             called_p_values = mock_bh.call_args[0][0]
-            assert len(called_p_values) == 4, (
-                f"Expected 4 p_values for L2 BH-FDR, got {len(called_p_values)}"
+            assert len(called_p_values) == 2, (
+                f"Expected 2 p_values for L2 BH-FDR, got {len(called_p_values)}"
             )
 
     def test_l2_report_has_routing_table(self):
-        """报告含路由消融表"""
+        """报告含路由消融表 (2 臂口径, v3.4.0 ADR-042)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
         results = [
-            _make_layer_result('L2_full_routing', 'L2', seed=0),
-            _make_layer_result('L2_all_static', 'L2', seed=1),
+            _make_layer_result('L2_dynamic', 'L2', seed=0),
+            _make_layer_result('L2_unified', 'L2', seed=1),
         ]
         comparisons = runner.compare_all(results[1:], results[0])
 
         report = runner.generate_report(results, comparisons)
         assert "L2 路由消融" in report
-        assert "L2_all_static" in report
-        assert "L2_full_routing" in report
+        assert "L2_unified" in report
+        assert "L2_dynamic" in report
 
     def test_run_l2_accepts_b3_full_result(self, monkeypatch):
-        """P1-6: run_l2 accepts b3_full_result → reuses it as L2_full_routing (4 calls, not 5)
+        """run_l2 accepts b3_full_result → 追加为第 3 个参照 (2 calls, not 3)
 
-        Spec §0.4 M6 修正: run_l2 应接受 b3_full_result 参数, 提供时引用复用
-        作为 L2_full_routing 参照, 不重复 run_single.
+        v3.4.0 ADR-042: run_l2 为 2 臂, b3_full_result 提供时引用复用追加,
+        不重复 run_single.
         """
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
@@ -1233,11 +1227,11 @@ class TestL2Ablation:
         b3_full = _make_synthetic_result(name='B3_full_precomputed', seed=77)
         results = runner.run_l2(factor_data, fwd_returns, b3_full_result=b3_full)
 
-        # 5 results total (4 消融 + 1 参照)
-        assert len(results) == 5, f"Expected 5 results, got {len(results)}"
-        # run_single called 4 times (L2_full_routing reuses b3_full_result)
-        assert call_count[0] == 4, (
-            f"Expected 4 run_single calls (full reused), got {call_count[0]}"
+        # 3 results total (2 臂 + 1 参照)
+        assert len(results) == 3, f"Expected 3 results, got {len(results)}"
+        # run_single called 2 times (仅 2 臂, 参照复用 b3_full_result)
+        assert call_count[0] == 2, (
+            f"Expected 2 run_single calls (arms only), got {call_count[0]}"
         )
         # b3_full_result is reused in results (identity check)
         assert b3_full in results, (
@@ -1744,7 +1738,7 @@ class TestReport:
             _make_layer_result('B0_baseline', 'baseline', seed=0),
             _make_layer_result('B3_full', 'baseline', seed=1),
             _make_layer_result('L1_imputer_off', 'L1', seed=2),
-            _make_layer_result('L2_all_static', 'L2', seed=3),
+            _make_layer_result('L2_unified', 'L2', seed=3),
             _make_layer_result('L3_cusum_0', 'L3', seed=4),
             _make_layer_result('L4_outlier_3sigma', 'L4', seed=5),
         ]
@@ -1793,136 +1787,9 @@ class TestReport:
 
 
 # =============================================================================
-# P0-2/P0-3/P0-4: 参数注入行为测试 (audit 修复)
-# 规格: §2.5/§4.3 (L2 routing) / §6.4 (L3 params) / §5.4 (L4 OAT)
+# P0-3/P0-4: 参数注入行为测试 (audit 修复)
+# 规格: §6.4 (L3 params) / §5.4 (L4 OAT)
 # =============================================================================
-
-def _make_mock_pipeline(factor_names=None):
-    """构造 mock pipeline (含 factor_classifications) 用于 _override_routing 测试.
-
-    使用真实 ClassificationResult + FactorType, 不依赖管线 fit.
-    """
-    from factor_pipeline.modules.factor_fingerprint import (
-        FactorType, ClassificationResult,
-    )
-
-    class _MockPipeline:
-        def __init__(self):
-            # 初始化为 DYNAMIC (与 STATIC/MIXED 区分, 便于检测覆盖)
-            self.factor_classifications = {
-                name: ClassificationResult(
-                    primary_type=FactorType.DYNAMIC,
-                    primary_prob=0.6,
-                    secondary_type=FactorType.STATIC,
-                    secondary_prob=0.4,
-                    is_hard=False,
-                )
-                for name in (factor_names or ['f0', 'f1', 'f2'])
-            }
-
-    return _MockPipeline()
-
-
-class TestRoutingOverride:
-    """P0-2: L2 路由覆盖 (_override_routing) 行为测试 (规格 §2.5/§4.3)"""
-
-    def _make_runner(self):
-        from factor_pipeline.pipelines_v2 import PipelineV2Config
-        return AblationRunner(PipelineV2Config())
-
-    def test_override_routing_static(self):
-        """routing_mode='static' → 所有 classifications 强制为 STATIC, is_hard=True"""
-        from factor_pipeline.modules.factor_fingerprint import FactorType
-
-        runner = self._make_runner()
-        pipeline = _make_mock_pipeline(['f0', 'f1', 'f2'])
-        original_keys = list(pipeline.factor_classifications.keys())
-
-        runner._override_routing(pipeline, 'static', random_seed=None)
-
-        for name in original_keys:
-            cls = pipeline.factor_classifications[name]
-            assert cls.primary_type == FactorType.STATIC, (
-                f"{name}: expected STATIC, got {cls.primary_type}"
-            )
-            assert cls.is_hard is True
-            assert cls.primary_prob == 1.0
-
-    def test_override_routing_dynamic(self):
-        """routing_mode='dynamic' → 所有 classifications 强制为 DYNAMIC"""
-        from factor_pipeline.modules.factor_fingerprint import FactorType
-
-        runner = self._make_runner()
-        pipeline = _make_mock_pipeline(['f0', 'f1'])
-
-        runner._override_routing(pipeline, 'dynamic', random_seed=None)
-
-        for name, cls in pipeline.factor_classifications.items():
-            assert cls.primary_type == FactorType.DYNAMIC, (
-                f"{name}: expected DYNAMIC, got {cls.primary_type}"
-            )
-            assert cls.is_hard is True
-
-    def test_override_routing_mixed(self):
-        """routing_mode='mixed' → 所有 classifications 强制为 MIXED"""
-        from factor_pipeline.modules.factor_fingerprint import FactorType
-
-        runner = self._make_runner()
-        pipeline = _make_mock_pipeline(['f0', 'f1', 'f2', 'f3'])
-
-        runner._override_routing(pipeline, 'mixed', random_seed=None)
-
-        for name, cls in pipeline.factor_classifications.items():
-            assert cls.primary_type == FactorType.MIXED, (
-                f"{name}: expected MIXED, got {cls.primary_type}"
-            )
-            assert cls.is_hard is True
-
-    def test_override_routing_random_seed(self):
-        """routing_mode='random' + 固定 seed → 可重现的随机分配"""
-        from factor_pipeline.modules.factor_fingerprint import FactorType
-
-        runner = self._make_runner()
-        factor_names = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5']
-
-        # 第一次运行
-        pipeline_a = _make_mock_pipeline(factor_names)
-        runner._override_routing(pipeline_a, 'random', random_seed=42)
-        types_a = {n: pipeline_a.factor_classifications[n].primary_type
-                   for n in factor_names}
-
-        # 第二次运行 (相同 seed)
-        pipeline_b = _make_mock_pipeline(factor_names)
-        runner._override_routing(pipeline_b, 'random', random_seed=42)
-        types_b = {n: pipeline_b.factor_classifications[n].primary_type
-                   for n in factor_names}
-
-        # 可重现: 两次结果完全一致
-        assert types_a == types_b, (
-            f"random routing with same seed should be reproducible: "
-            f"{types_a} vs {types_b}"
-        )
-        # 所有结果必须是合法类型
-        valid_types = {FactorType.STATIC, FactorType.DYNAMIC, FactorType.MIXED}
-        for name, t in types_a.items():
-            assert t in valid_types, f"{name}: invalid type {t}"
-
-    def test_override_routing_full(self):
-        """routing_mode='full' → classifications 不变 (指纹驱动路由保持)"""
-        runner = self._make_runner()
-        pipeline = _make_mock_pipeline(['f0', 'f1'])
-        # 保存原始分类的快照
-        original = {n: cls for n, cls in pipeline.factor_classifications.items()}
-
-        runner._override_routing(pipeline, 'full', random_seed=None)
-
-        # 完全不变
-        for name, orig_cls in original.items():
-            cur = pipeline.factor_classifications[name]
-            assert cur is orig_cls, (
-                f"{name}: classification should be unchanged for 'full' mode"
-            )
-
 
 class TestL3ParameterInjection:
     """P0-3: L3 参数注入 (_apply_l3_overrides) 行为测试 (规格 §6.4)"""

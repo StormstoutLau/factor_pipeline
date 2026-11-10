@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-端到端阈值搜索 — 目标函数验证脚本
+端到端阈值搜索 — 目标函数验证脚本 (v3.4.0 弃用)
+
+.. deprecated:: v3.4.0 ADR-042
+   本脚本围绕 v3.3.x 路由阈值搜索空间编写; v3.4.0 统一路由后
+   DEFAULT_SEARCH_SPACE 已清空, 脚本引用的已删字段不再存在,
+   仅作历史参考保留, 不再维护。当前验证请用 tests/manual/verify_v2_6_0_manual.py
+   与 pytest 套件 tests/test_p3_phase3_optimizer.py。
 
 逐题验证:
   Q1: 目标函数权重合理性 — 敏感性分析

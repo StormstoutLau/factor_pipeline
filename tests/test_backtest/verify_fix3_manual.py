@@ -2,7 +2,7 @@
 """Fix 3 手工校验脚本
 
 校验:
-  1. 5 个预期位置的版本号均为 3.3.7
+  1. 6 个预期位置的版本号均为 3.4.0 (v3.4.0: 本脚本自身成为第 6 处版本锚点)
   2. 全局扫描旧版本号 (2.0.0, 2.1.0) 残留
   3. 缓存 code_version 独立于项目版本
   4. pyproject.toml 版本号状态
@@ -18,7 +18,7 @@ _PROJECT_ROOT = _PROJECT_PARENT / "factor_pipeline"
 if str(_PROJECT_PARENT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_PARENT))
 
-EXPECTED_VERSION = "3.3.7"
+EXPECTED_VERSION = "3.4.0"
 OLD_VERSIONS = ["2.0.0", "2.1.0"]
 
 
@@ -27,16 +27,17 @@ print("Fix 3 手工校验 — 版本号统一")
 print("=" * 70)
 
 
-# ── 校验 1: 5 个预期位置 ────────────────────────────────────────
+# ── 校验 1: 6 个预期位置 ────────────────────────────────────────
 print("\n[1] 预期位置版本号核对")
 
-# 字段级测试已改为比对本包 __version__ (不再各存字面量), 故此处校验 4 处声明 + 1 处锚点
+# 字段级测试已改为比对本包 __version__ (不再各存字面量), 故此处校验 5 处声明 + 1 处锚点
 EXPECTED_LOCATIONS = [
     ("__init__.py", r'__version__\s*=\s*["\']([^"\']+)["\']'),
     ("config_v2.py", r'version:\s*str\s*=\s*Field\(default="([^"]+)"'),
     ("reporting.py", r'pipeline_version\s*:\s*str\s*=\s*"([^"]+)"'),
     ("pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
     ("tests/test_fix3_version_unification.py", r'EXPECTED_VERSION\s*=\s*"([^"]+)"'),
+    ("tests/test_backtest/verify_fix3_manual.py", r'EXPECTED_VERSION\s*=\s*"([^"]+)"'),
 ]
 
 found_versions = []
@@ -149,7 +150,8 @@ print(f"  ✓ factor_pipeline.__version__ = {actual_top_version}")
 
 
 print("\n" + "=" * 70)
-print(f"Fix 3 手工校验通过: 5/5 (预期位置 {len(found_versions)}/5, 缓存独立, 顶层可导入)")
+print(f"Fix 3 手工校验通过: 5/5 (预期位置 {len(found_versions)}/"
+      f"{len(EXPECTED_LOCATIONS)}, 缓存独立, 顶层可导入)")
 if residual:
     print(f"  注意: 有 {len(residual)} 处旧版本残留 (已记录, 非项目版本声明)")
 print("=" * 70)

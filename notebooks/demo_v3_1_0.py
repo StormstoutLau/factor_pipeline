@@ -116,21 +116,18 @@ def _fingerprint_radar_plot(fingerprints):
 
 
 # =============================================================================
-# Cell 3: 分类决策树 — 显示因子在 5 叉决策树上的路径 + 路由权重
+# Cell 3: 分类诊断 — 因子分类结果展示
+# (v3.4.0 ADR-042: 统一路由后分类仅作诊断层, 不再驱动管道路由)
 # =============================================================================
 
 def cell_3_classification(data, show_plot=False):
     from factor_pipeline.modules.factor_fingerprint import AdaptiveFactorClassifier
-    from factor_pipeline.pipelines_v2 import _get_pipeline_weights
 
     classifier = AdaptiveFactorClassifier()
     classifications = {}
-    routing_weights = {}
 
     for name, fp in cell_2_fingerprint_radar(data)['fingerprints'].items():
-        cls_result = classifier.classify(fp)
-        classifications[name] = cls_result
-        routing_weights[name] = _get_pipeline_weights(cls_result)
+        classifications[name] = classifier.classify(fp)
 
     if show_plot:
         import matplotlib
@@ -141,38 +138,27 @@ def cell_3_classification(data, show_plot=False):
         if len(classifications) == 1:
             axes = [axes]
         for ax, (name, cls_r) in zip(axes, classifications.items()):
-            _classification_sunburst(ax, name, cls_r, routing_weights[name])
+            _classification_bar(ax, name, cls_r)
         plt.tight_layout()
         plt.close(fig)
 
     return {
         'classifications': classifications,
-        'routing_weights': routing_weights,
     }
 
 
-def _classification_sunburst(ax, name, cls_result, weights):
+def _classification_bar(ax, name, cls_result):
     import matplotlib.patches as mpatches
 
     primary = cls_result.primary_type.value.lower()
-    secondary = getattr(cls_result, 'secondary_type', None)
-    if secondary:
-        secondary = secondary.value.lower()
-
     colors = {'static': '#2563eb', 'dynamic': '#dc2626', 'mixed': '#ca8a04'}
-    y_positions = list(range(len(weights), 0, -1))
-    bar_labels = []
 
-    for i, (pipe_type, w) in enumerate(weights.items()):
-        color = colors.get(pipe_type, '#888888')
-        ax.barh(y_positions[i], w, color=color, alpha=0.7)
-        bar_labels.append(f'{pipe_type}: {w:.2f}')
-
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(bar_labels)
+    ax.barh([1], [cls_result.primary_prob], color=colors.get(primary, '#888888'), alpha=0.7)
+    ax.set_yticks([1])
+    ax.set_yticklabels([f'{primary}: {cls_result.primary_prob:.2f}'])
     ax.set_xlim(0, 1)
-    ax.set_xlabel('Routing Weight')
-    ax.set_title(f'{name}\nprimary={primary} ({cls_result.primary_prob:.2f})', size=9)
+    ax.set_xlabel('Primary Prob')
+    ax.set_title(f'{name}\nprimary={primary}', size=9)
 
 
 # =============================================================================

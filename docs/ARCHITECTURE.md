@@ -13,11 +13,11 @@
 
 **核心价值**:
 - **顺序校验**: 基于 DAG 的拓扑验证,确保处理步骤顺序符合统计理论 (插补→去极值→变换→标准化→中性化)
-- **自适应分类**: 通过 21 维因子指纹 + 统计检验 (VR + DF τ) 将因子分为 Static / Dynamic / Mixed 三类,自动路由到对应管线
-- **因果性保证**: 插补与去极值禁止使用未来数据 (插补 lookahead_safe=True 默认; 去极值逐日横截面, fit 不存参数),通过截断不变性测试验证;Dynamic 管线的 AR 解耦自 v3.3.6 起为"前缀冻结 + 三段式一步预测"(warm-up 内每 stride=10 行重估, t≥warmup_obs 冻结),结构上不使用未来数据;自 v3.3.7 起 AR 阶数选择统一 hold_back 样本 (所有候选阶数共用 `y[H:]`, 信息准则跨阶可比), 系数/阶数仍只用前缀
-- **学术可验证**: 每个统计决策都有显著性检验支撑,关键算法有学术文献引用 (经独立验证,排除幻觉)
+- **统一横截面秩管道 (v3.4.0 ADR-042)**: 默认 `pipeline_mode='unified'`, 所有因子走同一条管道 (imputer → 1%/99% 缩尾 → 中性化 → rank→normal → z-score); 21 维因子指纹降级为只读诊断层, 采样频率写入 `FingerprintMeta`; `DynamicFactorPipeline` 仅经 `pipeline_mode='dynamic_ab'` 整臂 A/B 实验保留
+- **因果性保证**: 插补与去极值禁止使用未来数据 (插补 lookahead_safe=True 默认; 去极值逐日横截面, fit 不存参数),通过截断不变性测试验证; 变换统一为逐日截面 rank→正态 (v3.3.4), 系数/参数只用前缀
+- **学术可验证**: 每个统计决策都有显著性检验支撑,关键算法有学术文献引用 (经独立验证,排除幻觉); 管道选择/采样频率写入 SpecificationLogger (opt-in), 结构突变监控 (sup-F/CUSUM) 只告警
 
-**版本基线**: v3.3.0 (2026-07-15) → v3.3.1 (2026-07-27, 插补模块 P2 完成) → v3.3.2 (2026-10-21, 管线级因果性测试 + PL-03 修复 + 版本号统一) → v3.3.3 (2026-10-22, PL-01 去极值逐日横截面 + ADR-037) → v3.3.4 (2026-10-22, PL-02 变换逐日截面 rank→正态 + ADR-038) → v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041)
+**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042)
 
 ---
 
@@ -29,8 +29,8 @@
 │  - 回测引擎 + 漂移监测 + 缓存层 + 归因分析                       │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 4: Pipeline Orchestration (pipelines_v2.py)              │
-│  - StaticFactorPipeline / DynamicFactorPipeline / MixedPipeline │
-│  - 软路由 (ADR-001) + 阈值校准 + KS 迁移检测                     │
+│  - 统一横截面秩管道 (默认, ADR-042) + dynamic_ab 整臂 A/B        │
+│  - 指纹只读诊断 + SpecificationLogger + StructuralBreakMonitor   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 3: Health Diagnosis (modules/factor_health/)             │
 │  - PremiumEstimator (Fama-MacBeth + Epanechnikov)              │
@@ -63,7 +63,7 @@
 | 文件 | 职责 | 关键类/函数 | ADR |
 |------|------|------------|-----|
 | [pipeline.py](../pipeline.py) | 顺序校验 + 步骤执行 + 状态追踪 | `PipelineOrderValidator` (委托给 `PipelineDAG`) | — |
-| [pipelines_v2.py](../pipelines_v2.py) | v2.0 自适应管线 (软路由 + 阈值校准) | `StaticFactorPipeline`, `DynamicFactorPipeline`, `MixedFactorPipeline`, `FactorProcessingPipelineV2`, `_get_pipeline_weights`, `_ks_migration_significance` | ADR-001 (软路由), ADR-002a (BH-FDR) |
+| [pipelines_v2.py](../pipelines_v2.py) | 统一横截面秩管线 (ADR-042) + 指纹只读诊断 + 规格日志 | `StaticFactorPipeline`, `DynamicFactorPipeline` (dynamic_ab), `MixedFactorPipeline` (直调), `FactorProcessingPipelineV2`, `FactorRoutingRecord`, `_ks_migration_significance` | ADR-042 (统一路由), ADR-002a (BH-FDR) |
 | [adapters.py](../adapters.py) | 5 个 Adapter 封装外部模块为 `PipelineStep` | `ImputerAdapter`, `ProcessingAdapter`, `NeutralizerAdapter`, `GarchWhiteningAdapter`, `OrthogonalizerAdapter` | ADR-015, ADR-018 |
 | [dag.py](../dag.py) | DAG 拓扑验证 (networkx.DiGraph) | `PipelineDAG` | — |
 | [config.py](../config.py) / [config_v2.py](../config_v2.py) | 配置管理 (dataclass / pydantic) | `StepType` (5 步骤枚举), `PipelineConfig`, `PipelineV2Config` | ADR-010 |
@@ -154,36 +154,38 @@
 - OUTLIER_DETECTION 必须在 TRANSFORMATION/STANDARDIZATION 之前 (极值扭曲变换参数)
 - NEUTRALIZATION 必须是最后一步 (中性化后残差不应再分布变换)
 
-### §4.2 自适应路由数据流 (v2.0+)
+### §4.2 统一管道数据流 (v3.4.0, ADR-042)
 
 ```
 原始因子数据
         │
         ▼
 ┌───────────────────┐
-│ FactorFingerprinter │  → 21 维指纹 (VR, AR(1), 尾依赖, 状态切换, ...)
+│ FactorFingerprinter │  → 21 维指纹 + 采样频率 FingerprintMeta (只读诊断)
 └───────────────────┘
         │
         ▼
 ┌───────────────────────┐
-│ StatisticalClassifier │  → VR + DF τ → Static / Dynamic / Mixed
+│ AdaptiveFactorClassifier│  → 分类结果 (诊断记录, 不再驱动路由)
 └───────────────────────┘
         │
         ▼
-┌─────────────────────┐
-│ _get_pipeline_weights│  → 概率权重 (软路由, ADR-001)
-└─────────────────────┘
+┌─────────────────────────────┐
+│ pipeline_mode == 'unified'?  │
+│  是 → 全部因子走 Static 管道 │
+│  否 ('dynamic_ab') → 整臂    │
+│       走 Dynamic 管道 (A/B)  │
+└─────────────────────────────┘
         │
         ▼
-   ┌─────┬─────┬─────┐
-   ▼     ▼     ▼     ▼
- Static Dynamic Mixed (并行 3 管线, 加权混合)
-   │     │     │
-   └─────┴─────┘
+  StaticFactorPipeline (imputer → 缩尾 → 中性化 → CSRankNorm → z)
         │
         ▼
-  _apply_weighted_transform (加权混合输出)
+  FactorRoutingRecord (逐因子路由记录 + 规格日志 opt-in)
 ```
+
+> v3.3.x 之前的"三路指纹路由 (软路由加权混合)"已于 v3.4.0 退役
+> (ADR-042); `MixedFactorPipeline` 类保留仅供直调。
 
 ### §4.3 健康诊断数据流 (v3.3.0+)
 
@@ -326,9 +328,10 @@ class ImputerAdapter(PipelineStep):
 完整 ADR 见 [DECISIONS.md](../DECISIONS.md)。按主题分组:
 
 ### §7.1 架构与路由
-- [ADR-001: 软路由替代硬路由](../DECISIONS.md#adr-001-软路由替代硬路由) (v2.1.0)
+- [ADR-001: 软路由替代硬路由](../DECISIONS.md#adr-001-软路由替代硬路由) (v2.1.0, 已于 v3.4.0 退役)
 - [ADR-019: 外部模块内化](../DECISIONS.md#adr-019-外部模块内化) (v2.4.0)
 - [ADR-027: 学术准则驱动管线重构](../DECISIONS.md#adr-027-学术准则驱动管线重构) (v3.2.0)
+- [ADR-042: 统一横截面秩管道替代三路指纹路由](../DECISIONS.md#adr-042-统一横截面秩管道替代三路指纹路由-v340) (v3.4.0)
 
 ### §7.2 统计方法
 - [ADR-002: Bonferroni KS 双样本检验](../DECISIONS.md#adr-002-bonferroni-校正的-ks-双样本检验替代简单迁移检测)

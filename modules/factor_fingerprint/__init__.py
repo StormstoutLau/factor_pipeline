@@ -22,6 +22,7 @@ from .core.fingerprint import (
     FactorFingerprint,
     FingerprintConfig,
     FactorType,
+    infer_sampling_frequency,
 )
 
 from .core.classifier import (
@@ -70,6 +71,7 @@ __all__ = [
     'FactorFingerprint',
     'FingerprintConfig',
     'FactorType',
+    'infer_sampling_frequency',
     'AdaptiveFactorClassifier',
     'ClassificationConfig',
     'ClassificationResult',

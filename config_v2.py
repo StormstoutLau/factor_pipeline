@@ -368,7 +368,7 @@ class PipelineV2ConfigUnified(BaseModel):
     """
     
     name: str = Field(default="factor_pipeline_v2", description="流水线名称")
-    version: str = Field(default="3.3.7", description="版本")
+    version: str = Field(default="3.4.0", description="版本")
     description: str = Field(default="", description="描述")
     
     # 全局设置
@@ -401,30 +401,30 @@ class PipelineV2ConfigUnified(BaseModel):
         description="迁移置信度阈值"
     )
     
-    # v2.1 端到端阈值搜索新增配置 (P3 Phase 1)
-    hard_routing_prob: float = Field(
-        default=0.90, ge=0.5, le=1.0,
-        description="硬路由概率阈值（软路由中超过此值直接硬路由）"
-    )
-    merge_alpha: float = Field(
-        default=0.50, ge=0.0, le=1.0,
-        description="迁移权重与分类权重的融合系数（0=纯分类，1=纯迁移）"
-    )
-    ks_alpha: float = Field(
-        default=0.05, ge=0.001, le=0.5,
-        description="KS 迁移显著性检验的显著性水平"
-    )
-    mixed_winsor_sigma: float = Field(
-        default=3.0, ge=1.0, le=10.0,
-        description="混合管道缩尾阈值（sigma 倍数）"
-    )
-    transform_aggressiveness: float = Field(
-        default=1.0, ge=0.3, le=5.0,
-        description="变换激进程度系数（<1 保守，>1 激进）"
-    )
-    
     # 回测配置 (P6 - Backtest 集成)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
+
+    # v3.4.0 ADR (暂用号 ADR-042): 统一路由/诊断/断点监控
+    pipeline_mode: Literal['unified', 'dynamic_ab'] = Field(
+        default='unified',
+        description="管道模式: unified(统一横截面秩管道) / dynamic_ab(显式 A/B 臂)",
+    )
+    enable_fingerprint_diagnostics: bool = Field(
+        default=True,
+        description="是否计算指纹诊断标签 (不影响指纹提取与监控)",
+    )
+    ab_experiment_id: Optional[str] = Field(
+        default=None,
+        description="A/B 实验标识 (写入规格日志)",
+    )
+    enable_break_monitor: bool = Field(
+        default=False,
+        description="启用结构突变监控 (只告警)",
+    )
+    break_monitor_window: int = Field(default=250, ge=60)
+    break_monitor_stride: int = Field(default=20, ge=1)
+    break_monitor_alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
+    break_monitor_n_bootstrap: int = Field(default=400, ge=50)
 
     # v2.5.0 正交化配置 (Layer 2, ADR-020) — 默认关闭, 不影响基线
     orthogonalization: OrthogonalizationConfig = Field(
@@ -471,7 +471,10 @@ class PipelineV2ConfigUnified(BaseModel):
         PipelineV2Config (dataclass, optimizer/pipeline 运行时) 之间的转换桥接。
 
         字段映射:
-          - 4 共享字段直接复制: hard_routing_prob, merge_alpha, ks_alpha, mixed_winsor_sigma
+          - v3.4.0 ADR: 统一路由/诊断/断点监控 8 字段直接复制:
+              pipeline_mode / enable_fingerprint_diagnostics / ab_experiment_id /
+              enable_break_monitor / break_monitor_window / break_monitor_stride /
+              break_monitor_alpha / break_monitor_n_bootstrap
           - 概念对应:
               classification_threshold_static  → classification.static_ar1_threshold
               classification_threshold_dynamic → classification.dynamic_ar1_threshold
@@ -527,11 +530,15 @@ class PipelineV2ConfigUnified(BaseModel):
             static_garch_q=self.static.garch.q,
             static_garch_vol=self.static.garch.vol,
             static_garch_min_obs=self.static.garch.min_obs,
-            # 4 个共享字段 (直接复制)
-            hard_routing_prob=self.hard_routing_prob,
-            merge_alpha=self.merge_alpha,
-            ks_alpha=self.ks_alpha,
-            mixed_winsor_sigma=self.mixed_winsor_sigma,
+            # v3.4.0 ADR: 统一路由/诊断/断点监控 8 字段 (直接复制)
+            pipeline_mode=self.pipeline_mode,
+            enable_fingerprint_diagnostics=self.enable_fingerprint_diagnostics,
+            ab_experiment_id=self.ab_experiment_id,
+            enable_break_monitor=self.enable_break_monitor,
+            break_monitor_window=self.break_monitor_window,
+            break_monitor_stride=self.break_monitor_stride,
+            break_monitor_alpha=self.break_monitor_alpha,
+            break_monitor_n_bootstrap=self.break_monitor_n_bootstrap,
             # v2.6.0 E2: migration_threshold 字段直接传递 (字段位于 config 本身)
             migration_threshold=self.migration_threshold,
             # v2.5.0 正交化配置 (整对象透传, dataclass 字段为 Optional[Any])

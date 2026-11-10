@@ -14,10 +14,13 @@ Fix 2: 配置系统统一 (方案 C) — TDD 测试
   - 添加 to_pipeline_v2_config() 方法: Unified → dataclass
   - 添加 from_unified() 类方法: dataclass ← Unified (备选入口)
   - 字段映射:
-      * 4 共享字段直接复制: hard_routing_prob, merge_alpha, ks_alpha, mixed_winsor_sigma
+      * v3.4.0 统一路由/诊断/断点监控 8 字段直接复制:
+        pipeline_mode / enable_fingerprint_diagnostics / ab_experiment_id /
+        enable_break_monitor / break_monitor_window / break_monitor_stride /
+        break_monitor_alpha / break_monitor_n_bootstrap
       * 嵌套 → 扁平: static.garch.* / dynamic.* / mixed.transformation.*
       * 概念对应: classification_threshold_static/dynamic → classification.static/dynamic_ar1_threshold
-                  migration_threshold → monitor.migration_threshold (or similarity_threshold)
+                  migration_threshold → migration_threshold (dataclass 字段本身)
 """
 
 import unittest
@@ -84,39 +87,47 @@ class TestFix2ConfigUnification(unittest.TestCase):
         self.assertIsInstance(result, self.Dataclass)
 
     # =====================================================================
-    # 测试 2: 4 个共享字段直接复制 (默认值)
+    # 测试 2: v3.4.0 统一路由/诊断/断点监控 8 字段直接复制 (默认值/自定义值)
     # =====================================================================
 
-    def test_03_shared_four_fields_default(self):
-        """test_03: 4 个共享字段默认值正确映射"""
+    def test_03_unified_routing_fields_default(self):
+        """test_03: v3.4.0 统一路由/诊断/断点监控 8 字段默认值正确映射"""
         unified = self.Unified()
         dc = unified.to_pipeline_v2_config()
 
-        # 手工校验: 默认值
-        # hard_routing_prob = 0.90
-        # merge_alpha = 0.50
-        # ks_alpha = 0.05
-        # mixed_winsor_sigma = 3.0
-        self.assertAlmostEqual(dc.hard_routing_prob, 0.90, places=6)
-        self.assertAlmostEqual(dc.merge_alpha, 0.50, places=6)
-        self.assertAlmostEqual(dc.ks_alpha, 0.05, places=6)
-        self.assertAlmostEqual(dc.mixed_winsor_sigma, 3.0, places=6)
+        # 手工校验: 默认值 (与 PipelineV2ConfigUnified 字段默认一致)
+        self.assertEqual(dc.pipeline_mode, 'unified')
+        self.assertEqual(dc.enable_fingerprint_diagnostics, True)
+        self.assertIsNone(dc.ab_experiment_id)
+        self.assertEqual(dc.enable_break_monitor, False)
+        self.assertEqual(dc.break_monitor_window, 250)
+        self.assertEqual(dc.break_monitor_stride, 20)
+        self.assertEqual(dc.break_monitor_alpha, 0.05)
+        self.assertEqual(dc.break_monitor_n_bootstrap, 400)
 
-    def test_04_shared_four_fields_custom(self):
-        """test_04: 4 个共享字段自定义值正确映射"""
+    def test_04_unified_routing_fields_custom(self):
+        """test_04: v3.4.0 统一路由/诊断/断点监控 8 字段自定义值正确映射"""
         unified = self.Unified(
-            hard_routing_prob=0.75,
-            merge_alpha=0.30,
-            ks_alpha=0.01,
-            mixed_winsor_sigma=2.5,
+            pipeline_mode='dynamic_ab',
+            enable_fingerprint_diagnostics=False,
+            ab_experiment_id='exp-fix2-001',
+            enable_break_monitor=True,
+            break_monitor_window=300,
+            break_monitor_stride=10,
+            break_monitor_alpha=0.02,
+            break_monitor_n_bootstrap=500,
         )
         dc = unified.to_pipeline_v2_config()
 
         # 手工校验: 自定义值
-        self.assertAlmostEqual(dc.hard_routing_prob, 0.75, places=6)
-        self.assertAlmostEqual(dc.merge_alpha, 0.30, places=6)
-        self.assertAlmostEqual(dc.ks_alpha, 0.01, places=6)
-        self.assertAlmostEqual(dc.mixed_winsor_sigma, 2.5, places=6)
+        self.assertEqual(dc.pipeline_mode, 'dynamic_ab')
+        self.assertEqual(dc.enable_fingerprint_diagnostics, False)
+        self.assertEqual(dc.ab_experiment_id, 'exp-fix2-001')
+        self.assertEqual(dc.enable_break_monitor, True)
+        self.assertEqual(dc.break_monitor_window, 300)
+        self.assertEqual(dc.break_monitor_stride, 10)
+        self.assertEqual(dc.break_monitor_alpha, 0.02)
+        self.assertEqual(dc.break_monitor_n_bootstrap, 500)
 
     # =====================================================================
     # 测试 3: 概念对应字段映射
@@ -221,25 +232,34 @@ class TestFix2ConfigUnification(unittest.TestCase):
     # =====================================================================
 
     def test_10_round_trip_default(self):
-        """test_10: 默认配置 round-trip: Unified → dataclass → 比对 4 共享字段"""
-        unified_orig = self.Unified()
-        dc = unified_orig.to_pipeline_v2_config()
+        """test_10: 默认配置映射: Unified → dataclass 的 v3.4.0 8 字段取值"""
+        dc = self.Unified().to_pipeline_v2_config()
 
-        # 反向: 从 dataclass 重建 Unified (用 from_unified 应等价于 to_pipeline_v2_config)
-        dc2 = self.Dataclass.from_unified(unified_orig)
-        # 两个 dataclass 应该字段相同 (4 共享字段)
-        self.assertAlmostEqual(dc.hard_routing_prob, dc2.hard_routing_prob, places=6)
-        self.assertAlmostEqual(dc.merge_alpha, dc2.merge_alpha, places=6)
-        self.assertAlmostEqual(dc.ks_alpha, dc2.ks_alpha, places=6)
-        self.assertAlmostEqual(dc.mixed_winsor_sigma, dc2.mixed_winsor_sigma, places=6)
+        # 逐字段断言默认值 (不可用 from_unified 自比 — 其内部即调用本方法)
+        self.assertEqual(dc.pipeline_mode, 'unified')
+        self.assertTrue(dc.enable_fingerprint_diagnostics)
+        self.assertIsNone(dc.ab_experiment_id)
+        self.assertFalse(dc.enable_break_monitor)
+        self.assertEqual(dc.break_monitor_window, 250)
+        self.assertEqual(dc.break_monitor_stride, 20)
+        self.assertAlmostEqual(dc.break_monitor_alpha, 0.05)
+        self.assertEqual(dc.break_monitor_n_bootstrap, 400)
+
+        # from_unified 工厂仍可用 (等价于 to_pipeline_v2_config)
+        self.assertIsInstance(self.Dataclass.from_unified(self.Unified()),
+                              self.Dataclass)
 
     def test_11_round_trip_custom_values(self):
         """test_11: 自定义值 round-trip: 所有映射字段保持一致"""
         unified = self.Unified(
-            hard_routing_prob=0.80,
-            merge_alpha=0.40,
-            ks_alpha=0.02,
-            mixed_winsor_sigma=2.8,
+            pipeline_mode='dynamic_ab',
+            enable_fingerprint_diagnostics=False,
+            ab_experiment_id='exp-roundtrip-fix2',
+            enable_break_monitor=True,
+            break_monitor_window=300,
+            break_monitor_stride=15,
+            break_monitor_alpha=0.02,
+            break_monitor_n_bootstrap=600,
             classification_threshold_static=0.82,
             classification_threshold_dynamic=0.38,
             migration_threshold=0.12,
@@ -260,11 +280,15 @@ class TestFix2ConfigUnification(unittest.TestCase):
         dc = unified.to_pipeline_v2_config()
 
         # 手工校验所有字段
-        # 4 共享字段
-        self.assertAlmostEqual(dc.hard_routing_prob, 0.80, places=6)
-        self.assertAlmostEqual(dc.merge_alpha, 0.40, places=6)
-        self.assertAlmostEqual(dc.ks_alpha, 0.02, places=6)
-        self.assertAlmostEqual(dc.mixed_winsor_sigma, 2.8, places=6)
+        # v3.4.0 统一路由/诊断/断点监控 8 字段
+        self.assertEqual(dc.pipeline_mode, 'dynamic_ab')
+        self.assertEqual(dc.enable_fingerprint_diagnostics, False)
+        self.assertEqual(dc.ab_experiment_id, 'exp-roundtrip-fix2')
+        self.assertEqual(dc.enable_break_monitor, True)
+        self.assertEqual(dc.break_monitor_window, 300)
+        self.assertEqual(dc.break_monitor_stride, 15)
+        self.assertEqual(dc.break_monitor_alpha, 0.02)
+        self.assertEqual(dc.break_monitor_n_bootstrap, 600)
         # 概念对应字段
         self.assertAlmostEqual(dc.classification.static_ar1_threshold, 0.82, places=6)
         self.assertAlmostEqual(dc.classification.dynamic_ar1_threshold, 0.38, places=6)
@@ -285,30 +309,30 @@ class TestFix2ConfigUnification(unittest.TestCase):
     # =====================================================================
 
     def test_12_dataclass_consumed_by_optimizer(self):
-        """test_12: 转换后的 dataclass 可被 optimizer 消费"""
+        """test_12: 转换后的 dataclass 可被 optimizer._config_to_params 消费 (v3.4.0 3 参数契约)"""
         unified = self.Unified(
-            hard_routing_prob=0.78,
-            merge_alpha=0.35,
-            ks_alpha=0.03,
-            mixed_winsor_sigma=2.7,
+            classification_threshold_static=0.85,
+            classification_threshold_dynamic=0.35,
+            migration_threshold=0.15,
         )
         dc = unified.to_pipeline_v2_config()
 
-        # 模拟 optimizer._config_to_params 消费 dataclass
-        params = {
-            'hard_routing_prob': dc.hard_routing_prob,
-            'merge_alpha': dc.merge_alpha,
-            'ks_alpha': dc.ks_alpha,
-            'mixed_winsor_sigma': dc.mixed_winsor_sigma,
-            'classification_threshold_static': dc.classification.static_ar1_threshold,
-            'classification_threshold_dynamic': dc.classification.dynamic_ar1_threshold,
-        }
+        # optimizer._config_to_params 直接消费 dataclass
+        from factor_pipeline.optimizer import EndToEndThresholdOptimizer
+        optimizer = EndToEndThresholdOptimizer(n_trials=1)
+        params = optimizer._config_to_params(dc)
 
-        # 手工校验: 参数应与原始 Unified 一致
-        self.assertAlmostEqual(params['hard_routing_prob'], 0.78, places=6)
-        self.assertAlmostEqual(params['merge_alpha'], 0.35, places=6)
-        self.assertAlmostEqual(params['ks_alpha'], 0.03, places=6)
-        self.assertAlmostEqual(params['mixed_winsor_sigma'], 2.7, places=6)
+        # 手工校验: v3.4.0 收敛为 3 参数契约
+        self.assertEqual(
+            set(params.keys()),
+            {'classification_threshold_static',
+             'classification_threshold_dynamic',
+             'migration_threshold'},
+            msg="_config_to_params 应返回 3 参数契约"
+        )
+        self.assertAlmostEqual(params['classification_threshold_static'], 0.85, places=6)
+        self.assertAlmostEqual(params['classification_threshold_dynamic'], 0.35, places=6)
+        self.assertAlmostEqual(params['migration_threshold'], 0.15, places=6)
 
     def test_13_no_breaking_change_to_legacy_compat(self):
         """test_13: 旧版 to_pipeline_config() 兼容层仍可用 (不破坏向后兼容)"""
