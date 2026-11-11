@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-11-04
+> **更新日期**: 2026-11-11
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -59,7 +59,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
-| v3.4.0 | 路由过度工程化治理 | 统一横截面秩管道默认替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor; dynamic_ab 整臂 A/B | ADR-042 | T1-T14 + B1-B6 全绿; 原 static/mixed 因子输出逐位不变; 回归结果见实施文档 §14 |
+| v3.4.0 | 路由过度工程化治理 | 统一横截面秩管道默认替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor; dynamic_ab 整臂 A/B | ADR-042 | T1-T14 + B1-B6 全绿; 审计 PASS (0 P0/P1); 真实数据 A/B 秩相关 ρ≥0.999999、ΔIC 不显著, 基线标签-执行错位 2/2 — 见 [实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
 | v3.3.7 | PL-08 | AR 阶数选择统一 hold_back 样本 + 有效样本守卫 | ADR-041 | AR(1) 选阶均值 4.800 → 1.233; `n_obs` 99..95 → 95×5; 输出 93%–96% 变化; 截断 11 点 0/0 |
 | v3.3.6 | PL-05 / PL-07 | Dynamic AR 三段式因果一步预测; 顶层随上游转绿 | ADR-040 | Dynamic 截断 1653/1800 + 8 NaN → 0/0/0; 顶层 1650/1.8397 → 0/0/0 |
 | v3.3.5 | PL-06 | Mixed 缩尾逐日截面 3σ | ADR-039 | 257/1800, 6.98e-01 → 0/0 |
@@ -74,7 +74,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
-| 1 | v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | 候选 | ADR-040 风险段 (非平稳失配未测) |
+| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023 已做; 多年多因子待扩) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
 | 2 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler` 同类前视) | 候选 | audit 遗留 (无生产调用) |
 | 3 | v3.4.0 遗留选项: MAD 缩尾 (O1) / Dynamic 组件解耦 (O2) / 断点监控接入调度 (O6) | 候选 | ADR-042 已知遗留 |
 
@@ -199,15 +199,17 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 > **每次发版必须更新以下文件**，对照勾选防止遗漏。
 
-| 文档 | 更新内容 | v3.3.6 (最近发版) |
+| 文档 | 更新内容 | v3.4.0 (最近发版) |
 |------|---------|--------|
 | [CHANGELOG.md](file:///f:/Coding/factor_pipeline/CHANGELOG.md) | 新版本条目 (根因/实测/兼容性/遗留) | ✅ |
-| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 | ⏸ 本次无公开 API/架构变更, 未改 |
-| [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | ADR-040 + 占用表 + 路线图 | ✅ |
-| [EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md](EXECUTION_V3.3.6_PL05_DYNAMIC_AR_CAUSALITY.md) | 实施文档 v1.3 (含 §7.2 实测回填) | ✅ |
-| [PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md](analysis/PL05_DYNAMIC_AR_LOOKAHEAD_RESEARCH.md) / [DESIGN](analysis/PL05_DYNAMIC_AR_LOOKAHEAD_DESIGN.md) | 调研 v1.4 / 设计 v1.2 + 实施状态 | ✅ |
+| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 | ⏸ 本次为内部路由治理, 无公开 API 变更 |
+| [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | ADR-042 + 占用表 + 路线图 | ✅ |
+| [EXECUTION_V3.4.0_UNIFIED_ROUTING.md](EXECUTION_V3.4.0_UNIFIED_ROUTING.md) | 实施文档 v1.3 (含 §14 落库回填) | ✅ |
+| [FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md](analysis/FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md) / [DESIGN](analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) | 调研 v1.1 / 设计 v1.2 | ✅ |
+| [CHECKLIST_V3.4.0_UNIFIED_ROUTING.md](audit/CHECKLIST_V3.4.0_UNIFIED_ROUTING.md) / [审计报告](audit/2026-11-10-code-quality-audit.md) | 验收 checklist v1.3 + 步骤 10 审计 PASS | ✅ |
+| [V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) | 真实数据 A/B 实证 (2 因子/2023) | ✅ |
 | [README.md](file:///f:/Coding/factor_pipeline/README.md) | 版本信息 + 版本历史 | ✅ |
-| [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) | §1 路标 + §2 待办 + §5 执行记录 | ✅ |
+| [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) / [DEV_PROGRESS.md](DEV_PROGRESS.md) | §1 路标 + §2 待办 + §5 执行记录 / 模块矩阵标签 | ✅ |
 
 ---
 
@@ -215,6 +217,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-11-10 | 1b5a144 | feat(pipeline): v3.4.0 统一横截面秩管道替代三路指纹路由 (ADR-042) |
 | 2026-11-04 | 7c089f4 | fix(pipeline): v3.3.6 PL-05 Dynamic AR 因果三段式一步预测 (ADR-040) |
 | 2026-11-04 | d04cdc1 | fix(pipeline): v3.3.5 PL-06 Mixed 缩尾逐日截面 3σ (ADR-039) |
 | 2026-10-22 | 4794c6e | fix(pipeline): v3.3.4 PL-02 变换逐日截面 rank→正态 + 配置统一 |

@@ -54,7 +54,8 @@
 ### 已知遗留
 
 - 断点监控为 opt-in 只告警, 未接入调度 (O6);
-- MAD 缩尾 / Dynamic 组件解耦 / DuckDB schema 迁移延后 (O1/O2/O5)。
+- MAD 缩尾 / Dynamic 组件解耦 / DuckDB schema 迁移延后 (O1/O2/O5);
+- 真实数据 A/B 仅覆盖 2 因子 / 2023 单年 (秩等价、ΔIC 不显著), 多年多因子扩样本见 [实证报告](docs/analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md)。
 
 ### 实测矩阵 (步骤 9 TDD 正式落库)
 
@@ -68,6 +69,8 @@
 | perf | fit+transform 12 因子×750 行 | T0 = 12.246s (0ff2420, min-of-5) | **12.359s → ratio 1.0092 ≤ 1.05** |
 | invariant | 统一逐位等价 (T2) / dynamic_ab 等价 (T3) | — | `check_exact=True` 全等 |
 | grep | 5 已删字段 / 3 已删函数 | — | pytest 收集文件与生产代码 **0 残留** |
+| audit | 步骤 10 审计靶向回归 (15 文件) | 1 failed (R-01 既有用例回归) | **250 passed / 1 skipped / 0 failed** (430.8s) |
+| empirical | 真实数据 A/B (2 因子, A股 2023) | 基线标签-执行错位 2/2 | **秩相关 ρ≥0.999999; ΔIC NW t=0.54 / 0.18 (不显著); 统一管道 1.8× 加速** |
 
 **回归**: 靶向批 1 (11 文件) 115 passed / 1 skipped (78.75s) + 批 2 (5 文件) 158 passed (595.69s); duckdb 2.0.0 / optuna 5.0.0 已装, 历史环境例外全部消除。
 

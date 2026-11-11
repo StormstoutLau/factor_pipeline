@@ -1,6 +1,6 @@
 # 开发进度总览 (版本 × 模块双维度)
 
-> **版本**: v1.0 (2026-07-27)
+> **版本**: v1.1 (2026-11-11; v1.0 = 2026-07-27)
 > **范围**: 跨会话单一真相源,记录每个版本每个模块的完成状态
 > **更新规则**: 每次发版 / 完成任务后更新对应单元格;新增版本时追加列
 > **关联文档**: [ARCHITECTURE.md](ARCHITECTURE.md) | [PROJECT_STATUS.md](PROJECT_STATUS.md) | [../CHANGELOG.md](../CHANGELOG.md)
@@ -40,6 +40,8 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 ## §2 版本 × 模块进度矩阵
 
 > 图例: ✅ 完成 / ⏳ 进行中 / ⏸ 部分完成 / ❌ 未开始 / — 不适用
+>
+> v3.4.0 模块影响: `pipelines_v2.py` 改统一横截面秩管道 (ADR-042); `factor_fingerprint/` 新增 `infer_sampling_frequency` 与 `compute_ar1_path`; `backtest/` 新增 `structural_break_monitor`; `optimizer.py` 默认搜索空间清空。详见 [CHANGELOG](../CHANGELOG.md)。
 
 ### §2.1 核心编排层
 
@@ -49,7 +51,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 | `dag.py` DAG 拓扑 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `config.py` 配置 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `config_v2.py` pydantic | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `pipelines_v2.py` 软路由 | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `pipelines_v2.py` 统一管道 (v3.4.0) | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `adapters.py` 5 个 Adapter | ⏸ | ⏸ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cache.py` 管线缓存 | — | — | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `optimizer.py` Optuna | — | — | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

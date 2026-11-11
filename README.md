@@ -47,8 +47,8 @@
 
 ### v3.4.0 因子路由统一化治理 (2026.11, 已实施)
 
-> **状态**: 已实施, 统一路由测试 T1-T14 + 断点监控 B1-B6 全绿; 回归结果见下方测试基线
-> **文档**: [实施](docs/EXECUTION_V3.4.0_UNIFIED_ROUTING.md) v1.3 / [设计](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) v1.2 / [调研](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md) v1.1 / [ADR-042](DECISIONS.md)
+> **状态**: 已实施并审计 PASS (0 P0/P1); T1-T14 + B1-B6 全绿; 真实数据 A/B 秩相关 ρ≥0.999999、ΔIC 不显著
+> **文档**: [实施](docs/EXECUTION_V3.4.0_UNIFIED_ROUTING.md) v1.3 / [设计](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) v1.2 / [调研](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md) v1.1 / [ADR-042](DECISIONS.md) / [审计](docs/audit/2026-11-10-code-quality-audit.md) / [实证 A/B](docs/analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md)
 > **版本 / 缓存**: 3.4.0 / `v2.3.0-cache` (旧代缓存失效, 需重建)
 
 **治理动因 (调研 v1.1)**: 软路由/五步多维树/线性混合器零生产调用; 默认 sigmoid 下 static/mixed 硬路由不可达; Static 与 Mixed 输出秩相关 0.999998; 指纹与 VR/DF 标签一致率仅 49.5%; 路由链无结构突变检测。
@@ -1074,9 +1074,9 @@ factor_pipeline/
 - **Pipeline 版本**: v3.4.0 (因子路由统一化治理 — 统一横截面秩管道, ADR-042)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: v3.4.0 靶向回归 **273 passed / 1 语义 skip / 0 failed** (16 文件, duckdb/optuna 已装; 含新增统一路由 T1-T14 + 断点监控 B1-B6 22 例、E7 动态 95 例); 版本统一 7 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
+- **测试基线**: 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.10
+- **构建日期**: 2026.11.10 (审计与实证收尾 2026.11.11)
 - **状态**: STABLE (v3.4.0, 10 步 spec 工作流)
 
 ### 版本历史

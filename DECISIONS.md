@@ -2944,6 +2944,7 @@ Static 与 Mixed 输出秩相关 0.999998; 指纹与 VR/DF 标签一致率 49.5%
 ### 后果
 
 - 原 static/mixed 因子输出逐位不变; 原 dynamic 因子改走统一管道 (基准稳定化);
+- **实测补记 (2026-11-11)**: 真实数据上基线存在标签-执行错位 (static 标签实际执行 Mixed; unknown 标签实际执行 Dynamic), 统一后应表述为「秩等价 (ρ≥0.999999), 尾部口径不同 (1%/99% vs 3σ)」而非逐位相等; 见 [V3.4.0 实证报告](docs/analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md);
 - 配置面缩小, 优化器默认搜索空间清空;
 - 缓存代际 `v2.2.5-cache` → `v2.3.0-cache`。
 
