@@ -230,12 +230,15 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 ## §5. 执行历史
 
-> **全量回归基线 (2026-11-12, v3.4.3)**: 全仓 `pytest` → **1682 passed / 15 skipped / 0 failed** (166 warnings, 1794.26s, exit 0)。
-> 较 v3.4.2 基线 1667 passed 新增 15 例 (组件开关), 0 新增失败。
+> **全量回归基线 (2026-11-13, v3.4.4)**: 全仓 `pytest` → **1705 passed / 15 skipped / 0 failed** (166 warnings, 1063.50s, exit 0)。
+> 较 v3.4.3 记录的 1682 新增 23 例 = v3.4.3 复审补测 12 (853806c, 当时未重跑全量) + 本版 decoupler 臂 11, 0 新增失败。
 > 外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动运行脚本, 不参与收集。
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-11-13 | 26fb5e4 | feat(v3.4.4): AblationRunner decoupler 消融臂 (dynamic_ab 内 AR 开/关) + 全量 1705 passed |
+| 2026-11-13 | 0e81ab0 | docs(wiki): 同步 v3.4.0-v3.4.3 架构与 API 变更 |
+| 2026-11-12 | 853806c | test(v3.4.3): O2 复审 R-2 覆盖缺口补测 (12 例) |
 | 2026-11-12 | fc6713d | fix(pipeline): v3.4.3 Dynamic 组件可分离性 (O2, ADR-045) |
 | 2026-11-12 | ff5e4cf | test(regression): 建立 v3.4.2 全量回归基线 1667 passed / 15 skipped / 0 failed |
 | 2026-11-12 | f532fd7 | feat(backtest): v3.4.2 断点监控调度器 BreakMonitorScheduler (ADR-044) |
