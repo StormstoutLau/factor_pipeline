@@ -139,8 +139,14 @@ AR 关闭时隐藏效应诊断按既有契约报错。
 | # | 级别 | 发现 | 处置 |
 |---|------|------|------|
 | R-1 | P3 | EXECUTION §3 命令注释 "全量基线 (1667…)" 与实测 1682 矛盾 | ✅ 已改为 1682 (本次提交) |
-| R-2 | P3 | 测试覆盖缺口 6 项: `market_cap_data` 非空四组合 / `threat_level`×开关 / `decoupler=False` 时 `diagnose_hidden_effects` 报错 / Static-Mixed 忽略 `decoupler` 键 / `enable_ar=False` 后 `_get_ar_phi_for_diagnosis` 返回 None 未直测 / `AblationRunner` L1 臂新语义 | ⏳ 延后至独立测试补强 (不阻塞; 部分 Static-Mixed 忽略行为由"不读取未知键"结构性保证) |
+| R-2 | P3 | 测试覆盖缺口 6 项: `market_cap_data` 非空四组合 / `threat_level`×开关 / `decoupler=False` 时 `diagnose_hidden_effects` 报错 / Static-Mixed 忽略 `decoupler` 键 / `enable_ar=False` 后 `_get_ar_phi_for_diagnosis` 返回 None 未直测 / `AblationRunner` L1 臂新语义 | ✅ 已补 12 例 ([test_o2_review_gaps.py](../../tests/test_o2_review_gaps.py) G1-G6, 2026-11-12, 12 passed; 合并 O2 套件 76 passed) |
 | R-3 | P3 | `threat_level` 在 neutralization 关闭时被静默忽略 | ✅ 已在设计 §5.1 / ADR-045 文档化, 接受 |
 | R-4 | P3 | ADR-045 关联文档引用 `docs/private/` (gitignore, 克隆者不可见) | ✅ 既有惯例 (ADR-042/043/044 同样引用), 接受 |
 
 **复审总评: PASS_WITH_FIXES (P0/P1 = 0; P3×4, 1 已修, 3 登记接受/延后)**
+
+> **R-2 收口 (2026-11-12)**: 6 项覆盖缺口已全部补测 —
+> [tests/test_o2_review_gaps.py](../../tests/test_o2_review_gaps.py) 12 例
+> (G1 市值四组合×4 / G2 threat_level×开关×3 / G3 诊断契约×1 / G4 Static-Mixed 忽略键×2 /
+> G5 诊断钩子 None×1 / G6 消融臂新语义×1), 一次全绿; 与既有 O2 套件合并 **76 passed**。
+> R-2 状态由「延后」改为「已补」。
