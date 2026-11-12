@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.3.0 | **构建日期**: 2026-07-15 | **状态**: STABLE (Layer 3 因子健康诊断双层体系完成)
+> **版本**: v3.4.3 | **构建日期**: 2026-11-12 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -25,6 +25,8 @@
    - [4.11 `reporting.py` — 执行报告生成](#411-reportingpy--执行报告生成)
    - [4.12 `modules/statistical_classifier` — 形式统计因子分类器 (v3.2.0)](#412-modulesstatistical_classifier--形式统计因子分类器)
    - [4.13 `modules/factor_health` — Layer 3 溢价健康诊断 (NEW v3.3.0)](#413-modulesfactor_health--layer-3-溢价健康诊断)
+   - [4.14 `backtest/structural_break_monitor.py` — 结构突变监控 + 节拍器 (v3.4.0/v3.4.2)](#414-backteststructural_break_monitorpy--结构突变监控--节拍器-v340v342)
+   - [4.15 `backtest/ablation_runner.py` — 消融对照运行器 (ADR-036)](#415-backtestablation_runnerpy--消融对照运行器-adr-036)
 5. [依赖关系图](#5-依赖关系图)
 6. [外部子模块依赖](#6-外部子模块依赖)
 7. [项目运行方式](#7-项目运行方式)
@@ -45,25 +47,39 @@
 | **因子指纹诊断层** | 21 维核心指纹 (v3.0.0 T1, 13 维基础 + 8 维尾部依赖/体制转换) + 5 维健康度指标（FactorHealthMonitor），自动诊断因子时序/截面/尾部/体制特征 + 拥挤度/效能/容量/衰减/体制敏感性 |
 | **形式统计因子分类 (v3.2.0)** | StatisticalClassifier: VR (Lo-MacKinlay 1988) + Dickey-Fuller τ 检验 (1979) 向量化面板分类，替代硬编码 0.98 阈值 |
 | **Layer 3 溢价健康诊断 (v3.3.0)** | FactorHealthDiagnoser: Fama-MacBeth + Epanechnikov 核估计 λ̂(t) → Chow F-test 断点检测 → 多状态综合标签 (pricing/recalibrate/monitor/review/suspect) |
-| **自适应因子分类** | 静态 / 动态 / 混合三类自动分流 |
+| **自适应因子分类** | 静态 / 动态 / 混合三类自动分流（v3.4.0 起降级为只读诊断，不选执行路径） |
 | **语义-统计融合** | 自然语言构造规则 + 统计指纹的贝叶斯融合 |
 | **三重中性化** | 原始值中性化 → AR 建模 → 残差中性化 |
 | **GARCH 白化（可选）** | 对高自相关静态因子消除波动率聚集 |
 | **处理顺序校验** | 基于学术规则的自动化顺序校验 |
 | **持续迁移监测** | 因子风格漂移自动告警 |
 
-### v1.0 → v2.0 架构演进
+### v3.4 执行路径与治理 (v3.4.0 – v3.4.3)
+
+| 变更 | 说明 |
+|------|------|
+| **统一横截面秩管道 (v3.4.0, ADR-042)** | `pipeline_mode='unified'` 为默认: 所有因子走 imputer → 1%/99% 缩尾 → 中性化 → rank→normal → z-score。三路指纹软路由 / 多维路由树 / 线性混合器已删除; 指纹降级为只读诊断, 不参与执行路径选择 |
+| **`dynamic_ab` 整臂 A/B (v3.4.0)** | `pipeline_mode='dynamic_ab'` 保留 `DynamicFactorPipeline` 作为显式实验臂; 非 A/B 运行不走 Dynamic |
+| **非生产解耦器弃用 (v3.4.1, ADR-043)** | `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入, 构造即 `DeprecationWarning`; 子包 1.2.1 |
+| **断点监控调度 (v3.4.2, ADR-044)** | `BreakMonitorScheduler` 提供 daily/weekly/monthly 节拍, 周期键幂等, 回调成功才推进; `StructuralBreakMonitor` 统计逻辑零改动 |
+| **Dynamic 组件可分离 (v3.4.3, ADR-045)** | `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 不再连带关闭 AR 解耦 |
+
+### v1.0 → v2.0 → v3.4 架构演进
 
 ```
 v1.0: 单一固定流程
 原始因子 → 插补 → 去极值 → 变换 → 标准化 → 中性化
 
-v2.0: 智能自适应流程
+v2.0: 智能自适应流程 (v3.4.0 前的历史形态)
 原始因子 → 指纹提取 → 分类(语义+统计) → 分流处理 → 迁移监测
                 ↓
         ┌───────┼───────┐
         ↓       ↓       ↓
     静态管道  动态管道  混合管道
+
+v3.4.0: 统一横截面秩管道 (ADR-042, 当前默认)
+原始因子 → 指纹(只读诊断) → 插补 → 1%/99%缩尾 → 中性化 → rank→normal → z-score
+                                              (dynamic_ab 实验臂 → CompositeDecoupler 三重解耦)
 ```
 
 ---
@@ -161,23 +177,21 @@ v2.0: 智能自适应流程
               │                             │ combined label + premium info    │
               │                             ▼                                 │
               │  ┌─────────────────────────────────────────────────────────┐  │
-              │  │         Layer 4: 概率加权软路由 (v2.1 P0-1)            │  │
+              │  │      执行路径选择 (v3.4.0 ADR-042: 统一单管道)          │  │
               │  │                                                         │  │
-              │  │   _get_pipeline_weights()  →  ClassificationResult      │  │
-              │  │                                 ↓                       │  │
-              │  │   _merge_transition_weights()  ←  FactorFingerprintMonitor│  │
-              │  │                                 ↓                       │  │
-              │  │   _ks_migration_significance() ←  KS 双样本 + BH-FDR    │  │
-              │  │                                 ↓                       │  │
-              │  │   _apply_weighted_transform()  → 加权混合输出           │  │
+              │  │   pipeline_mode='unified' (默认)                        │  │
+              │  │     └→ 所有因子走同一横截面秩管道                       │  │
+              │  │   pipeline_mode='dynamic_ab' (显式 A/B)                 │  │
+              │  │     └→ DynamicFactorPipeline 作为独立实验臂             │  │
               │  │                                                         │  │
-              │  │   示例: 0.70*static + 0.20*mixed + 0.10*dynamic         │  │
-              │  │   高置信度(>0.90) → 硬路由; 否则 → 软路由               │  │
+              │  │   已删除: 三路指纹软路由 / 多维路由树 / 线性混合器      │  │
+              │  │   指纹仅作只读诊断, 不参与执行路径选择                  │  │
               │  └─────────────────────────────────────────────────────────┘  │
               │           │                     │                   │         │
               │           ▼                     ▼                   ▼         │
               │  ┌─────────────────────────────────────────────────────────┐  │
-              │  │          Layer 4: 差异化处理层 (Processing)              │  │
+              │  │          Layer 4: Dynamic 差异化处理层                  │  │
+              │  │              (仅 pipeline_mode='dynamic_ab', v3.4.0)    │  │
               │  │                                                         │  │
               │  │  ┌─────────────────┐ ┌─────────────────┐ ┌────────────┐ │  │
               │  │  │StaticPipeline   │ │MixedPipeline    │ │Dynamic     │ │  │
@@ -331,6 +345,8 @@ v2.0: 智能自适应流程
           └─────────────────────────────────────────────────────────┘
 ```
 
+> **图示说明 (v3.4.0 ADR-042)**: 上图 Layer 4 的 Static / Mixed / Dynamic 三框为 v3.4.0 之前的流程示意，用于说明各管道的步骤构成。v3.4.0 起生产默认 `pipeline_mode='unified'`：所有因子走统一横截面秩管道，`MixedFactorPipeline` 不再实例化；仅 `dynamic_ab` 实验臂构建 Dynamic 管道。
+
 ### 架构分层说明
 
 | 层级 | 名称 | 核心类 | 职责 |
@@ -338,13 +354,14 @@ v2.0: 智能自适应流程
 | **Layer 1** | 前置智能层 | `FactorFingerprinter`, `AdaptiveFactorClassifier`, `SemanticStatisticalFusion` | 21维核心指纹提取 (v3.0.0 T1, 含尾部依赖/体制转换) + 4层NLP语义理解 → 贝叶斯融合分类 |
 | **Layer 2** | 形式统计分类层 | `StatisticalClassifier` (v3.2.0) | VR (Lo-MacKinlay 1988) + Dickey-Fuller τ 检验 (1979) 向量化面板分类 → return_type (static/dynamic/mixed) |
 | **Layer 3** | 溢价健康诊断层 | `FactorHealthDiagnoser` (v3.3.0) | Fama-MacBeth + Epanechnikov 核估计 λ̂(t) → Chow F-test 断点检测 → 指数衰减检测 → 多状态综合标签 (pricing/recalibrate/monitor/review/suspect) |
-| **Layer 4** | 差异化处理层 | `StaticFactorPipeline`, `DynamicFactorPipeline`, `MixedFactorPipeline` | 按因子类型执行差异化处理流程 |
+| **Layer 4** | 执行路径层 | 统一横截面秩管道 (v3.4.0) / `DynamicFactorPipeline` (仅 `dynamic_ab`) | 默认单一横截面秩管道; Dynamic 管道仅在显式 A/B 实验臂中保留 |
 | **Layer 5** | 持续监测层 | `FactorFingerprintMonitor`, `FactorHealthMonitor` | 类型迁移检测（多时间尺度）+ 五维健康度评估（拥挤度/效能/容量/衰减/体制敏感性） |
+| **Layer 6** | 监控与调度层 | `StructuralBreakMonitor`, `BreakMonitorScheduler`, `CUSUMDriftMonitor` | 结构突变只告警 + 日/周/月节拍驱动 + CUSUM 在线漂移监测 |
 | **Adapter** | 适配器层 | `ImputerAdapter`, `ProcessingAdapter`, `NeutralizerAdapter`, `GarchWhiteningAdapter` | 统一封装外部子模块，提供回退方案 |
 | **Infrastructure** | 基础设施层 | `PipelineDAG`, `PipelineCache`, `PipelineOrderValidator`, `reporting`, `performance`, `exceptions` | 顺序校验、缓存、报告、性能、异常 |
 | **Legacy** | v1.0 兼容层 | `FactorProcessingPipeline` | 向后兼容的固定五步法流水线 |
 
-### 五条核心组件
+### 核心组件矩阵
 
 | 组件 | 所在层 | 职责 | 独特价值 |
 |------|--------|------|---------|
@@ -355,6 +372,8 @@ v2.0: 智能自适应流程
 | **StatisticalClassifier** | 形式统计分类层 | VR + Dickey-Fuller τ 检验向量化面板分类 | 替代硬编码阈值，学术依据 Lo-MacKinlay 1988 + Dickey-Fuller 1979 |
 | **FactorHealthDiagnoser** | 溢价健康诊断层 | λ̂(t) 估计 + 断点检测 + 衰减检测 → 多状态标签 | Fama-MacBeth 1973 + Chow 1960 + Epanechnikov 1969，回答"因子是否还在定价" |
 | **FactorHealthMonitor** | 持续监测层 | 五维正交评估：拥挤度/效能/容量/衰减/体制敏感性 | 量化因子健康度的标准化框架 |
+| **统一横截面秩管道** | 执行路径层 | `pipeline_mode='unified'`：imputer → 缩尾 → 中性化 → rank→normal → z | v3.4.0 ADR-042：用单管道替代三路路由，基准可复现 |
+| **结构突变监控 + 节拍器** | 监控与调度层 | sup-F/CUSUM 只告警 + daily/weekly/monthly 幂等调度 | v3.4.0/v3.4.2：告警不再依赖运行框架显式调用 |
 
 ### v2.5.0 三层架构 (已实施, ADR-020)
 
@@ -461,7 +480,7 @@ result = coordinator.run_chain(factor_dict, method='symmetric')
 
 ```
 factor_pipeline/
-├── __init__.py                  # 包入口，版本号 v2.5.0，统一导出
+├── __init__.py                  # 包入口，版本号 v3.4.3，统一导出
 ├── types.py                     # 核心类型系统（Protocol、TypedDict、DataClass）
 ├── config.py                    # v1.0 配置管理（StepType、PipelineConfig）
 ├── config_v2.py                 # v2.0 Pydantic 配置管理（统一验证）
@@ -474,8 +493,8 @@ factor_pipeline/
 │   └── GarchWhiteningAdapter    # GARCH 白化适配器 (OPTIONAL, arch 依赖)
 ├── dag.py                       # DAG 有向无环图（依赖关系与拓扑排序）
 ├── pipeline.py                  # v1.0 核心流水线 + 顺序校验器
-├── pipelines_v2.py              # v2.0 智能流水线（三条差异化管道 + 软路由 + KS 迁移）
-├── optimizer.py                 # v2.6.0 优化器 (Pipeline-in-the-loop + CV + 6 项目标函数 + 正交化搜索 + Layer 3 显著性)
+├── pipelines_v2.py              # v2.0/v3.4 管线（统一横截面秩管道 + dynamic_ab + 指纹只读诊断 + 断点监控）
+├── optimizer.py                 # 优化器 (Pipeline-in-the-loop + CV; v3.4.0 起默认搜索空间为空, 正交化 opt-in)
 ├── cache.py                     # 中间结果缓存（parquet 格式）
 ├── performance.py               # 性能优化工具（计时/缓存/批量处理/基准测试）
 ├── reporting.py                 # 执行报告生成（Markdown/JSON/Text）
@@ -493,6 +512,9 @@ factor_pipeline/
 │   ├── unified_drift.py         # 双轨融合漂移判定（滚动 KS + EWMA + 三模式融合, T3.5 默认 BH-FDR）
 │   ├── cusum_drift_monitor.py   # CUSUM 在线漂移监测 (v3.0.0 T3, Page 1954 双侧递推)
 │   ├── multiple_testing.py      # 多重检验校正共享模块 (v3.0.0 T3.5, BH/Bonferroni/None)
+│   ├── structural_break_monitor.py # 结构突变监控 (sup-F/CUSUM) + BreakMonitorScheduler (v3.4.0/v3.4.2)
+│   ├── ablation_runner.py       # 消融对照运行器 (L1-L4 + Baseline 阶梯, ADR-036)
+│   ├── factor_significance.py   # Layer 3 显著性检验 (双重 Lasso + BH FDR, ADR-020)
 │   ├── pipeline_integration.py  # 端到端 Pipeline 集成运行器
 │   ├── cache_manager.py         # L2 磁盘缓存基础设施 (ADR-008)
 │   ├── cached_data_loader.py    # 缓存统一入口 (一处替换启用缓存)
@@ -515,7 +537,7 @@ factor_pipeline/
 │   ├── ANALYSIS_V2.5.0.md       # v2.5.0 方案分析报告
 │   ├── KABC_paper_draft.md      # KABC 论文草稿
 │   └── ...                      # 其他分析文档
-├── tests/                       # 测试目录 (632+ 测试)
+├── tests/                       # 测试目录 (v3.4.3 全量回归 1682 passed / 15 skipped)
 │   ├── conftest.py              # pytest 共享 fixtures
 │   ├── unit/                    # 单元测试
 │   ├── test_backtest/           # 回测模块测试
@@ -596,7 +618,7 @@ factor_pipeline/
 | `GarchConfig` | GARCH 配置（p/q 阶数、波动率模型、最小观测数，含阶数交叉验证） |
 | `StaticPipelineConfig` | 静态管道配置（继承所有步骤配置 + neutralize_before_standardize 标志） |
 | `DynamicPipelineConfig` | 动态管道配置（强制禁用变换和 GARCH） |
-| `MixedPipelineConfig` | 混合管道配置（conditional_transform、mild_winsorization） |
+| `MixedPipelineConfig` | 混合管道配置（mild_winsorization；v3.4.0 起该管道不再实例化） |
 | `PipelineV2ConfigUnified` | 统一配置入口，整合所有子配置 + 指纹/分类/监控参数 |
 
 **工具函数**:
@@ -828,28 +850,57 @@ FactorProcessingPipeline(
 
 **文件路径**: [pipelines_v2.py](file:///f:/Coding/factor_pipeline/pipelines_v2.py)
 
-v2.0 的核心模块，实现"先诊断分类，再分流处理"的智能自适应流程。
+v2.0 的核心模块。v3.4.0 起默认 `pipeline_mode='unified'`：所有因子走同一横截面秩管道（imputer → 1%/99% 缩尾 → 中性化 → rank→normal → z-score），指纹与分类仅作只读诊断；`pipeline_mode='dynamic_ab'` 才进入 `DynamicFactorPipeline` 实验臂。
 
 #### 配置类: `PipelineV2Config`
 
 ```python
 @dataclass
 class PipelineV2Config:
-    fingerprint: FingerprintConfig        # 指纹提取配置
-    classification: ClassificationConfig  # 分类配置
+    fingerprint: FingerprintConfig        # 指纹提取配置 (只读诊断)
+    classification: ClassificationConfig  # 分类配置 (dynamic_ab 实验臂使用)
     monitor: MonitorConfig               # 监控配置
+
+    # ── 执行路径 (v3.4.0 ADR-042) ──
+    pipeline_mode: str = 'unified'        # 'unified' | 'dynamic_ab'
+    enable_fingerprint_diagnostics: bool = True
+    ab_experiment_id: Optional[str] = None
+
+    # ── Dynamic 管道参数 (仅 dynamic_ab) ──
     dynamic_decorrelation_strength: float = 1.0  # AR 残差提取强度
     dynamic_max_ar_order: int = 5         # 最大 AR 阶数
     dynamic_ar_criterion: str = 'aic'     # 阶数选择准则
-    mixed_conditional_transform: bool = True  # 是否条件性变换
-    mixed_skew_threshold: float = 2.0    # 偏度阈值
-    mixed_kurt_threshold: float = 5.0    # 峰度阈值
-    static_enable_garch: bool = False    # 是否启用 GARCH 白化
-    static_garch_p: int = 1              # GARCH p 阶
-    static_garch_q: int = 1              # GARCH q 阶
-    static_garch_vol: str = 'Garch'      # 波动率模型
-    static_garch_min_obs: int = 50       # 最小观测数
+
+    # ── 变换 (Static / Mixed 共用, PL-02) ──
+    static_transformation_method: str = 'rank'
+    static_target_distribution: str = 'normal'
+    mixed_transformation_method: str = 'rank'
+    mixed_target_distribution: str = 'normal'
+
+    # ── GARCH 白化 (Static, opt-in) ──
+    static_enable_garch: bool = False
+    static_garch_p: int = 1
+    static_garch_q: int = 1
+    static_garch_vol: str = 'Garch'
+    static_garch_min_obs: int = 50
+
+    # ── 结构突变监控 (v3.4.0, opt-in 只告警) ──
+    enable_break_monitor: bool = False
+    break_monitor_window: int = 250
+    break_monitor_stride: int = 20
+    break_monitor_alpha: float = 0.05
+    break_monitor_n_bootstrap: int = 400
+
+    # ── 消融开关 (ABLATION E1) ──
+    # {'imputer': False, 'winsorizer': False, 'scaler': False,
+    #  'neutralizer': False, 'decoupler': False}
+    # decoupler 仅作用于 Dynamic 管道 (AR 解耦, v3.4.3 O2)
+    module_enabled: Optional[Dict[str, bool]] = None
 ```
+
+> **v3.4.0 配置面收敛 (ADR-042)**: 三路路由相关的 5 个配置字段已删除
+> (涉及 `_get_pipeline_weights` / `_get_multi_dim_pipeline_weights` /
+> `_apply_weighted_transform` 及其开关); 指纹配置保留, 但仅用于只读诊断与 A/B 记录。
 
 #### 基类: `_BaseFactorPipeline`
 
@@ -859,17 +910,21 @@ class PipelineV2Config:
 
 **适用条件**: `ar1_median > 0.80` 且 `rank_autocorr > 0.70`
 
-**处理流程**:
+**处理流程** (v3.4.0 统一横截面秩管道, ADR-042):
 ```
-缺失插补 → 去极值 → 自适应非线性变换 → [可选]GARCH白化 → 中性化 → 标准化
+缺失插补 → 逐日截面 1%/99% 缩尾 → 中性化 → rank→normal → 逐日截面 z-score
+[可选] GARCH 白化 (static_enable_garch=True)
 ```
 
 **关键参数**:
 - `neutralizer_params` — 中性化参数（行业数据等）
 - `enable_garch` — 是否启用 GARCH 白化（默认 False）
 - `garch_params` — GARCH 参数（p, q, vol, min_obs）
+- `module_enabled` — 模块级消融开关
 
-**v2.0 调整**: 先中性化后标准化，符合 Barra/MSCI 最佳实践。
+**v3.4.0 调整**: Static/Mixed 收敛为同一横截面秩管道 (仅缩尾规则差异),
+原"自适应非线性变换 + 条件性变换"已随 ADR-042 退场; 生产 `unified` 模式不进入本类,
+本类仅在 `dynamic_ab` 实验臂或直接构造时使用。
 
 #### 类: `DynamicFactorPipeline` (动态因子管道)
 
@@ -885,6 +940,22 @@ class PipelineV2Config:
 - `max_ar_order` — 最大 AR 阶数
 - `ar_criterion` — 阶数选择准则 (aic/bic/hqic)
 - `neutralizer_params` — 中性化参数
+- `module_enabled` — 模块级开关 (`imputer` / `neutralizer` / `decoupler` / `scaler`)
+
+**生产定位 (v3.4.0 ADR-042)**: 本类仅在 `pipeline_mode='dynamic_ab'` 时作为 A/B 实验臂使用;
+默认 `unified` 路径不调用。
+
+**组件可分离 (v3.4.3 ADR-045)**:
+
+| `neutralizer` | `decoupler` | 行为 |
+|---------------|-------------|------|
+| True | True | Stage 1 中性化 → Stage 2 AR → Stage 3 残差中性化 (默认) |
+| True | False | Stage 1 → Stage 3 (仅中性化, AR 不构建) |
+| False | True | 仅 Stage 2 AR (在原始值上) |
+| False | False | 解耦步骤 identity |
+
+`{'neutralizer': False}` 自 v3.4.3 起**仅关闭中性化, 不再连带关闭 AR**;
+需要旧语义时显式传 `{'neutralizer': False, 'decoupler': False}`。
 
 **核心组件**:
 - `CompositeDecoupler` — 组合解耦器（三重中性化核心）
@@ -901,47 +972,53 @@ class PipelineV2Config:
 
 **适用条件**: `0.40 <= ar1_median <= 0.80`
 
-**处理流程**:
+**处理流程** (v3.4.0 统一横截面秩管道, ADR-042):
 ```
-缺失插补 → 温和去极值(3σ缩尾) → [条件性]非线性变换 → 中性化 → 标准化
+缺失插补 → 逐日截面 3σ 缩尾 → 中性化 → rank→normal → 逐日截面 z-score
 ```
 
 **关键参数**:
-- `conditional_transform` — 是否条件性变换
-- `skew_threshold` — 偏度阈值（默认 2.0）
-- `kurt_threshold` — 峰度阈值（默认 5.0）
+- `transformation_params` — 变换参数 (method/target_distribution)
 - `neutralizer_params` — 中性化参数
+- `module_enabled` — 模块级消融开关
 
-**条件性变换诊断**: `_diagnose_transform_need()` — 当偏度或峰度超过阈值时启用变换
+**v3.4.0 调整**: 原"条件性变换 (偏度/峰度阈值)"配置字段已随 ADR-042 删除;
+Mixed 与 Static 共用横截面秩管道, 仅缩尾规则不同 (3σ vs 1%/99%)。
 
-#### 类: `FactorProcessingPipelineV2` (v2.0 智能编排器)
+#### 类: `FactorProcessingPipelineV2` (v3.4.0 统一管道编排器)
 
 **核心组件**:
-- `fingerprinter: FactorFingerprinter` — 21 维核心指纹提取器 (v3.0.0 T1)
-- `classifier: AdaptiveFactorClassifier` — 因子分类器
+- `fingerprinter: FactorFingerprinter` — 21 维核心指纹提取器 (v3.0.0 T1)，`unified` 下仅作只读诊断
+- `classifier: AdaptiveFactorClassifier` — 诊断标签分类器（`enable_fingerprint_diagnostics` 控制，不选执行管道）
 - `semantic_fusion: SemanticStatisticalFusion` — 语义-统计融合（5 种冲突诊断）
-- `static_pipeline / dynamic_pipeline / mixed_pipeline` — 三条处理管道
+- `static_pipeline` — 统一横截面秩管道（`unified` 默认执行路径的实例）
+- `dynamic_pipeline` — `DynamicFactorPipeline`（仅 `dynamic_ab` 实验臂构建）
+- `mixed_pipeline` — v3.4.0 起恒为 `None`（保留属性名兼容旧调用）
 - `monitor: FactorFingerprintMonitor` — 类型迁移监测器（多时间尺度）
 - `health_monitor: FactorHealthMonitor` — 五维健康度监测器（拥挤度/效能/容量/衰减/体制敏感性）
+
+> 生产路径按因子独立构建管道实例（`factor_pipelines[name]`），三种 `*_pipeline` 扁平属性仅为向后兼容引用首个因子的管道。
 
 **关键方法**:
 
 | 方法 | 说明 |
 |------|------|
-| `fit(factor_data, industry_data, descriptions, **kwargs)` | 拟合：指纹提取 → 分类 → 管道初始化 → 分组拟合 → 记录监测 |
-| `transform(factor_data, **kwargs)` | 按分类结果路由到对应管道执行变换 |
+| `fit(factor_data, industry_data, descriptions, **kwargs)` | 拟合：指纹提取 → 诊断分类 → 按 `pipeline_mode` 建管道并逐因子拟合 → 记录监测 |
+| `transform(factor_data, **kwargs)` | 按 `factor_pipelines[name]` 取管道执行变换（`unified` → static，`dynamic_ab` → dynamic） |
 | `fit_transform(factor_data, **kwargs)` | 拟合并变换 |
-| `get_classification_summary()` | 获取分类汇总 DataFrame |
+| `get_classification_summary()` | 获取诊断分类汇总 DataFrame |
 | `get_fingerprint_summary()` | 获取指纹汇总 DataFrame |
 | `check_migrations(factor_data)` | 检查因子类型迁移 |
 | `get_execution_summary()` | 获取执行摘要（文本格式） |
 
-**fit 流程**:
+**fit 流程 (`pipeline_mode='unified'`，v3.4.0 默认)**:
 1. 为每个因子提取指纹（`batch_extract`）
-2. 分类（语义-统计融合 或 纯统计分类）
-3. 初始化三条管道
-4. 按类型分组拟合（同类型因子合并后拟合）
-5. 记录到监测器
+2. 生成诊断标签（`_classify_diagnostics`，只写 `factor_classifications`，不参与选路）
+3. 逐因子创建统一横截面秩管道并拟合（`pipe_type='static'`）
+4. 写入 `factor_routing` 路由记录（含 `diagnostic_type` / `ar1_median` / `fingerprint_meta`）
+5. 记录指纹到监测器
+
+**`dynamic_ab` 实验臂差异**: 步骤 3 的 `pipe_type` 改为 `'dynamic'`，由 `DynamicFactorPipeline`（CompositeDecoupler 三重解耦）承担执行；其余流程一致，不再有按类型分组拟合。
 
 ---
 
@@ -1327,6 +1404,100 @@ result = diagnoser.diagnose(factor, forward_returns, return_type='static')
 
 ---
 
+### 4.14 `backtest/structural_break_monitor.py` — 结构突变监控 + 节拍器 (v3.4.0 / v3.4.2)
+
+**文件路径**: [backtest/structural_break_monitor.py](file:///f:/Coding/factor_pipeline/backtest/structural_break_monitor.py)
+
+**定位**: 只读告警层 — 不参与路由、不修改因子值; 输入为 AR(1) 中位数路径
+(`FactorFingerprinter.compute_ar1_path`), 输出告警字典。
+
+#### `BreakMonitorConfig`
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `method` | `'sup_f'` | `'sup_f'` (Andrews 1993) / `'cusum'` (Inclán-Tiao 1994 工程化变体) |
+| `window` | 250 | 滚动窗口长度 |
+| `stride` | 20 | 窗口步进 |
+| `min_points` | 20 | 窗口内最少观测 |
+| `trim` | 0.15 | 端点截断比例, 候选断点 ∈ [0.15n, 0.85n] |
+| `alpha` | 0.05 | 告警显著性水平 |
+| `n_bootstrap` | 400 | AR(1) 代理自助次数 (>=50) |
+| `random_state` | 42 | 自助随机种子 |
+
+#### `StructuralBreakMonitor`
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `detect` | `(path: pd.Series) -> Dict[str, Any]` | 滚动检测结构突变, 返回统计量/断点位置/自助 p 值/告警 |
+
+- 默认 `method='sup_f'`: 两段均值模型 SSR 比值, p 值完全由 AR(1) 代理自助零分布给出
+  (省略 F 自由度归一化); 分母下限 `1e-12` 防近常数段虚假 sup;
+- `method='cusum'`: 用 `(y−ȳ)²` 的 ICSS 工程化变体;
+- 构造校验: `method` / `trim∈(0,0.5)` / `alpha∈(0,0.5)` / `n_bootstrap>=50`。
+
+#### `BreakMonitorScheduler` (v3.4.2, ADR-044)
+
+| 成员 | 说明 |
+|------|------|
+| `cadence` | `'daily'` / `'weekly'` / `'monthly'` (只读) |
+| `due(as_of)` | 周期键是否变化; 首次调用必然到期 |
+| `mark_run(as_of)` | 手动登记一次运行 |
+| `run_if_due(as_of, func, *args, **kwargs)` | 到期才执行; **回调成功后才推进**, 异常不推进、同周期可重试 |
+| `reset()` / `runs` / `last_run_as_of` | 重置 / 累计运行次数 / 上次运行时间 |
+
+- 周期键: daily `(年,月,日)`; weekly ISO `(ISO年,ISO周)`; monthly `(年,月)`;
+- `as_of` 仅接受 naive 时间戳; 数值型与 tz-aware 值显式 `ValueError`;
+- **非线程安全**, 要求单线程串行调用 (并发由调用方加锁)。
+
+```python
+from factor_pipeline.backtest.structural_break_monitor import (
+    BreakMonitorScheduler, StructuralBreakMonitor,
+)
+
+monitor = StructuralBreakMonitor()          # 默认 sup_f, window=250, stride=20
+scheduler = BreakMonitorScheduler('monthly')
+scheduler.run_if_due('2026-11-30', lambda: monitor.detect(ar1_path))
+```
+
+**学术依据**: Andrews (1993) 未知断点 sup-F; Bai & Perron (1998) 多断点;
+Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
+
+---
+
+### 4.15 `backtest/ablation_runner.py` — 消融对照运行器 (ADR-036)
+
+**文件路径**: [backtest/ablation_runner.py](file:///f:/Coding/factor_pipeline/backtest/ablation_runner.py)
+
+**定位**: 四层消融对照 (ADR-036), 通过 `AblationConfig` 描述单次实验,
+`AblationRunner` 批量运行并与 Baseline 阶梯 (B0-B3) 对照。
+
+#### `AblationConfig` (关键字段)
+
+| 字段 | 说明 |
+|------|------|
+| `name` / `layer` | 实验标识; `layer` ∈ `'L1'/'L2'/'L3'/'L4'/'baseline'` |
+| `module_enabled` | 模块级开关, 透传 `PipelineV2Config.module_enabled` |
+| `routing_mode` | `'full'` / `'unified'` / `'dynamic'` (L2 字段保留) |
+| `baseline_level` | `'B0'/'B1'/'B2'/'B3'` Baseline 阶梯 |
+| `cusum_k` / `cusum_h` / `correction_method` / `winsorize_ratio` / `ewma_*` | L3 参数覆盖 |
+| `outlier_method` / `scaler_method` | L4 前置处理 OAT |
+
+#### `AblationRunner` 批量方法
+
+| 方法 | 说明 |
+|------|------|
+| `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`) |
+| `run_l2(...)` | L2 路由模式消融 |
+| `run_l3(...)` | L3 参数网格 (CUSUM / EWMA / 缩尾比例 / 校正方法 / MAD) |
+| `run_l4_oat(...)` | L4 前置处理 OAT |
+| `run_single(...)` | 单实验运行 (Baseline 阶梯 + 指标计算) |
+
+> **v3.4.3 注**: `L1_MODULES` 仍为 5 项, 其中 4 项走 `module_enabled`;
+> 新增的 `decoupler` 开关可通过 `AblationConfig(module_enabled={'decoupler': False})`
+> 手动使用, 尚未加入固定 L1 臂列表 (ADR-045 非目标)。
+
+---
+
 ## 5. 依赖关系图
 
 ### 模块间依赖
@@ -1353,6 +1524,8 @@ __init__.py
          ├── unified_drift.py       → engine.py, scipy.stats (KS test), multiple_testing.py (T3.5 BH-FDR)
          ├── cusum_drift_monitor.py → numpy (无内部依赖, v3.0.0 T3)
          ├── multiple_testing.py    → numpy (无内部依赖, v3.0.0 T3.5, 供 unified_drift/pipelines_v2/factor_significance 共享)
+         ├── structural_break_monitor.py → numpy, pandas (无内部依赖, v3.4.0/v3.4.2)
+         ├── ablation_runner.py     → pipelines_v2.py, adapters.py (ADR-036)
          └── pipeline_integration.py → config_v2.py, data_bridge.py, engine.py,
                                           health_bridge.py, unified_drift.py
 ```
@@ -1436,6 +1609,8 @@ __init__.py
 | **核心类** | `CompositeDecoupler` / `AROrderSelector` / `DualNeutralizer` |
 | **解耦方法** | AR 模型 / 一阶差分 / HP 滤波 / 自动选择 |
 | **双重中性化** | 原始值中性化 → AR 建模 → 残差中性化 |
+| **版本状态 (v3.4.1)** | `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入, 构造即 `DeprecationWarning` (ADR-043) |
+| **组件开关 (v3.4.3)** | `CompositeDecoupler(enable_neutralization=True, enable_ar=True)` 可独立关闭中性化 / AR (ADR-045) |
 | **学术依据** | Hausman (1978) 内生性理论 |
 
 ---
@@ -1493,7 +1668,9 @@ results = pipeline.transform(factor_data)
 print(pipeline.get_classification_summary())
 ```
 
-#### 方式 2: 单独使用三条管道
+#### 方式 2: 单独使用处理管道类
+
+> v3.4.0 起 `FactorProcessingPipelineV2` 只构建 Static（`unified`）或 Dynamic（`dynamic_ab`）管道；以下类仍可直接单独调用，适合自定义流程。
 
 ```python
 from factor_pipeline.pipelines_v2 import StaticFactorPipeline, DynamicFactorPipeline, MixedFactorPipeline
@@ -1514,9 +1691,9 @@ dynamic = DynamicFactorPipeline(
 )
 result = dynamic.fit_transform(reversal_data)
 
-# 混合因子
+# 混合因子（v3.4.0 起不再由编排器实例化, 仅供显式单独调用）
 mixed = MixedFactorPipeline(
-    conditional_transform=True,
+    mixed_winsor_sigma=3.0,
     neutralizer_params={'industry_data': industry}
 )
 result = mixed.fit_transform(momentum_data)
@@ -1576,16 +1753,23 @@ pytest tests/ --cov=factor_pipeline --cov-report=html
 
 ### 测试架构
 
+**v3.4.3 基线**: 全仓 `pytest` → **1682 passed / 15 skipped / 0 failed** (166 warnings, 1794.26s)。
+外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需
+`RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动脚本。
+
 ```
 tests/
 ├── conftest.py                      # 共享 fixtures 和 mock 对象
 ├── test_cache.py                    # PipelineCache 缓存测试
 ├── test_dag.py                      # PipelineDAG 依赖图测试
 ├── test_integration.py              # 集成测试（需要子模块）
-├── test_pipelines_v2.py             # v2.0 管道测试
-├── test_pipeline_v2_full.py         # v2.0 完整流程测试
+├── test_pipelines_v2.py             # 管道测试
+├── test_pipeline_v2_full.py         # 完整流程测试
 ├── test_dynamic_pipeline.py         # 动态管道测试
-├── test_pipeline_comprehensive.py   # 综合测试
+├── test_dynamic_component_separability.py  # v3.4.3 组件开关 (11 例)
+├── test_o2_review_gaps.py           # v3.4.3 复审覆盖缺口 (12 例)
+├── test_break_monitor_scheduler.py  # v3.4.2 调度器 (22 例)
+├── verify_integration_real_data.py  # 真实 DB 手动脚本 (不参与收集)
 └── unit/                            # 单元测试（无外部依赖）
     ├── test_adapters_mock.py        # 适配器 mock 测试
     ├── test_config.py               # v1.0 配置测试
@@ -1666,7 +1850,7 @@ from factor_pipeline import (
 | `check_migrations` | `(factor_data) -> Dict[str, List]` | 迁移检测 |
 | `get_execution_summary` | `() -> str` | 执行摘要 |
 
-### 三条管道 (v2.0)
+### 处理管道类 (v2.0 引入, v3.4.0 执行面收敛)
 
 **`StaticFactorPipeline`**:
 | 方法 | 说明 |
@@ -1686,7 +1870,7 @@ from factor_pipeline import (
 **`MixedFactorPipeline`**:
 | 方法 | 说明 |
 |------|------|
-| `fit(X, **kwargs)` | 拟合：插补→温和缩尾→条件性变换→中性化→标准化 |
+| `fit(X, **kwargs)` | 拟合：插补→3σ 温和缩尾→中性化→rank 变换→z-score（v3.4.0 起生产路径不实例化） |
 | `transform(X, **kwargs)` | 应用管道变换 |
 | `fit_transform(X, **kwargs)` | 拟合并变换 |
 
@@ -2370,3 +2554,9 @@ class ThresholdDriftMonitor:
 | v3.1.0 | 2026-07-09 | Audit-Driven Code Quality Remediation (ADR-026): P0×8+P1×8+P2+×15 (断言恒真式重写 5 + 设计约束 10 + 端到端 2 + E5 测试 5) + spec 反向对齐 11 项, audit-driven-development 4 阶段流程 (Spec Inventory→Multi-Dimensional Audit→Fix Priority Matrix→Fix Baseline+Tracking), 子集回归 754 passed+1 skipped |
 | v3.2.0 | 2026-07-10 | 学术准则驱动管线重构 (ADR-027): 9 阶段执行 (P0 三步 + P1 Hard routing + StatisticalClassifier + 消融重跑 + 审计文档 v2.0 + AR 后验检验), 原则评分 68%→92%, 168/168 全量回归零回归 |
 | v3.3.0 | 2026-07-15 | **Layer 3 溢价健康诊断双层体系**: 6 项任务完成 (L2 Routing 消融修复 + 更多因子测试 + 跨市场验证 + 原则评分 92% + 真实数据全量消融 + Pipeline 日志) + FactorHealthDiagnoser 新模块 (Fama-MacBeth + Epanechnikov 核 + Chow F-test 断点检测 + 指数衰减 + 多状态综合标签), 9/9 TDD + 128/128 回归, 与 FactorHealthMonitor 互补不合并 |
+| v3.4.0 | 2026-11-10 | 因子路由统一化治理 (ADR-042): 统一横截面秩管道替代三路指纹路由; 删除 3 个路由函数 + 5 个配置字段; 指纹降级只读诊断; 新增 `StructuralBreakMonitor` + `dynamic_ab` 整臂 A/B; 缓存代际 `v2.3.0-cache` |
+| v3.4.1 | 2026-11-11 | 非生产路径解耦器弃用 (ADR-043): `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 `DeprecationWarning`; 子包 1.2.1 |
+| v3.4.2 | 2026-11-12 | 断点监控调度 (ADR-044): 新增 `BreakMonitorScheduler` (daily/weekly/monthly, 周期键幂等, 失败不推进, 数值/tz-aware 输入拒绝); `StructuralBreakMonitor` 统计逻辑零改动; 22 例 |
+| v3.4.3 | 2026-11-12 | Dynamic 组件可分离性 (ADR-045, O2): `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 不再连带关闭 AR; 默认路径逐位不变; 新增 15 例, 全量 1682 passed |
+
+> v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

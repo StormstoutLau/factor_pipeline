@@ -207,7 +207,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 | 文档 | 更新内容 | v3.4.0 发版 (v3.4.1/v3.4.2 见注) |
 |------|---------|--------|
 | [CHANGELOG.md](file:///f:/Coding/factor_pipeline/CHANGELOG.md) | 新版本条目 (根因/实测/兼容性/遗留) | ✅ |
-| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构变更 | ⏸ 本次为内部路由治理, 无公开 API 变更 |
+| [CODE_WIKI.md](file:///f:/Coding/factor_pipeline/CODE_WIKI.md) | 版本号 + 架构/配置/模块表 (v3.4.0–v3.4.3) | ✅ 2026-11-13 同步收口 |
 | [DECISIONS.md](file:///f:/Coding/factor_pipeline/DECISIONS.md) | ADR-042 + 占用表 + 路线图 | ✅ |
 | [EXECUTION_V3.4.0_UNIFIED_ROUTING.md](EXECUTION_V3.4.0_UNIFIED_ROUTING.md) | 实施文档 v1.3 (含 §14 落库回填) | ✅ |
 | [FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md](analysis/FACTOR_ROUTING_OVERENGINEERING_RESEARCH.md) / [DESIGN](analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) | 调研 v1.1 / 设计 v1.2 | ✅ |
@@ -218,9 +218,9 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 > **v3.4.1 (2026-11-11) 同步**: CHANGELOG / DECISIONS (ADR-043) / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 无公开 API 变更 (仅新增构造告警), 未改动。
 >
-> **v3.4.2 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-044) / 实施文档 v1.0 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 仍未同步 (历史欠账, 待单独收口)。
+> **v3.4.2 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-044) / 实施文档 v1.0 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 欠账已于 2026-11-13 收口补齐。
 >
-> **v3.4.3 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-045) / 调研 v1.1 / 设计 v1.1 / 实施 v1.1 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 仍未同步。
+> **v3.4.3 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-045) / 调研 v1.1 / 设计 v1.1 / 实施 v1.1 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 已于 2026-11-13 同步收口 (v3.4.0–v3.4.3 全部变更)。
 
 ---
 
