@@ -232,6 +232,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-11-12 | fc6713d | fix(pipeline): v3.4.3 Dynamic 组件可分离性 (O2, ADR-045) |
 | 2026-11-12 | ff5e4cf | test(regression): 建立 v3.4.2 全量回归基线 1667 passed / 15 skipped / 0 failed |
 | 2026-11-12 | f532fd7 | feat(backtest): v3.4.2 断点监控调度器 BreakMonitorScheduler (ADR-044) |
 | 2026-11-11 | e54658c | refactor(decoupler): v3.4.1 非生产路径解耦器弃用 (ADR-043) |
