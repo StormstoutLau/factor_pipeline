@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-11-12
+> **更新日期**: 2026-11-13
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -43,7 +43,8 @@ v3.4.0 (2026-11-10) 因子路由统一化治理 — 统一横截面秩管道 (AD
 v3.4.1 (2026-11-11) 非生产路径解耦器弃用 (ADR-043)                            [x]
 v3.4.2 (2026-11-12) 断点监控调度 — 节拍器 (ADR-044)                           [x]
 v3.4.3 (2026-11-12) Dynamic 组件可分离性 — 中性化/AR 独立开关 (ADR-045)        [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.3
+v3.4.4 (2026-11-13) AblationRunner decoupler 消融臂 — dynamic_ab 内 AR 开/关   [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.4
 v3.4.x (候选)     非生产路径解耦器数值修复 (可选, 当前仅告警)                  [ ]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
@@ -58,10 +59,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 (v3.4.0 / v3.4.1 / v3.4.2 / v3.4.3)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 (v3.4.0 – v3.4.4)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.4 | AblationRunner decoupler 消融臂 | 新增 `run_l1_decoupler` (dynamic_ab 内 `L1_dynamic_ref` vs `L1_decoupler_off`, 参照可复用); ρ_step 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发 | ADR-045 实现补充 | 新增 11 passed; 定向回归 121 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1705 passed / 15 skipped / 0 failed |
 | v3.4.3 | Dynamic 组件可分离性 (O2) | `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 仅关中性化; 默认路径逐位不变 | ADR-045 | 新增 15 passed; 定向回归 190 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1682 passed / 15 skipped / 0 failed |
 | v3.4.2 | 断点监控调度 (O6) | 新增 `BreakMonitorScheduler`: daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; 数值型/tz-aware 输入拒绝; `StructuralBreakMonitor` 类零改动 | ADR-044 | 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5; 全量回归 1667 passed / 15 skipped / 0 failed |
 | v3.4.1 | 非生产路径解耦器弃用 | `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 `DeprecationWarning`; 子包 1.2.1 | ADR-043 | 弃用契约 4 passed; 版本统一 + AR 因果性 27 passed; 解耦器/AR 阶数 51 passed; 手工校验 5/5 |
@@ -221,6 +223,8 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 > **v3.4.2 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-044) / 实施文档 v1.0 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 欠账已于 2026-11-13 收口补齐。
 >
 > **v3.4.3 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-045) / 调研 v1.1 / 设计 v1.1 / 实施 v1.1 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 已于 2026-11-13 同步收口 (v3.4.0–v3.4.3 全部变更)。
+>
+> **v3.4.4 (2026-11-13) 同步**: CHANGELOG / DECISIONS (ADR-045 实现补充) / 调研 v1.0 / 设计 v1.0 / 实施 v1.0 / 审计报告 / README / PROJECT_STATUS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.4。
 
 ---
 

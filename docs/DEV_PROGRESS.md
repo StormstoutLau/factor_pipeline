@@ -34,7 +34,8 @@ v3.4.0 (2026-11-10) 因子路由统一化治理 (ADR-042) + 缓存代际 v2.3.0-
 v3.4.1 (2026-11-11) 非生产路径解耦器弃用 (ADR-043), 子包 1.2.1
 v3.4.2 (2026-11-12) 断点监控调度 (ADR-044), 缓存代际不变
 v3.4.3 (2026-11-12) Dynamic 组件可分离性 (ADR-045), 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.3
+v3.4.4 (2026-11-13) AblationRunner decoupler 消融臂, 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.4
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -48,6 +49,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > v3.4.1 模块影响: `factor_decoupler/` 非生产解耦器 (`Optimized*` / `TemporalDecoupler` / `decouple_*`) 弃用 — 保留导入, 构造即 `DeprecationWarning` (ADR-043); 子包版本 1.2.1。
 > v3.4.2 模块影响: `backtest/structural_break_monitor.py` 新增 `BreakMonitorScheduler` (daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; ADR-044); 监控统计与管道接口零改动。
 > v3.4.3 模块影响: `factor_decoupler/core/dual_neutralizer.py` `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `pipelines_v2.py` `DynamicFactorPipeline` 新增 `module_enabled['decoupler']` (ADR-045); 默认路径逐位不变。
+> v3.4.4 模块影响: `backtest/ablation_runner.py` 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂); ρ_step 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 默认 `run_l1` 6 臂契约不变。
 
 ### §2.1 核心编排层
 

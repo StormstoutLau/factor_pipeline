@@ -404,8 +404,12 @@ class AblationRunner:
         comparison = runner.compare(results[0], reference=results[-1])
     """
 
-    # 5 个可消融模块
+    # 5 个可消融模块 (unified 口径)
     L1_MODULES = ['imputer', 'winsorizer', 'scaler', 'neutralizer', 'orthogonalizer']
+
+    # v3.4.4: 仅在 dynamic_ab 下可测的 L1 步骤; 不并入 L1_MODULES,
+    # 以保持 unified/B0 的 rho_step 键集合不变 (ADR-042 / ADR-045).
+    DYNAMIC_L1_MODULES = ['decoupler']
 
     # ρ_step 参照值
     RHO_REF = {
@@ -477,8 +481,14 @@ class AblationRunner:
             )
         else:
             # B3 / 默认: 完整管线
+            # v3.4.4 R-1: 转发市值数据 (此前在此处丢失, 中性化只用行业);
+            # 仅非 None 时注入, 保持既有 monkeypatch 调用签名兼容.
+            pipeline_kwargs = {}
+            if market_cap_data is not None:
+                pipeline_kwargs['market_cap_data'] = market_cap_data
             processed_data, rho_step, ortho_diagnostics = self._run_pipeline(
                 config, factor_data, fwd_returns, industry_data,
+                **pipeline_kwargs,
             )
 
         # 计算指标
@@ -698,8 +708,14 @@ class AblationRunner:
                         except Exception:
                             pass
 
-        # 5 个步骤
-        for step in self.L1_MODULES:
+        # v3.4.4: decoupler 仅在 dynamic 中间数据存在时可测;
+        # unified/B0 不输出该键, 避免伪造 1.0.
+        steps = list(self.L1_MODULES)
+        if any('decoupling' in data for data in intermediate.values()):
+            steps.append('decoupler')
+
+        # 5 个步骤 (+ dynamic 时的 decoupler)
+        for step in steps:
             try:
                 if step == 'imputer':
                     # imputer 前 = original, 后 = intermediate['imputation'] or processed
@@ -720,6 +736,11 @@ class AblationRunner:
                     # 都用 processed_data, 导致 Spearman 恒为 1.0.
                     before = self._get_intermediate(intermediate, 'neutralization', None)
                     after = next(iter(processed_data.values()))
+                elif step == 'decoupler':
+                    # v3.4.4: Dynamic 管道的解耦前/后中间数据
+                    # (pipelines_v2.py:813 'imputation' → :837 'decoupling')
+                    before = self._get_intermediate(intermediate, 'imputation', None)
+                    after = self._get_intermediate(intermediate, 'decoupling', None)
                 else:
                     rho_step[step] = 1.0
                     continue
@@ -889,12 +910,20 @@ class AblationRunner:
         """
         results = []
 
+        # v3.4.4 R-1: 参数已声明但此前未转发; 仅在调用方提供时注入,
+        # 以保持既有 monkeypatch 调用签名兼容.
+        extra_kwargs = {}
+        if market_cap_data is not None:
+            extra_kwargs['market_cap_data'] = market_cap_data
+
         # B3_full 参照
         if b3_full_result is not None:
             results.append(b3_full_result)
         else:
             b3_config = AblationConfig(name='B3_full', layer='baseline', baseline_level='B3')
-            results.append(self.run_single(b3_config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                b3_config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # 4 个模块逐个关闭 (走 module_enabled)
         # M3 修正: orthogonalizer 不走 module_enabled, 单独通过 ortho_enabled 控制
@@ -905,7 +934,9 @@ class AblationRunner:
                 module_enabled={module: False},
                 baseline_level='B3',  # 基于 B3 管线
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # ortho 关闭: M3 修正 — OrthogonalizerAdapter 读 OrthogonalizationConfig.enabled,
         # 不走 module_enabled['orthogonalizer'] (adapters.py:796, ADR-020).
@@ -916,7 +947,62 @@ class AblationRunner:
             ortho_enabled=False,
             baseline_level='B3',
         )
-        results.append(self.run_single(ortho_config, factor_data, fwd_returns, industry_data))
+        results.append(self.run_single(
+            ortho_config, factor_data, fwd_returns, industry_data,
+            **extra_kwargs))
+
+        return results
+
+    def run_l1_decoupler(
+        self,
+        factor_data: Dict[str, pd.DataFrame],
+        fwd_returns: pd.DataFrame,
+        industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
+        dynamic_ref_result: Optional[AblationResult] = None,
+    ) -> List[AblationResult]:
+        """L1 decoupler 消融: AR 解耦开 vs 关 (仅 dynamic_ab, v3.4.4)
+
+        `decoupler` 只在 pipeline_mode='dynamic_ab' 下存在 (ADR-042/ADR-045),
+        因此参照臂与实验臂都必须走 dynamic; 不得与 run_l1 的 B3_full
+        (unified) 参照跨模式比较.
+
+        返回 2 个 AblationResult:
+        - L1_dynamic_ref:   dynamic_ab, 中性化 + AR 全开 (参照)
+        - L1_decoupler_off: dynamic_ab, module_enabled={'decoupler': False}
+
+        dynamic_ref_result 提供时按 identity 复用, 只运行实验臂.
+        """
+        results: List[AblationResult] = []
+
+        # 仅非 None 时注入, 与 run_l1 一致, 保持既有 monkeypatch 签名兼容
+        extra_kwargs = {}
+        if market_cap_data is not None:
+            extra_kwargs['market_cap_data'] = market_cap_data
+
+        if dynamic_ref_result is not None:
+            results.append(dynamic_ref_result)
+        else:
+            ref_config = AblationConfig(
+                name='L1_dynamic_ref',
+                layer='L1',
+                routing_mode='dynamic',
+                baseline_level='B3',
+            )
+            results.append(self.run_single(
+                ref_config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
+
+        off_config = AblationConfig(
+            name='L1_decoupler_off',
+            layer='L1',
+            routing_mode='dynamic',
+            module_enabled={'decoupler': False},
+            baseline_level='B3',
+        )
+        results.append(self.run_single(
+            off_config, factor_data, fwd_returns, industry_data,
+            **extra_kwargs))
 
         return results
 
@@ -1432,27 +1518,31 @@ class AblationRunner:
             lines.append("")
 
         # ── 6. 排序保持性 ρ_step ──
+        # v3.4.4: decoupler 列仅在结果含该步骤时追加 (dynamic_ab)
+        rho_steps = list(self.L1_MODULES)
+        if any('decoupler' in r.rho_step for r in results):
+            rho_steps.extend(self.DYNAMIC_L1_MODULES)
+
         lines.append("## 6. 排序保持性 ρ_step")
         lines.append("")
+        lines.append("| Experiment | " + " | ".join(rho_steps) + " |")
         lines.append(
-            "| Experiment | imputer | winsorizer | scaler | "
-            "neutralizer | orthogonalizer |"
-        )
-        lines.append(
-            "|------------|---------|------------|--------|"
-            "-------------|----------------|"
+            "|------------|" + "|".join("--------" for _ in rho_steps) + "|"
         )
         for r in results:
             rho = r.rho_step
-            lines.append(
-                f"| {r.config.name} | "
-                f"{_fmt(rho.get('imputer', float('nan')), 3)} | "
-                f"{_fmt(rho.get('winsorizer', float('nan')), 3)} | "
-                f"{_fmt(rho.get('scaler', float('nan')), 3)} | "
-                f"{_fmt(rho.get('neutralizer', float('nan')), 3)} | "
-                f"{_fmt(rho.get('orthogonalizer', float('nan')), 3)} |"
+            values = " | ".join(
+                _fmt(rho.get(step, float('nan')), 3) for step in rho_steps
             )
+            lines.append(f"| {r.config.name} | {values} |")
         lines.append("")
+        if 'decoupler' in rho_steps:
+            lines.append(
+                "> 注: `decoupler` 列为 Dynamic 管道「插补后 → 解耦后」的合并排序"
+                "变化 (含截面中性化 + AR); AR 的独立贡献以 `L1_decoupler_off` vs "
+                "`L1_dynamic_ref` 的 ΔIC/ΔSharpe 为准。"
+            )
+            lines.append("")
 
         # ── 7. 正交化诊断 ──
         lines.append("## 7. 正交化诊断")

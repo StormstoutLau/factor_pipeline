@@ -1,5 +1,56 @@
 # 开发日志 (Changelog)
 
+## v3.4.4 — AblationRunner `decoupler` 消融臂 (已实施, 2026-11-13)
+
+### 概览
+
+v3.4.3 使 `module_enabled['decoupler']` 可独立关闭 AR 解耦, 但
+`decoupler` 仅在 `pipeline_mode='dynamic_ab'` 的 `DynamicFactorPipeline`
+中存在; `run_l1` 的全部臂经 `routing_mode='full'` → unified Static 管道
+(调研代码事实 A1–A4), 该键不生效。结果是 AR 解耦贡献仍无法在 L1 消融中
+单独度量。本版新增 **within-mode** 消融入口, 使参照臂与实验臂仅
+`enable_ar` 不同。
+
+**核心产出**:
+- 新增 `AblationRunner.run_l1_decoupler()`: `L1_dynamic_ref` (中性化 + AR 全开)
+  vs `L1_decoupler_off` (`module_enabled={'decoupler': False}`), 两臂
+  `routing_mode='dynamic'`, 支持 `dynamic_ref_result` 按 identity 复用
+- `_collect_rho_steps` 在检测到 Dynamic 中间数据 `decoupling` 时追加
+  `decoupler` 步骤 (`imputation → decoupling`); unified/B0 仍为 5 键
+- `generate_report` 的 ρ_step 表按需追加 `decoupler` 列
+- 修复 `run_l1` 与 `run_single` 两处 `market_cap_data` 断链 (仅非 None 时注入)
+- 项目版本 **3.4.4** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+- 新增 1 个测试文件共 **11 例**
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | `DYNAMIC_L1_MODULES` + `run_l1_decoupler` + ρ_step 条件采集 + 报告条件列 + 两处市值转发 |
+| `tests/test_backtest/test_ablation_decoupler_arm.py` | **新增** D1-D11 (11 例) |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | `EXPECTED_VERSION` → `3.4.4` |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.3 → 3.4.4 |
+| `DECISIONS.md` / `docs/research/RESEARCH_ABLATION_DECOUPLER_ARM.md` / `docs/private/DESIGN_ABLATION_DECOUPLER_ARM.md` / `docs/EXECUTION_V3.4.4_ABLATION_DECOUPLER_ARM.md` / `docs/audit/2026-11-13-ablation-decoupler-arm-audit.md` | ADR-045 实现补充 + 调研/设计/实施/审计 |
+
+### 兼容性
+
+- **兼容**: `run_l1` 仍返回 6 臂; unified/B0 的 ρ_step 仍 5 键; 报告在无
+  `decoupler` 数据时仍 5 列; 默认 `PipelineV2Config` 输出不变;
+- **行为变化 (修复)**: 显式传入 `market_cap_data` 的 `run_l1` 调用
+  (`scripts/run_ablation_real.py`) 现在真正使用市值中性化, 相关臂数值会变化
+  (此前参数被静默丢弃);
+- **未修**: `run_l2` 入口的同类市值断链保留为观察项;
+- **数值 / 缓存**: 默认路径零变化, 仍为 `v2.3.0-cache`。
+
+### 实测矩阵
+
+| 层级 | 对象 | 实施前 (Red) | 实施后 (Green) |
+|------|------|-------------|---------------|
+| unit | decoupler 臂 D1-D11 | 10 failed / 1 passed | **11 passed** |
+| regression | ablation_runner + decoupler 臂 + O2 组件开关 + 版本统一 | — | **121 passed** (18.36s) |
+| version | 版本统一 + 手工校验 | — | **7 passed / 5/5** |
+| full | 全仓 pytest | 1682 passed / 15 skipped (v3.4.3 记录值; 另有 12 例 R-2 补测未重跑全量) | **1705 passed / 15 skipped / 0 failed** (1063.50s) |
+
 ## v3.4.3 — Dynamic 组件可分离性 (O2) (已实施, 2026-11-12)
 
 ### 概览

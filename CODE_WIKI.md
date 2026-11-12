@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.4.3 | **构建日期**: 2026-11-12 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离)
+> **版本**: v3.4.4 | **构建日期**: 2026-11-13 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -537,7 +537,7 @@ factor_pipeline/
 │   ├── ANALYSIS_V2.5.0.md       # v2.5.0 方案分析报告
 │   ├── KABC_paper_draft.md      # KABC 论文草稿
 │   └── ...                      # 其他分析文档
-├── tests/                       # 测试目录 (v3.4.3 全量回归 1682 passed / 15 skipped)
+├── tests/                       # 测试目录 (v3.4.4 全量回归 1705 passed / 15 skipped)
 │   ├── conftest.py              # pytest 共享 fixtures
 │   ├── unit/                    # 单元测试
 │   ├── test_backtest/           # 回测模块测试
@@ -1486,15 +1486,17 @@ Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
 
 | 方法 | 说明 |
 |------|------|
-| `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`) |
+| `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`); v3.4.4 起 `market_cap_data` 真正转发 |
+| `run_l1_decoupler(...)` | **v3.4.4**: 仅 `dynamic_ab` 的 AR 解耦消融 — `L1_dynamic_ref` (AR 开) vs `L1_decoupler_off` (`module_enabled={'decoupler': False}`); 支持参照复用 |
 | `run_l2(...)` | L2 路由模式消融 |
 | `run_l3(...)` | L3 参数网格 (CUSUM / EWMA / 缩尾比例 / 校正方法 / MAD) |
 | `run_l4_oat(...)` | L4 前置处理 OAT |
 | `run_single(...)` | 单实验运行 (Baseline 阶梯 + 指标计算) |
 
-> **v3.4.3 注**: `L1_MODULES` 仍为 5 项, 其中 4 项走 `module_enabled`;
-> 新增的 `decoupler` 开关可通过 `AblationConfig(module_enabled={'decoupler': False})`
-> 手动使用, 尚未加入固定 L1 臂列表 (ADR-045 非目标)。
+> **v3.4.4 注**: `L1_MODULES` 仍为 5 项 (unified 口径); `decoupler` 作为
+> `DYNAMIC_L1_MODULES` 仅在 `dynamic_ab` 下由 `run_l1_decoupler` 成对运行,
+> 其 ρ_step 通过 Dynamic 中间数据 `imputation → decoupling` 采集;
+> `run_l1` 的 6 臂契约与报告 5 列在无 decoupler 数据时保持不变。
 
 ---
 
@@ -1753,7 +1755,7 @@ pytest tests/ --cov=factor_pipeline --cov-report=html
 
 ### 测试架构
 
-**v3.4.3 基线**: 全仓 `pytest` → **1682 passed / 15 skipped / 0 failed** (166 warnings, 1794.26s)。
+**v3.4.4 基线**: 全仓 `pytest` → **1705 passed / 15 skipped / 0 failed** (1063.50s)。
 外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需
 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动脚本。
 
@@ -1768,6 +1770,7 @@ tests/
 ├── test_dynamic_pipeline.py         # 动态管道测试
 ├── test_dynamic_component_separability.py  # v3.4.3 组件开关 (11 例)
 ├── test_o2_review_gaps.py           # v3.4.3 复审覆盖缺口 (12 例)
+├── test_backtest/test_ablation_decoupler_arm.py  # v3.4.4 decoupler 消融臂 (11 例)
 ├── test_break_monitor_scheduler.py  # v3.4.2 调度器 (22 例)
 ├── verify_integration_real_data.py  # 真实 DB 手动脚本 (不参与收集)
 └── unit/                            # 单元测试（无外部依赖）
@@ -2558,5 +2561,6 @@ class ThresholdDriftMonitor:
 | v3.4.1 | 2026-11-11 | 非生产路径解耦器弃用 (ADR-043): `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 `DeprecationWarning`; 子包 1.2.1 |
 | v3.4.2 | 2026-11-12 | 断点监控调度 (ADR-044): 新增 `BreakMonitorScheduler` (daily/weekly/monthly, 周期键幂等, 失败不推进, 数值/tz-aware 输入拒绝); `StructuralBreakMonitor` 统计逻辑零改动; 22 例 |
 | v3.4.3 | 2026-11-12 | Dynamic 组件可分离性 (ADR-045, O2): `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 不再连带关闭 AR; 默认路径逐位不变; 新增 15 例, 全量 1682 passed |
+| v3.4.4 | 2026-11-13 | AblationRunner `decoupler` 消融臂: 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂, 参照可复用); `_collect_rho_steps` 条件采集 decoupler; 报告按需追加列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 新增 11 例, 全量 1705 passed |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

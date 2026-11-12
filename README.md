@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.3 的"**因子路由统一化治理 + 非生产路径弃用 + 断点监控调度 + Dynamic 组件可分离**"（ADR-042：统一横截面秩管道替代三路指纹路由；ADR-043：非生产解耦器保留导入 + 构造告警；ADR-044：断点监控日/周/月节拍器；ADR-045：中性化与 AR 解耦独立开关），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.4 的"**因子路由统一化治理 + 非生产路径弃用 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂**"（ADR-042：统一横截面秩管道替代三路指纹路由；ADR-043：非生产解耦器保留导入 + 构造告警；ADR-044：断点监控日/周/月节拍器；ADR-045：中性化与 AR 解耦独立开关，v3.4.4 补齐 `run_l1_decoupler` 成对消融），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -44,6 +44,16 @@
 ---
 
 ## 版本更新摘要
+
+### v3.4.4 AblationRunner decoupler 消融臂 (2026.11, 已实施)
+
+> **状态**: 已实施, 新增 11 passed; 定向回归 121 passed; 全量回归 1705 passed / 15 skipped / 0 failed
+> **文档**: [ADR-045 实现补充](DECISIONS.md) / [调研](docs/research/RESEARCH_ABLATION_DECOUPLER_ARM.md) / [设计](docs/private/DESIGN_ABLATION_DECOUPLER_ARM.md) / [实施](docs/EXECUTION_V3.4.4_ABLATION_DECOUPLER_ARM.md)
+> **版本 / 缓存**: 3.4.4 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: v3.4.3 使 `decoupler` 可独立关闭, 但其仅在 `pipeline_mode='dynamic_ab'` 生效; `run_l1` 的全部臂走 unified Static 管道, `decoupler` 键不生效, AR 解耦贡献仍无法度量。
+
+**新增**: `AblationRunner.run_l1_decoupler()` — `L1_dynamic_ref` (中性化 + AR 全开) vs `L1_decoupler_off` (`module_enabled={'decoupler': False}`), 两臂同为 `dynamic_ab`、仅 `enable_ar` 不同, 差异可归因于 AR; 支持参照结果复用。`rho_step` 在 Dynamic 中间数据 (`imputation → decoupling`) 存在时采集 `decoupler` 步骤, 报告按需追加列; 默认 `run_l1` 的 6 臂与 unified 5 键不变。顺带修复 `run_l1`/`run_single` 两处 `market_cap_data` 断链。
 
 ### v3.4.3 Dynamic 组件可分离性 (2026.11, 已实施)
 
@@ -1110,13 +1120,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.4.3 (Dynamic 组件可分离性, ADR-045; 含 v3.4.2 断点监控调度, ADR-044; v3.4.1 非生产路径弃用, ADR-043; v3.4.0 统一横截面秩管道, ADR-042)
+- **Pipeline 版本**: v3.4.4 (AblationRunner decoupler 消融臂; 含 v3.4.3 Dynamic 组件可分离性, ADR-045; v3.4.2 断点监控调度, ADR-044; v3.4.1 非生产路径弃用, ADR-043; v3.4.0 统一横截面秩管道, ADR-042)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: **全量回归 1682 passed / 15 skipped / 0 failed** (166 warnings, 1794.26s, 2026-11-12, v3.4.3; 较 v3.4.2 的 1667 新增 15 例); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; v3.4.2 调度器 22 passed + 组合回归 57 passed; v3.4.3 组件开关 15 passed + 定向回归 190 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
+- **测试基线**: **全量回归 1705 passed / 15 skipped / 0 failed** (166 warnings, 1063.50s, 2026-11-13, v3.4.4; 较 v3.4.3 记录的 1682 新增 23 例 = v3.4.3 复审补测 12 + 本版 11); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; v3.4.2 调度器 22 passed + 组合回归 57 passed; v3.4.3 组件开关 15 passed + 定向回归 190 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.12 (v3.4.3 组件可分离性收尾)
-- **状态**: STABLE (v3.4.3, 10 步 spec 工作流 §13.8 中任务裁剪)
+- **构建日期**: 2026.11.13 (v3.4.4 decoupler 消融臂)
+- **状态**: STABLE (v3.4.4, 10 步 spec 工作流 §13.8 中任务裁剪)
 
 ### 版本历史
 
@@ -1146,6 +1156,7 @@ factor_pipeline/
 | v3.4.1 | 2026.11.11 | 非生产路径解耦器弃用 (ADR-043): `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 DeprecationWarning; 子包 1.2.1; 弃用契约 4 passed |
 | v3.4.2 | 2026.11.12 | 断点监控调度 (ADR-044): `BreakMonitorScheduler` daily/weekly/monthly 节拍 + 周期键幂等 + 失败不推进 + 数值/tz-aware 输入拒绝; 监控统计零改动; 调度器 22 passed |
 | v3.4.3 | 2026.11.12 | Dynamic 组件可分离性 (ADR-045, O2): `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar` 独立开关; `module_enabled['decoupler']`; `neutralizer=False` 不再连带关闭 AR; 默认路径逐位不变; 新增 15 例 |
+| v3.4.4 | 2026.11.13 | AblationRunner `decoupler` 消融臂: `run_l1_decoupler` 在 `dynamic_ab` 内运行 AR 开/关两臂 (参照可复用); `rho_step` 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 新增 11 例 |
 
 ---
 

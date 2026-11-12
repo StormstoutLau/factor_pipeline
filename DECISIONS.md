@@ -3116,6 +3116,21 @@ v3.4.0 调研发现 (代码事实 A8): `DynamicFactorPipeline` 的
 6. `AblationRunner.L1_MODULES` 仍为 4 臂 (imputer/winsorizer/scaler/neutralizer);
    新增 `decoupler` 臂留待单独评估。
 
+### v3.4.4 实现补充 (2026-11-13)
+
+决策 6 的遗留项已由 `AblationRunner.run_l1_decoupler` 关闭:
+
+- `decoupler` 仅在 `dynamic_ab` 生效, 故消融参照臂也必须是 `dynamic_ab`
+  (`L1_dynamic_ref`), 实验臂为 `L1_decoupler_off`
+  (`module_enabled={'decoupler': False}`); 两臂仅 `enable_ar` 不同;
+- 不复用 `run_l1` 的 `B3_full` (unified) 参照, 避免跨模式归因
+  (Athey & Imbens 2017; Meyes et al. 2019);
+- `rho_step` 在检测到 Dynamic 中间数据 (`decoupling`) 时追加 `decoupler` 步骤;
+  报告按需追加该列; `run_l1` 的 6 臂契约不变;
+- 关联: v3.4.4 / [实施](docs/EXECUTION_V3.4.4_ABLATION_DECOUPLER_ARM.md) /
+  [设计](docs/private/DESIGN_ABLATION_DECOUPLER_ARM.md) /
+  [调研](docs/research/RESEARCH_ABLATION_DECOUPLER_ARM.md)。
+
 ### 后果
 
 - **意图内的语义变更**: `{'neutralizer': False}` 从"关闭全部解耦"变为
