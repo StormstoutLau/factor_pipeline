@@ -196,7 +196,7 @@ python -m pytest tests/test_dynamic_component_separability.py tests/test_factor_
 python -m pytest tests/test_adapters/test_module_enabled.py tests/test_pipelines_v2.py tests/test_factor_decoupler tests/test_backtest/test_ablation_runner.py tests/test_endogeneity_regularizer -q
 python -m pytest tests/test_fix3_version_unification.py -q
 python tests/test_backtest/verify_fix3_manual.py
-python -m pytest -q          # 全量基线 (1667 passed / 15 skipped)
+python -m pytest -q          # 全量基线 (1682 passed / 15 skipped)
 ```
 
 **通过标准**: 定向全绿; 版本 7 passed + 手工 5/5; 全量 `0 failed` 且 passed ≥ 1667 + 新增用例数。

@@ -110,3 +110,37 @@
 测试覆盖 15 例 + 既有 190 例定向回归 + 版本 7 例/手工 5/5 全部通过。
 残余风险 (已在 ADR-045 记录): `neutralizer=False` 语义变更为有意修正;
 AR 关闭时隐藏效应诊断按既有契约报错。
+
+---
+
+## Phase 5: 独立异构复审 (2026-11-12, 三路只读 subagent)
+
+### 5.1 各路结论
+
+| 复审路 | 结论 | 摘要 |
+|--------|------|------|
+| 代码语义 (subagent + 主会话补核) | **PASS** | 四组合矩阵、摘要契约、默认路径等价、连带调用方均无问题; subagent 未能产出结构化结论, 关键项由主会话按同一清单补核 |
+| 测试质量 (subagent) | **PASS_WITH_FIXES** | 断言严格无恒真式; Red 10/5 与 15 例自洽; T9 前提成立; fixture 无污染; 6 项覆盖缺口登记为 P3 延后 |
+| 文档契约 (subagent) | **PASS** | ADR-045 与代码一致; 数字全链一致; 唯一失真: EXECUTION §3 命令注释仍写 1667 (P3, 已修) |
+
+### 5.2 主会话补核记录 (代码语义路)
+
+| 检查项 | 证据 | 结论 |
+|--------|------|------|
+| `CompositeDecoupler(` 全部调用方 | 仅 [pipelines_v2.py:822](../../pipelines_v2.py#L822) (生产) + 测试 (全部 kwargs, 新参数追加尾部安全) | ✅ |
+| `ARDecoupler` 默认 `strength=1.0` 与 T2 oracle 对应 | [ar_model.py:276](../../modules/factor_decoupler/core/ar_model.py#L276) + 管线默认 `decorrelation_strength=1.0` | ✅ |
+| `optimizer.py` 无解耦器引用 | grep 0 命中 | ✅ |
+| E5 正则化测试仅 `inspect.signature` 断言 | [test_regularizer.py:98](../../tests/test_endogeneity_regularizer/test_regularizer.py#L98) | ✅ |
+| `dynamic_ab` 流程经 `_create_pipeline` | T10 + 190 passed | ✅ |
+| `_ar_decoupler=None` 无误调用路径 | transform 以 `self._ar_decoupler is None or skip_stage2` 短路 ([dual_neutralizer.py:508](../../modules/factor_decoupler/core/dual_neutralizer.py#L508)) | ✅ |
+
+### 5.3 复审发现与处置
+
+| # | 级别 | 发现 | 处置 |
+|---|------|------|------|
+| R-1 | P3 | EXECUTION §3 命令注释 "全量基线 (1667…)" 与实测 1682 矛盾 | ✅ 已改为 1682 (本次提交) |
+| R-2 | P3 | 测试覆盖缺口 6 项: `market_cap_data` 非空四组合 / `threat_level`×开关 / `decoupler=False` 时 `diagnose_hidden_effects` 报错 / Static-Mixed 忽略 `decoupler` 键 / `enable_ar=False` 后 `_get_ar_phi_for_diagnosis` 返回 None 未直测 / `AblationRunner` L1 臂新语义 | ⏳ 延后至独立测试补强 (不阻塞; 部分 Static-Mixed 忽略行为由"不读取未知键"结构性保证) |
+| R-3 | P3 | `threat_level` 在 neutralization 关闭时被静默忽略 | ✅ 已在设计 §5.1 / ADR-045 文档化, 接受 |
+| R-4 | P3 | ADR-045 关联文档引用 `docs/private/` (gitignore, 克隆者不可见) | ✅ 既有惯例 (ADR-042/043/044 同样引用), 接受 |
+
+**复审总评: PASS_WITH_FIXES (P0/P1 = 0; P3×4, 1 已修, 3 登记接受/延后)**
