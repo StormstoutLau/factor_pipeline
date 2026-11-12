@@ -356,7 +356,9 @@ class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
                  market_cap_data: Optional[pd.DataFrame] = None,
                  max_ar_order: int = 5,
                  ar_criterion: str = 'aic',
-                 decorrelation_strength: float = 1.0):
+                 decorrelation_strength: float = 1.0,
+                 enable_neutralization: bool = True,
+                 enable_ar: bool = True):
         """
         Parameters
         ----------
@@ -370,6 +372,10 @@ class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
             AR阶数选择准则
         decorrelation_strength : float
             解耦强度 [0, 1]
+        enable_neutralization : bool
+            是否执行 Stage 1/3 截面中性化 (默认 True; v3.4.3 组件可分离性)
+        enable_ar : bool
+            是否执行 Stage 2 AR 解耦 (默认 True; v3.4.3 组件可分离性)
         """
         self._dual_neutralizer = DualNeutralizer(
             industry_data=industry_data,
@@ -379,6 +385,8 @@ class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
         self._max_ar_order = max_ar_order
         self._ar_criterion = ar_criterion
         self._decorrelation_strength = decorrelation_strength
+        self._enable_neutralization = enable_neutralization
+        self._enable_ar = enable_ar
         self.is_fitted = False
 
     def fit(self, X: pd.DataFrame, **kwargs) -> 'CompositeDecoupler':
@@ -401,21 +409,29 @@ class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
         logger.info("CompositeDecoupler.fit()")
         logger.info("=" * 50)
 
-        # Stage 1: 第一重中性化 - 原始值中性化
-        logger.info("[Stage 1] 原始值中性化")
-        self._dual_neutralizer.fit(X)
-        residuals_stage1 = self._dual_neutralizer.transform(X)
+        # Stage 1: 第一重中性化 - 原始值中性化 (可独立关闭)
+        if self._enable_neutralization:
+            logger.info("[Stage 1] 原始值中性化")
+            self._dual_neutralizer.fit(X)
+            residuals_stage1 = self._dual_neutralizer.transform(X)
+        else:
+            logger.info("[Stage 1] 中性化关闭 (enable_neutralization=False)")
+            residuals_stage1 = X
 
-        # Stage 2: AR建模 - 在第一阶段残差上拟合
-        logger.info("[Stage 2] AR模型拟合")
-        from .ar_model import ARDecoupler
+        # Stage 2: AR建模 - 在第一阶段残差上拟合 (可独立关闭)
+        if self._enable_ar:
+            logger.info("[Stage 2] AR模型拟合")
+            from .ar_model import ARDecoupler
 
-        self._ar_decoupler = ARDecoupler(
-            max_order=self._max_ar_order,
-            criterion=self._ar_criterion,
-            strength=self._decorrelation_strength
-        )
-        self._ar_decoupler.fit(residuals_stage1)
+            self._ar_decoupler = ARDecoupler(
+                max_order=self._max_ar_order,
+                criterion=self._ar_criterion,
+                strength=self._decorrelation_strength
+            )
+            self._ar_decoupler.fit(residuals_stage1)
+        else:
+            logger.info("[Stage 2] AR 解耦关闭 (enable_ar=False)")
+            self._ar_decoupler = None
 
         # 记录用于后续诊断
         self._residuals_stage1 = residuals_stage1
@@ -481,22 +497,31 @@ class CompositeDecoupler(_HiddenEffectDiagnosticMixin):
         self._threat_level = threat_level
         self._skip_stage2 = skip_stage2
 
-        # Stage 1: 原始值双重中性化
-        residuals_stage1 = self._dual_neutralizer.transform(
-            X, threat_level=threat_level, skip_stage2=skip_stage2,
-        )
+        # Stage 1: 原始值双重中性化 (可独立关闭)
+        if self._enable_neutralization:
+            residuals_stage1 = self._dual_neutralizer.transform(
+                X, threat_level=threat_level, skip_stage2=skip_stage2,
+            )
+        else:
+            residuals_stage1 = X
 
-        if skip_stage2 and self._ar_decoupler is not None:
-            # v3.1.0 E5 L1 低威胁路径: 跳过 Stage 2 (AR 建模), 仅 Stage 1 + Stage 3
-            logger.info("[Stage 2] 跳过 AR 建模 (低威胁轻量路径, E5 L1)")
+        if self._ar_decoupler is None or skip_stage2:
+            # enable_ar=False 或 v3.1.0 E5 L1 低威胁轻量路径: 跳过 Stage 2
+            if self._ar_decoupler is None:
+                logger.info("[Stage 2] 无 AR 组件 (enable_ar=False)")
+            else:
+                logger.info("[Stage 2] 跳过 AR 建模 (低威胁轻量路径, E5 L1)")
             residuals_ar = residuals_stage1
         else:
             # Stage 2: AR解耦 (标准路径)
             residuals_ar = self._ar_decoupler.transform(residuals_stage1)
 
-        # Stage 3: 第二重中性化（在AR残差上再中性化）
-        logger.info("[Stage 3] AR残差中性化")
-        residuals_final = self._neutralize_ar_residuals(residuals_ar)
+        # Stage 3: 第二重中性化（在AR残差上再中性化, 可独立关闭）
+        if self._enable_neutralization:
+            logger.info("[Stage 3] AR残差中性化")
+            residuals_final = self._neutralize_ar_residuals(residuals_ar)
+        else:
+            residuals_final = residuals_ar
 
         logger.info("[Transform] 组合解耦完成")
         return residuals_final

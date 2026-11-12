@@ -45,7 +45,8 @@
 | ADR-042 | 统一横截面秩管道替代三路指纹路由 | v3.4.0, 2026-11-10 |
 | ADR-043 | 非生产路径解耦器弃用 — 保留导入 + 构造告警 | v3.4.1, 2026-11-11 |
 | ADR-044 | 断点监控调度 — 节拍器注入, 幂等 + 失败不推进 | v3.4.2, 2026-11-12 |
-| ADR-045 起 | 未占用 | — |
+| ADR-045 | Dynamic 组件可分离性 — 中性化与 AR 解耦独立开关 | v3.4.3, 2026-11-12 |
+| ADR-046 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3072,6 +3073,74 @@ v3.4.0 引入 `StructuralBreakMonitor` + `FactorProcessingPipelineV2.monitor_str
 版本回 3.4.1, 项目版本回 3.4.1, 并回退 ADR/CHANGELOG/README/PROJECT_STATUS/
 ARCHITECTURE/DEV_PROGRESS 的 v3.4.2 条目 (`StructuralBreakMonitor` 类本身
 未改动, 无需回滚)。
+
+---
+
+## ADR-045: Dynamic 组件可分离性 — 中性化与 AR 解耦独立开关 (v3.4.3)
+
+**日期**: 2026-11-12
+**状态**: 已实施 (2026-11-12, v3.4.3)
+**优先级**: P2
+**关联测试**: `tests/test_dynamic_component_separability.py` (11 例) / `tests/test_factor_decoupler/test_composite_component_flags.py` (4 例)
+**关联文档**: [设计](docs/private/DESIGN_DYNAMIC_COMPONENT_SEPARABILITY.md) / [调研](docs/research/RESEARCH_DYNAMIC_COMPONENT_SEPARABILITY.md) / [实施](docs/EXECUTION_V3.4.3_DYNAMIC_SEPARABILITY.md) / [设计 §9 O2](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md)
+
+### 背景
+
+v3.4.0 调研发现 (代码事实 A8): `DynamicFactorPipeline` 的
+`module_enabled={'neutralizer': False}` 会同时关闭 AR 解耦 —— 解耦器
+(`CompositeDecoupler`) 的创建被包在 `if self._neutralizer_enabled:` 分支内
+(`pipelines_v2.py:813-827`)。后果:
+
+1. L1 消融的 `neutralizer` 臂无法单独度量中性化贡献, Dynamic 退化为
+   `imputer + z-score`;
+2. "中性化"(截面回归) 与 "AR 解耦"(时序新息) 是两个统计上正交的操作,
+   却被绑定为一个开关;
+3. 调研 §4.3 首次管道对比因此得出"三管道排序几乎相同"的错误结论。
+
+### 决策
+
+1. `CompositeDecoupler.__init__` 新增 `enable_neutralization` / `enable_ar`
+   两个关键字参数, 默认 `True` (追加在签名尾部, 不破坏既有位置参数);
+2. `DynamicFactorPipeline` 读取 `module_enabled['decoupler']` (默认 `True`),
+   映射为 `enable_ar`; `neutralizer` 映射为 `enable_neutralization`;
+   任一开关开启即创建解耦器, 两者全关时 `_decoupler=None` (identity);
+3. 阶段矩阵:
+   - 中性化开 + AR 开 → Stage 1 (行业/市值) → Stage 2 (AR) → Stage 3 (行业残差);
+   - 中性化开 + AR 关 → Stage 1 → Stage 3;
+   - 中性化关 + AR 开 → Stage 2 (在原始值上);
+   - 两者全关 → identity;
+4. `enable_ar=False` 时 `fit` 不构建 `ARDecoupler`; `get_summary()['ar_summary']=None`;
+   `_get_ar_phi_for_diagnosis()` 返回 `None` (既有诊断契约不变);
+5. 全开路径的调用序列与 v3.4.2 完全一致, 输出逐位不变; 缓存代际不变
+   (`v2.3.0-cache`);
+6. `AblationRunner.L1_MODULES` 仍为 4 臂 (imputer/winsorizer/scaler/neutralizer);
+   新增 `decoupler` 臂留待单独评估。
+
+### 后果
+
+- **意图内的语义变更**: `{'neutralizer': False}` 从"关闭全部解耦"变为
+  "仅关闭中性化, 保留 AR"; 需要旧语义时显式传
+  `{'neutralizer': False, 'decoupler': False}`;
+- 消融报告中 `L1_neutralizer_off` 的 Dynamic 数值将变化 (正是修复目的);
+- 默认路径零数值变化; 无新依赖; 版本 3.4.3;
+- AR 关闭时隐藏效应诊断按既有契约抛 `DiagnosticContractError`
+  (缺少 AR 组件, 不新增行为)。
+
+### 替代方案
+
+- **管线层直接拼装 `DualNeutralizer` + `ARDecoupler`** — 否决: `fit`/`transform`
+  各 4 分支, Stage 3 逻辑需复制, 摘要/中间数据契约分散;
+- **`neutralizer=False` 时传 `industry_data=None`** — 否决: 依赖隐式退化,
+  每次 transform 打 warning, AR 仍强制拟合, 不可控;
+- **删除 `CompositeDecoupler`, 暴露原语** — 否决: 破坏既有公开 API 与
+  `diagnose_hidden_effects` 委托链, 超出 O2 范围。
+
+### 回滚方案
+
+回退 `dual_neutralizer.py` 的两开关与 `pipelines_v2.py` 的 `_decoupler_enabled`
+映射; 恢复 `test_module_enabled_all_false` 的键集合; 删除 2 个新测试文件;
+版本锚点 6 处回 3.4.2; 回退 ADR/CHANGELOG/README/PROJECT_STATUS/ARCHITECTURE/
+DEV_PROGRESS 的 v3.4.3 条目。无数据迁移, 缓存代际不变。
 
 ---
 

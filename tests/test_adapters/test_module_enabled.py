@@ -214,11 +214,12 @@ class TestPipelineModuleEnabled:
         """module_enabled 全 False → 输出 = 输入 (全 identity)
 
         使用 DynamicFactorPipeline (无 transformation 步骤):
-        imputer off → 保留 NaN; neutralizer off → 跳过解耦; scaler off → 跳过标准化
+        imputer off → 保留 NaN; neutralizer+decoupler off → 跳过全部解耦;
+        scaler off → 跳过标准化
         """
         df = _make_factor_df(with_nan=True)
         me = {'imputer': False, 'winsorizer': False,
-              'scaler': False, 'neutralizer': False}
+              'scaler': False, 'neutralizer': False, 'decoupler': False}
         pipeline = DynamicFactorPipeline(module_enabled=me)
         result = pipeline.fit_transform(df)
         # 全 identity: NaN 保留

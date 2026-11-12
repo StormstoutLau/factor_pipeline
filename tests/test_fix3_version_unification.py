@@ -9,7 +9,7 @@ Fix 3: 版本号统一 — TDD 测试
   - test_config_v2.py:  期望 '2.0.0' (历史失败)
   - test_reporting.py:  期望 "2.0.0"
 
-统一目标 (v3.4.2, 2026-11-12): 四处声明保持一致
+统一目标 (v3.4.3, 2026-11-12): 四处声明保持一致
   - __init__.py / config_v2.py / reporting.py / pyproject.toml
   - 缓存 code_version = "v2.3.0-cache" (缓存语义版本, 非项目版本;
     因 PL-02 变换 / PL-06 Mixed 缩尾 / PL-05 AR 解耦 / PL-08 AR 阶数选择
@@ -31,14 +31,14 @@ for ext in ["F:/Coding/Factor_Fingerprint", "F:/Coding/Factor_Decoupler"]:
         sys.path.insert(0, ext)
 
 # 期望的统一版本号
-EXPECTED_VERSION = "3.4.2"
+EXPECTED_VERSION = "3.4.3"
 
 
 class TestFix3VersionUnification(unittest.TestCase):
     """Fix 3: 版本号统一测试"""
 
     def test_01_project_version_is_unified(self):
-        """test_01: 项目主版本号 __version__ 统一到 3.4.2"""
+        """test_01: 项目主版本号 __version__ 统一到 3.4.3"""
         import factor_pipeline
         self.assertEqual(
             factor_pipeline.__version__, EXPECTED_VERSION,
@@ -46,7 +46,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         )
 
     def test_02_unified_config_version_default(self):
-        """test_02: PipelineV2ConfigUnified.version 默认值为 3.4.2"""
+        """test_02: PipelineV2ConfigUnified.version 默认值为 3.4.3"""
         from factor_pipeline.config_v2 import PipelineV2ConfigUnified
         config = PipelineV2ConfigUnified()
         self.assertEqual(
@@ -55,7 +55,7 @@ class TestFix3VersionUnification(unittest.TestCase):
         )
 
     def test_03_reporting_pipeline_version_default(self):
-        """test_03: PipelineExecutionReport.pipeline_version 默认值为 3.4.2"""
+        """test_03: PipelineExecutionReport.pipeline_version 默认值为 3.4.3"""
         from factor_pipeline.reporting import PipelineExecutionReport
         report = PipelineExecutionReport()
         self.assertEqual(

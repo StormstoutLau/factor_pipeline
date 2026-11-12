@@ -1,6 +1,6 @@
 # 开发进度总览 (版本 × 模块双维度)
 
-> **版本**: v1.2 (2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
+> **版本**: v1.3 (2026-11-12; v1.2 = 2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
 > **范围**: 跨会话单一真相源,记录每个版本每个模块的完成状态
 > **更新规则**: 每次发版 / 完成任务后更新对应单元格;新增版本时追加列
 > **关联文档**: [ARCHITECTURE.md](ARCHITECTURE.md) | [PROJECT_STATUS.md](PROJECT_STATUS.md) | [../CHANGELOG.md](../CHANGELOG.md)
@@ -33,7 +33,8 @@ v3.3.7 (2026-11-04) PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041) + 缓
 v3.4.0 (2026-11-10) 因子路由统一化治理 (ADR-042) + 缓存代际 v2.3.0-cache
 v3.4.1 (2026-11-11) 非生产路径解耦器弃用 (ADR-043), 子包 1.2.1
 v3.4.2 (2026-11-12) 断点监控调度 (ADR-044), 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.2
+v3.4.3 (2026-11-12) Dynamic 组件可分离性 (ADR-045), 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.3
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -46,6 +47,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > v3.4.0 模块影响: `pipelines_v2.py` 改统一横截面秩管道 (ADR-042); `factor_fingerprint/` 新增 `infer_sampling_frequency` 与 `compute_ar1_path`; `backtest/` 新增 `structural_break_monitor`; `optimizer.py` 默认搜索空间清空。详见 [CHANGELOG](../CHANGELOG.md)。
 > v3.4.1 模块影响: `factor_decoupler/` 非生产解耦器 (`Optimized*` / `TemporalDecoupler` / `decouple_*`) 弃用 — 保留导入, 构造即 `DeprecationWarning` (ADR-043); 子包版本 1.2.1。
 > v3.4.2 模块影响: `backtest/structural_break_monitor.py` 新增 `BreakMonitorScheduler` (daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; ADR-044); 监控统计与管道接口零改动。
+> v3.4.3 模块影响: `factor_decoupler/core/dual_neutralizer.py` `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `pipelines_v2.py` `DynamicFactorPipeline` 新增 `module_enabled['decoupler']` (ADR-045); 默认路径逐位不变。
 
 ### §2.1 核心编排层
 
@@ -151,7 +153,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 |---|------|------|------|
 | 1 | v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe vs 旧实现) | 候选 | ADR-040 风险段 (非平稳失配未测) |
 | 2 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler`) | 候选 | 审计遗留 (无生产调用) |
-| 3 | v3.4.0 遗留选项: MAD 缩尾 (O1) / Dynamic 组件解耦 (O2) / 断点监控接入调度 (O6) | 候选 | ADR-042 已知遗留 |
+| 3 | v3.4.0 遗留选项: MAD 缩尾 (O1) | 候选 | ADR-042 已知遗留 (O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
 
 ### §4.1 P2 远期
 

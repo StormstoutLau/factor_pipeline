@@ -511,7 +511,9 @@ class PipelineV2Config:
     cusum_h: float = 5.5       # trigger (5.5σ, 两个 CUSUM 叠加补偿)
 
     # ABLATION E1: 模块级 enabled 开关 (默认 None = 全启用, 向后兼容)
-    # 格式: {'imputer': False, 'winsorizer': False, 'scaler': False, 'neutralizer': False}
+    # 格式: {'imputer': False, 'winsorizer': False, 'scaler': False,
+    #        'neutralizer': False, 'decoupler': False}
+    # decoupler 仅作用于 Dynamic 管道 (AR 解耦), 其余管道忽略 (v3.4.3 O2)
     # E2 AblationRunner 通过此字段控制 L1 组件消融
     module_enabled: Optional[Dict[str, bool]] = None
 
@@ -786,6 +788,8 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
         me = module_enabled or {}
         self._imputer_enabled = me.get('imputer', True)
         self._neutralizer_enabled = me.get('neutralizer', True)
+        # v3.4.3 O2: AR 解耦独立开关, 不再与 neutralizer 绑定
+        self._decoupler_enabled = me.get('decoupler', True)
         self._scaler_enabled = me.get('scaler', True)
 
         # 提取行业和市值数据用于解耦器
@@ -809,20 +813,25 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
         self._intermediate_data['imputation'] = X_imputed.copy()
 
         # Step 2: 初始化并拟合组合解耦器（三重中性化核心）
-        # ABLATION E1: neutralizer 关闭时跳过解耦 (identity)
-        if self._neutralizer_enabled:
-            logger.info("[DynamicPipeline] Step 2: 拟合三重中性化解耦器")
+        # v3.4.3 O2: 中性化与 AR 解耦使用独立开关; 任一开启即需要解耦器
+        if self._neutralizer_enabled or self._decoupler_enabled:
+            logger.info(
+                "[DynamicPipeline] Step 2: 拟合解耦器 (neutralizer=%s, decoupler=%s)",
+                self._neutralizer_enabled, self._decoupler_enabled,
+            )
             self._decoupler = CompositeDecoupler(
                 industry_data=self.industry_data,
                 market_cap_data=self.market_cap_data,
                 max_ar_order=self.max_ar_order,
                 ar_criterion=self.ar_criterion,
-                decorrelation_strength=self.decorrelation_strength
+                decorrelation_strength=self.decorrelation_strength,
+                enable_neutralization=self._neutralizer_enabled,
+                enable_ar=self._decoupler_enabled,
             )
             self._decoupler.fit(X_imputed, **kwargs)
             X_decoupled = self._decoupler.transform(X_imputed, **kwargs)
         else:
-            logger.info("[DynamicPipeline] Step 2: neutralizer disabled, 跳过解耦 (identity)")
+            logger.info("[DynamicPipeline] Step 2: neutralizer/decoupler disabled, 跳过解耦 (identity)")
             self._decoupler = None
             X_decoupled = X_imputed
         self._intermediate_data['decoupling'] = X_decoupled.copy()
@@ -847,7 +856,7 @@ class DynamicFactorPipeline(_BaseFactorPipeline):
         X = self._imputer.transform(X, **kwargs)
 
         # Step 2: 三重中性化解耦（原始值中性化 → AR建模 → AR残差中性化）
-        # ABLATION E1: neutralizer 关闭时跳过 (identity)
+        # v3.4.3 O2: 组件开关已下沉到 CompositeDecoupler, 此处仅判断解耦器是否存在
         if self._decoupler is not None:
             logger.info("[DynamicPipeline] Step 2: 三重中性化解耦")
             X = self._decoupler.transform(X, **kwargs)

@@ -42,14 +42,15 @@ v3.3.7 (2026-11-04) PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041)      
 v3.4.0 (2026-11-10) 因子路由统一化治理 — 统一横截面秩管道 (ADR-042)             [x]
 v3.4.1 (2026-11-11) 非生产路径解耦器弃用 (ADR-043)                            [x]
 v3.4.2 (2026-11-12) 断点监控调度 — 节拍器 (ADR-044)                           [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.2
+v3.4.3 (2026-11-12) Dynamic 组件可分离性 — 中性化/AR 独立开关 (ADR-045)        [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.3
 v3.4.x (候选)     非生产路径解耦器数值修复 (可选, 当前仅告警)                  [ ]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.4.2 完成后)
+## §2. 当前待办 (v3.4.3 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -57,10 +58,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 (v3.4.0 / v3.4.1 / v3.4.2)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 (v3.4.0 / v3.4.1 / v3.4.2 / v3.4.3)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.3 | Dynamic 组件可分离性 (O2) | `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 仅关中性化; 默认路径逐位不变 | ADR-045 | 新增 15 passed; 定向回归 190 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1682 passed / 15 skipped / 0 failed |
 | v3.4.2 | 断点监控调度 (O6) | 新增 `BreakMonitorScheduler`: daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; 数值型/tz-aware 输入拒绝; `StructuralBreakMonitor` 类零改动 | ADR-044 | 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5; 全量回归 1667 passed / 15 skipped / 0 failed |
 | v3.4.1 | 非生产路径解耦器弃用 | `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 `DeprecationWarning`; 子包 1.2.1 | ADR-043 | 弃用契约 4 passed; 版本统一 + AR 因果性 27 passed; 解耦器/AR 阶数 51 passed; 手工校验 5/5 |
 | v3.4.0 | 路由过度工程化治理 | 统一横截面秩管道默认替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor; dynamic_ab 整臂 A/B | ADR-042 | T1-T14 + B1-B6 全绿; 审计 PASS (0 P0/P1); 真实数据 A/B 秩相关 ρ≥0.999999、ΔIC 不显著, 基线标签-执行错位 2/2 — 见 [实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
@@ -79,7 +81,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
 | 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023 已做; 多年多因子待扩) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
-| 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) / Dynamic 组件解耦 (O2) | 候选 | ADR-042 已知遗留 (O6 已由 v3.4.2 关闭) |
+| 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | 候选 | ADR-042 已知遗留 (O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
@@ -217,12 +219,15 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 > **v3.4.1 (2026-11-11) 同步**: CHANGELOG / DECISIONS (ADR-043) / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 无公开 API 变更 (仅新增构造告警), 未改动。
 >
 > **v3.4.2 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-044) / 实施文档 v1.0 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 仍未同步 (历史欠账, 待单独收口)。
+>
+> **v3.4.3 (2026-11-12) 同步**: CHANGELOG / DECISIONS (ADR-045) / 调研 v1.1 / 设计 v1.1 / 实施 v1.1 / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 仍未同步。
 
 ---
 
 ## §5. 执行历史
 
-> **全量回归基线 (2026-11-12, v3.4.2)**: 全仓 `pytest` → **1667 passed / 15 skipped / 0 failed** (166 warnings, 809.32s, exit 0)。
+> **全量回归基线 (2026-11-12, v3.4.3)**: 全仓 `pytest` → **1682 passed / 15 skipped / 0 failed** (166 warnings, 1794.26s, exit 0)。
+> 较 v3.4.2 基线 1667 passed 新增 15 例 (组件开关), 0 新增失败。
 > 外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动运行脚本, 不参与收集。
 
 | 日期 | Commit | 内容 |

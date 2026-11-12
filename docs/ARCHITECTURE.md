@@ -13,11 +13,11 @@
 
 **核心价值**:
 - **顺序校验**: 基于 DAG 的拓扑验证,确保处理步骤顺序符合统计理论 (插补→去极值→变换→标准化→中性化)
-- **统一横截面秩管道 (v3.4.0 ADR-042)**: 默认 `pipeline_mode='unified'`, 所有因子走同一条管道 (imputer → 1%/99% 缩尾 → 中性化 → rank→normal → z-score); 21 维因子指纹降级为只读诊断层, 采样频率写入 `FingerprintMeta`; `DynamicFactorPipeline` 仅经 `pipeline_mode='dynamic_ab'` 整臂 A/B 实验保留
+- **统一横截面秩管道 (v3.4.0 ADR-042)**: 默认 `pipeline_mode='unified'`, 所有因子走同一条管道 (imputer → 1%/99% 缩尾 → 中性化 → rank→normal → z-score); 21 维因子指纹降级为只读诊断层, 采样频率写入 `FingerprintMeta`; `DynamicFactorPipeline` 仅经 `pipeline_mode='dynamic_ab'` 整臂 A/B 实验保留。**v3.4.3 ADR-045**: Dynamic 管道内 `neutralizer` 与 `decoupler` 为独立开关 (`module_enabled['decoupler']` 映射 AR 解耦), 默认全开; 两开关全关时解耦步骤为 identity。
 - **因果性保证**: 插补与去极值禁止使用未来数据 (插补 lookahead_safe=True 默认; 去极值逐日横截面, fit 不存参数),通过截断不变性测试验证; 变换统一为逐日截面 rank→正态 (v3.3.4), 系数/参数只用前缀
 - **学术可验证**: 每个统计决策都有显著性检验支撑,关键算法有学术文献引用 (经独立验证,排除幻觉); 管道选择/采样频率写入 SpecificationLogger (opt-in), 结构突变监控 (sup-F/CUSUM) 只告警
 
-**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042) → v3.4.1 (2026-11-11, 非生产路径解耦器弃用 + ADR-043) → v3.4.2 (2026-11-12, 断点监控调度 + ADR-044)
+**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042) → v3.4.1 (2026-11-11, 非生产路径解耦器弃用 + ADR-043) → v3.4.2 (2026-11-12, 断点监控调度 + ADR-044) → v3.4.3 (2026-11-12, Dynamic 组件可分离性 + ADR-045)
 
 ---
 

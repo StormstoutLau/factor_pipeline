@@ -1,5 +1,59 @@
 # 开发日志 (Changelog)
 
+## v3.4.3 — Dynamic 组件可分离性 (O2) (已实施, 2026-11-12)
+
+### 概览
+
+修复 v3.4.0 遗留 O2: `DynamicFactorPipeline` 的
+`module_enabled={'neutralizer': False}` 会**同时关闭 AR 解耦** ——
+`CompositeDecoupler` 的创建被包在 `if self._neutralizer_enabled:` 分支内。
+中性化 (截面回归) 与 AR 解耦 (时序新息) 是统计上正交的两个操作, 绑定导致
+L1 消融无法单独度量中性化贡献, Dynamic 退化为 `imputer + z-score`
+(调研代码事实 A8)。按 **ADR-045** 将两组件拆为独立开关。
+
+**核心产出**:
+- `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`
+  (默认 `True`, 追加在签名尾部); `enable_ar=False` 时不构建 `ARDecoupler`
+- `DynamicFactorPipeline` 新增 `module_enabled['decoupler']` (默认 `True`),
+  与 `neutralizer` 分别映射到两个开关; 两者全关时 `_decoupler=None`
+- 语义修正: `{'neutralizer': False}` 现在仅关闭中性化、保留 AR;
+  旧语义需显式 `{'neutralizer': False, 'decoupler': False}`
+- 默认路径调用序列不变, 输出逐位一致; 缓存代际不变 **`v2.3.0-cache`**
+- 项目版本 **3.4.3** (6 处锚点)
+- 新增 2 个测试文件共 **15 例**
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_decoupler/core/dual_neutralizer.py` | `CompositeDecoupler` 两开关 + Stage 1/2/3 条件化 (+51/−26, 含 docstring) |
+| `pipelines_v2.py` | `_decoupler_enabled` 映射 + 解耦器创建条件化 + 配置注释 |
+| `tests/test_dynamic_component_separability.py` | **新增** T1-T5/T10/T12/T13 (11 例) |
+| `tests/test_factor_decoupler/test_composite_component_flags.py` | **新增** T6-T9 (4 例) |
+| `tests/test_adapters/test_module_enabled.py` | `all_false` 显式加入 `decoupler` |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.2 → 3.4.3 |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | 期望版本 3.4.3 |
+| `DECISIONS.md` / `docs/private/DESIGN_DYNAMIC_COMPONENT_SEPARABILITY.md` / `docs/research/RESEARCH_DYNAMIC_COMPONENT_SEPARABILITY.md` / `docs/EXECUTION_V3.4.3_DYNAMIC_SEPARABILITY.md` | ADR-045 + 调研/设计/实施文档 |
+
+### 兼容性
+
+- **兼容**: 默认配置 (`module_enabled=None`) 输出逐位不变; 既有
+  `CompositeDecoupler(...)` 位置参数调用不变;
+- **语义变更**: `{'neutralizer': False}` 不再关闭 AR (修复目的); 消融报告
+  `L1_neutralizer_off` 的 Dynamic 数值将变化;
+- **新增**: `{'decoupler': False}` 可单独关闭 AR (仅 Dynamic 管道生效);
+- **数值 / 缓存**: 默认路径零变化, 仍为 `v2.3.0-cache`。
+
+### 实测矩阵
+
+| 层级 | 对象 | 实施前 (Red) | 实施后 (Green) |
+|------|------|-------------|---------------|
+| unit | 管线组件开关 T1-T5/T10/T12/T13 | 10 failed / 5 passed | **11 passed** |
+| unit | `CompositeDecoupler` 开关 T6-T9 | 4 × TypeError | **4 passed** |
+| regression | 模块开关 + 管线 + 解耦器 + 消融 + 内生性 + 截断不变式 | — | **190 passed** |
+| version | 版本统一 + 手工校验 | — | **7 passed / 5/5** |
+| full | 全仓 pytest | 1667 passed / 15 skipped (v3.4.2) | **1682 passed / 15 skipped / 0 failed** (166 warnings, 1794.26s) |
+
 ## v3.4.2 — 断点监控调度 (O6) (已实施, 2026-11-12)
 
 ### 概览
