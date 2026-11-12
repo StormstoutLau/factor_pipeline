@@ -17,6 +17,12 @@ Factor Decoupler - 时间序列解耦模块
 - 'hp_filter' : Hodrick-Prescott滤波
 - 'auto' : 自动选择最优方法
 
+.. deprecated:: v3.4.1 (项目 v3.4.1)
+    `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler`
+    (及 `decouple_*` 便捷函数) 为零生产调用且含全样本 AR 拟合 (同类前视);
+    保留导入但构造即发 DeprecationWarning, 新代码请使用 `ARDecoupler` /
+    `CompositeDecoupler`。
+
 GitHub: https://github.com/StormstoutLau/factor_pipeline
 """
 
@@ -35,7 +41,7 @@ from .core.unified_decoupler import (
     decouple_hp,
     decouple_auto
 )
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __all__ = [
     'BaseDecoupler',
     'DecouplerConfig',

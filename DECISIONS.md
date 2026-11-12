@@ -43,7 +43,8 @@
 | ADR-040 | AR 解耦改为因果三段式一步预测 (冻结窗口 + 间歇重估) | v3.3.6, 2026-11-04 |
 | ADR-041 | AR 阶数选择统一 hold_back 样本 (信息准则可比性) | v3.3.7, 2026-11-04 |
 | ADR-042 | 统一横截面秩管道替代三路指纹路由 | v3.4.0, 2026-11-10 |
-| ADR-043 起 | 未占用 | — |
+| ADR-043 | 非生产路径解耦器弃用 — 保留导入 + 构造告警 | v3.4.1, 2026-11-11 |
+| ADR-044 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -2958,6 +2959,49 @@ Static 与 Mixed 输出秩相关 0.999998; 指纹与 VR/DF 标签一致率 49.5%
 
 git revert 对应提交; 恢复 3 个路由函数与 5 个配置字段;
 `pipeline_mode` 默认回三路路由; 缓存回 `v2.2.5-cache` 并重建。
+
+---
+
+## ADR-043: 非生产路径解耦器弃用 (v3.4.1)
+
+**日期**: 2026-11-11
+**状态**: 已实施 (2026-11-11, v3.4.1)
+**优先级**: P2
+**关联测试**: `tests/test_deprecated_nonprod_decouplers.py` (4 例)
+**关联文档**: [CHANGELOG.md](CHANGELOG.md) / [ARCHITECTURE.md §3.1](docs/ARCHITECTURE.md) / [审计 2026-11-04](docs/audit/2026-11-04-code-quality-audit.md) 遗留
+
+### 背景
+
+`OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` (及 4 个 `decouple_*` 便捷函数) 在全仓具备三个事实:
+
+- **零生产调用**: 除 `modules/factor_decoupler/__init__.py` 再导出与 docstring 示例外, 无任何调用点;
+- **零测试覆盖**: 无测试引用;
+- **同类前视**: `fit` 对全样本做 AR 拟合, 与 PL-05 同源缺陷 (ADR-040 已明确不覆盖)。
+
+ADR-042 的治理原则是"零生产调用即退场"; 但这些是公开导出符号, 直接删除构成破坏性 API 变更。
+
+### 决策
+
+1. 保留公开导入 (`__all__` 不变), 在 3 个类构造时发 `DeprecationWarning` (`stacklevel=2`), 消息指向 `ARDecoupler` / `CompositeDecoupler`;
+2. 不修复其前视缺陷 — 在死代码上重复 ADR-040/041 的工作无收益;
+3. class / module docstring 增加 `.. deprecated:: v3.4.1`;
+4. 子包 `factor_decoupler` 版本 1.2.0 → 1.2.1; 项目版本 3.4.0 → 3.4.1; 缓存代际不变。
+
+### 后果
+
+- 现有导入不受影响; 新调用在构造时显式告警;
+- 4 个 `decouple_*` 函数因内部构造 `TemporalDecoupler` 同样告警;
+- 无生产行为变化, 缓存仍为 `v2.3.0-cache`。
+
+### 替代方案
+
+- 直接删除 — 否决: 公开 API 破坏性变更, 且失去参考实现;
+- 修复前视 — 否决: 死代码, 重复 ADR-040/041;
+- 仅文档标注 — 否决: 无运行时提醒, 无法阻止未来误用。
+
+### 回滚方案
+
+移除 3 处 `warnings.warn` 与 docstring 标记; 子包版本回 1.2.0, 项目版本回 3.4.0。
 
 ---
 

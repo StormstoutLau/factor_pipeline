@@ -42,6 +42,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > 图例: ✅ 完成 / ⏳ 进行中 / ⏸ 部分完成 / ❌ 未开始 / — 不适用
 >
 > v3.4.0 模块影响: `pipelines_v2.py` 改统一横截面秩管道 (ADR-042); `factor_fingerprint/` 新增 `infer_sampling_frequency` 与 `compute_ar1_path`; `backtest/` 新增 `structural_break_monitor`; `optimizer.py` 默认搜索空间清空。详见 [CHANGELOG](../CHANGELOG.md)。
+> v3.4.1 模块影响: `factor_decoupler/` 非生产解耦器 (`Optimized*` / `TemporalDecoupler` / `decouple_*`) 弃用 — 保留导入, 构造即 `DeprecationWarning` (ADR-043); 子包版本 1.2.1。
 
 ### §2.1 核心编排层
 

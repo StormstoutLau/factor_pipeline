@@ -11,6 +11,7 @@
 """
 
 from typing import Dict, Any, Optional
+import warnings
 import numpy as np
 import pandas as pd
 import logging
@@ -119,7 +120,11 @@ class OptimizedDualNeutralizer:
 class OptimizedARDecoupler:
     """
     优化的 AR 解耦器
-    
+
+    .. deprecated:: v3.4.1
+        非生产路径 (零调用) 且为全样本 AR 拟合 (同类前视, ADR-040 范围外);
+        请使用 `ARDecoupler` (因果三段式) 或 `CompositeDecoupler`。
+
     性能改进：
     - 使用滑动窗口的向量化构建滞后矩阵
     - 使用快速QR分解
@@ -133,6 +138,12 @@ class OptimizedARDecoupler:
                  strength: float = 1.0,
                  min_obs: int = 20,
                  parallel: bool = False):
+        warnings.warn(
+            "OptimizedARDecoupler 已弃用 (v3.4.1): 零生产调用且为全样本 AR 拟合 "
+            "(同类前视); 请使用 ARDecoupler (因果三段式) 或 CompositeDecoupler。",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.max_order = max_order
         self.min_order = min_order
         self.criterion = criterion
@@ -303,7 +314,10 @@ class OptimizedARDecoupler:
 class OptimizedCompositeDecoupler:
     """
     优化的组合解耦器
-    
+
+    .. deprecated:: v3.4.1
+        非生产路径 (零调用); 请使用 `CompositeDecoupler`。
+
     主要优化：
     - 减少重复计算
     - 合并 fit 和部分 transform 阶段
@@ -317,7 +331,12 @@ class OptimizedCompositeDecoupler:
                  max_ar_order: int = 5,
                  ar_criterion: str = 'aic',
                  decorrelation_strength: float = 1.0):
-        
+        warnings.warn(
+            "OptimizedCompositeDecoupler 已弃用 (v3.4.1): 零生产调用; "
+            "请使用 CompositeDecoupler。",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._neutralizer = OptimizedDualNeutralizer(
             industry_data=industry_data,
             market_cap_data=market_cap_data

@@ -40,14 +40,15 @@ v3.3.5 (2026-11-04) PL-06 Mixed 缩尾逐日截面 3σ (ADR-039)                
 v3.3.6 (2026-11-04) PL-05 Dynamic AR 因果三段式一步预测 (ADR-040)              [x]
 v3.3.7 (2026-11-04) PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041)             [x]
 v3.4.0 (2026-11-10) 因子路由统一化治理 — 统一横截面秩管道 (ADR-042)             [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.0
-v3.4.x (候选)     非生产路径治理 (Optimized/TemporalDecoupler)                 [ ]
+v3.4.1 (2026-11-11) 非生产路径解耦器弃用 (ADR-043)                            [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.1
+v3.4.x (候选)     非生产路径解耦器数值修复 (可选, 当前仅告警)                  [ ]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.4.0 完成后)
+## §2. 当前待办 (v3.4.1 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -55,10 +56,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 (v3.4.0)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 (v3.4.0 / v3.4.1)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.1 | 非生产路径解耦器弃用 | `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 `DeprecationWarning`; 子包 1.2.1 | ADR-043 | 弃用契约 4 passed; 版本统一 + AR 因果性 27 passed; 解耦器/AR 阶数 51 passed; 手工校验 5/5 |
 | v3.4.0 | 路由过度工程化治理 | 统一横截面秩管道默认替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor; dynamic_ab 整臂 A/B | ADR-042 | T1-T14 + B1-B6 全绿; 审计 PASS (0 P0/P1); 真实数据 A/B 秩相关 ρ≥0.999999、ΔIC 不显著, 基线标签-执行错位 2/2 — 见 [实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
 | v3.3.7 | PL-08 | AR 阶数选择统一 hold_back 样本 + 有效样本守卫 | ADR-041 | AR(1) 选阶均值 4.800 → 1.233; `n_obs` 99..95 → 95×5; 输出 93%–96% 变化; 截断 11 点 0/0 |
 | v3.3.6 | PL-05 / PL-07 | Dynamic AR 三段式因果一步预测; 顶层随上游转绿 | ADR-040 | Dynamic 截断 1653/1800 + 8 NaN → 0/0/0; 顶层 1650/1.8397 → 0/0/0 |
@@ -75,8 +77,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
 | 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023 已做; 多年多因子待扩) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
-| 2 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler` 同类前视) | 候选 | audit 遗留 (无生产调用) |
-| 3 | v3.4.0 遗留选项: MAD 缩尾 (O1) / Dynamic 组件解耦 (O2) / 断点监控接入调度 (O6) | 候选 | ADR-042 已知遗留 |
+| 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) / Dynamic 组件解耦 (O2) / 断点监控接入调度 (O6) | 候选 | ADR-042 已知遗留 |
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
@@ -210,6 +211,8 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 | [V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) | 真实数据 A/B 实证 (2 因子/2023) | ✅ |
 | [README.md](file:///f:/Coding/factor_pipeline/README.md) | 版本信息 + 版本历史 | ✅ |
 | [PROJECT_STATUS.md](file:///f:/Coding/factor_pipeline/docs/PROJECT_STATUS.md) / [DEV_PROGRESS.md](DEV_PROGRESS.md) | §1 路标 + §2 待办 + §5 执行记录 / 模块矩阵标签 | ✅ |
+
+> **v3.4.1 (2026-11-11) 同步**: CHANGELOG / DECISIONS (ADR-043) / ARCHITECTURE / DEV_PROGRESS / README / PROJECT_STATUS 已更新; CODE_WIKI 无公开 API 变更 (仅新增构造告警), 未改动。
 
 ---
 

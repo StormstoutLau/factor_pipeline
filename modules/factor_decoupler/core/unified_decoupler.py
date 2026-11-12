@@ -15,6 +15,7 @@
 """
 
 from typing import Dict, Any, Optional
+import warnings
 import numpy as np
 import pandas as pd
 import logging
@@ -35,6 +36,10 @@ logger = logging.getLogger(__name__)
 class TemporalDecoupler:
     """
     统一时序解耦器 - 完整工具链
+
+    .. deprecated:: v3.4.1
+        非生产路径 (零调用) 且为全样本 AR 拟合 (同类前视, ADR-040 范围外);
+        请使用 `ARDecoupler` (因果三段式) 或 `CompositeDecoupler`。
 
     根据因子面板的时序特征，自动选择解耦方法，
     将高度自相关的因子转化为"新息"序列，保护增量信息。
@@ -103,6 +108,12 @@ class TemporalDecoupler:
         market_cap_data: Optional[pd.DataFrame] = None,
         verbose: bool = False
     ):
+        warnings.warn(
+            "TemporalDecoupler 已弃用 (v3.4.1): 零生产调用且为全样本 AR 拟合 "
+            "(同类前视); 请使用 ARDecoupler (因果三段式) 或 CompositeDecoupler。",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.method = method
         self.method_selection = method_selection
         self.ar_max_order = ar_max_order

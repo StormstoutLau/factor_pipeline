@@ -1,5 +1,53 @@
 # 开发日志 (Changelog)
 
+## v3.4.1 — 非生产路径解耦器弃用 (已实施, 2026-11-11)
+
+### 概览
+
+`OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` /
+`decouple_ar` / `decouple_composite` 无生产调用、无测试覆盖, 且存在全样本拟合
+前视风险 (v3.3.1 已修复生产路径的同类问题)。按 **ADR-043** 采用
+「保留导入 + 构造告警」, 不删除公开 API、不修复死代码数值路径。
+
+**核心产出**:
+- 三个类 `__init__` 构造即触发 `DeprecationWarning` (`stacklevel=2`);
+  docstring 标注 `.. deprecated:: v3.4.1`
+- `modules/factor_decoupler/__init__.py` 增加弃用说明块;
+  子包版本 `1.2.0` → **1.2.1**
+- 项目版本 **3.4.1** (版本链 6 处); 缓存代际不变 **`v2.3.0-cache`**
+- 新增 `tests/test_deprecated_nonprod_decouplers.py` (4 例弃用契约, Red→Green)
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_decoupler/core/optimized.py` | 两类构造告警 + docstring 弃用标注 |
+| `modules/factor_decoupler/core/unified_decoupler.py` | `TemporalDecoupler` 构造告警 + docstring |
+| `modules/factor_decoupler/__init__.py` | 子包版本 1.2.1 + 弃用说明 |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.0 → 3.4.1 |
+| `tests/test_deprecated_nonprod_decouplers.py` | **新增** 4 例 (4 类入口) |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | 期望版本 3.4.1 / 子包 1.2.1 |
+| `DECISIONS.md` / `docs/ARCHITECTURE.md` / `docs/DEV_PROGRESS.md` | ADR-043 + 模块符号表 + 影响行 |
+
+### 兼容性
+
+- **兼容**: 公共导入路径不变; 生产路径 (`ARDecoupler` / `AROrderSelector` /
+  `CompositeDecoupler`) 不受影响; 计算逻辑零改动。
+- **行为变化**: 构造 `Optimized*` / `TemporalDecoupler` 时发出
+  `DeprecationWarning`; `decouple_ar` / `decouple_composite` 经内部构造同样触发。
+- **迁移**: 生产代码无需改动 (本无调用); 外部调用方应迁移到
+  `ARDecoupler` / `CompositeDecoupler`。
+
+### 实测矩阵
+
+| 层级 | 对象 | 实施前 (Red) | 实施后 (Green) |
+|------|------|-------------|---------------|
+| unit | 弃用契约 (4 类入口) | 4 failed (`DeprecationWarning` 未触发) | **4 passed** |
+| unit | 版本统一 + AR 因果性 | — | **27 passed** (1.76s) |
+| regression | `test_factor_decoupler` + `test_ar_order_holdback` | — | **51 passed** |
+| manual | `verify_fix3_manual.py` | — | **5/5 通过** (6 处版本位置) |
+| grep | 全仓 `3.4.0` 残留 | — | 仅历史性引用 (无赋值/比较) |
+
 ## v3.4.0 — 因子路由统一化治理 (已实施, 2026-11-10)
 
 ### 概览

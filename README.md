@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.0 的"**因子路由统一化治理**"（ADR-042：统一横截面秩管道替代三路指纹路由），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.1 的"**因子路由统一化治理 + 非生产路径弃用**"（ADR-042：统一横截面秩管道替代三路指纹路由；ADR-043：非生产解耦器保留导入 + 构造告警），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -44,6 +44,25 @@
 ---
 
 ## 版本更新摘要
+
+### v3.4.1 非生产路径解耦器弃用 (2026.11, 已实施)
+
+> **状态**: 已实施, 弃用契约测试 4 passed; 定向回归 27 passed (版本统一 + AR 因果性) + 51 passed (解耦器 + AR 阶数)
+> **文档**: [ADR-043](DECISIONS.md) / [架构](docs/ARCHITECTURE.md) / [v3.4.0 实证 A/B](docs/analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md)
+> **版本 / 缓存**: 3.4.1 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_ar` / `decouple_composite` 无生产调用、无测试覆盖, 且存在与 v3.3.1 生产路径同类的前视 (全样本拟合) 风险。
+
+**决策**: 保留公开导入 (不破坏 API), 构造即触发 `DeprecationWarning` (`stacklevel=2`); docstring 标注 `.. deprecated:: v3.4.1`; **不修复**死代码内部数值路径。
+
+**实测**:
+
+| 项 | 结果 |
+|---|---|
+| 弃用契约测试 | **4 passed** (4 类入口逐一触发 DeprecationWarning) |
+| 版本统一 | **7 passed**; 手工校验 **5/5** (6 处版本位置) |
+| 定向回归 | `test_factor_decoupler` + `test_ar_order_holdback` **51 passed** |
+| 子包版本 | `factor_decoupler.__version__` = **1.2.1** |
 
 ### v3.4.0 因子路由统一化治理 (2026.11, 已实施)
 
@@ -1071,13 +1090,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.4.0 (因子路由统一化治理 — 统一横截面秩管道, ADR-042)
+- **Pipeline 版本**: v3.4.1 (非生产路径解耦器弃用, ADR-043; 含 v3.4.0 统一横截面秩管道, ADR-042)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
+- **测试基线**: 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.10 (审计与实证收尾 2026.11.11)
-- **状态**: STABLE (v3.4.0, 10 步 spec 工作流)
+- **构建日期**: 2026.11.11 (v3.4.1 弃用收尾)
+- **状态**: STABLE (v3.4.1, 10 步 spec 工作流 §13.8 裁剪)
 
 ### 版本历史
 
@@ -1104,6 +1123,7 @@ factor_pipeline/
 | v3.3.6 | 2026.11.04 | PL-05 Dynamic AR 因果三段式一步预测 (ADR-040): 前缀冻结 + stride=10 重估 + 冷启动 identity; Dynamic/顶层截断 0/0/0 + 缓存代际 v2.2.4-cache |
 | v3.3.7 | 2026.11.04 | PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041): 信息准则跨阶可比 + 有效样本守卫; AR(1) 选阶均值 4.800→1.233 + 缓存代际 v2.2.5-cache |
 | v3.4.0 | 2026.11.10 | 因子路由统一化治理 (ADR-042): 统一横截面秩管道替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor + dynamic_ab 整臂 A/B; 缓存代际 v2.3.0-cache |
+| v3.4.1 | 2026.11.11 | 非生产路径解耦器弃用 (ADR-043): `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 DeprecationWarning; 子包 1.2.1; 弃用契约 4 passed |
 
 ---
 
