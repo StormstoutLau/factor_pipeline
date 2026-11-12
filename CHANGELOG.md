@@ -46,6 +46,17 @@
 | manual | `verify_fix3_manual.py` | — | **5/5 通过** (6 处版本位置) |
 | invariant | `StructuralBreakMonitor` 类统计/自助/配置 | — | 零改动 (仅新增类) |
 
+### 全量回归基线 (2026-11-12)
+
+全仓 `pytest` 建立 v3.4.2 回归基线: **1667 passed / 15 skipped / 0 failed**
+(166 warnings, 809.32s, exit 0)。此前无基线记录, 且三类外部数据依赖会污染全量运行:
+
+| 问题 | 处置 |
+|------|------|
+| `tests/test_integration_real_data.py` 模块级执行 DB 查询 + `sys.exit(1)`, 收集中断 | 重命名为 `tests/verify_integration_real_data.py` (手动运行脚本, 不参与收集) |
+| `tests/test_backtest/test_p0_duckdb_pivot.py` 依赖 0 字节外部 DB → `OutOfMemoryException` | 模块级默认跳过; `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空时手动运行 |
+| `tests/test_demo_notebook.py::test_cell_3_classification_tree` 断言 v3.4.0 已删除的 `routing_weights` | 改为断言 `routing_weights` **不存在** (仅诊断) |
+
 ## v3.4.1 — 非生产路径解耦器弃用 (已实施, 2026-11-11)
 
 ### 概览

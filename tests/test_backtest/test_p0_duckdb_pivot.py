@@ -7,6 +7,7 @@
   - 性能优于 pandas pivot
 """
 
+import os
 import sys
 import time
 from datetime import date
@@ -16,12 +17,24 @@ import numpy as np
 import pandas as pd
 import pytest
 
+# 外部数据集成测试: 依赖 F:/Coding/Factor_DB 中的真实数据.
+# 默认跳过 (全量回归不接触外部 DB); 设置 RUN_DUCKDB_INTEGRATION=1 且
+# 提供有效 (非空) DB 文件后手动运行.
+_DB_PATH_STR = 'F:/Coding/Factor_DB/factor_db.duckdb'
+_DB_READY = os.path.exists(_DB_PATH_STR) and os.path.getsize(_DB_PATH_STR) > 0
+if os.environ.get('RUN_DUCKDB_INTEGRATION') != '1' or not _DB_READY:
+    pytest.skip(
+        "依赖外部 Factor_DB (文件缺失或为空); 设置 RUN_DUCKDB_INTEGRATION=1 "
+        "并提供有效 DB 后手动运行",
+        allow_module_level=True,
+    )
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, str(Path('F:/Coding/Factor_DB')))
 from query.factor_query import FactorQuery
 from factor_pipeline.backtest.factor_pivot import FactorPivotAdapter
 
-DB_PATH = str(Path('F:/Coding/Factor_DB/factor_db.duckdb'))
+DB_PATH = _DB_PATH_STR
 
 
 # =============================================================================

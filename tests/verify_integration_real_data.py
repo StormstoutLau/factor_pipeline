@@ -2,6 +2,10 @@
 """
 P4: 集成测试 — Factor_DB 20个真实因子全流程跑通
 
+手动运行: python tests/verify_integration_real_data.py
+(文件名不以 test_ 开头, 避免 pytest 全量收集时执行真实数据脚本;
+ 该脚本依赖 F:/Coding/Factor_DB 且无断言, 不属于单元测试)
+
 从 Factor_DB 拉取真实因子数据，经过:
   数据准备 → 指纹提取 → 多维分类 → 管道处理 → 回测引擎 → 健康评估 → 漂移检测
 

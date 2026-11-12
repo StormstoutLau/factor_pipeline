@@ -47,7 +47,7 @@
 
 ### v3.4.2 断点监控调度 (2026.11, 已实施)
 
-> **状态**: 已实施, 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5
+> **状态**: 已实施, 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5; 全量回归 1667 passed / 15 skipped / 0 failed
 > **文档**: [ADR-044](DECISIONS.md) / [实施](docs/EXECUTION_V3.4.2_BREAK_SCHEDULER.md) v1.1
 > **版本 / 缓存**: 3.4.2 / `v2.3.0-cache` (缓存代际未变)
 
@@ -1103,7 +1103,7 @@ factor_pipeline/
 - **Pipeline 版本**: v3.4.2 (断点监控调度, ADR-044; 含 v3.4.1 非生产路径弃用, ADR-043; v3.4.0 统一横截面秩管道, ADR-042)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; v3.4.2 调度器 22 passed + 组合回归 57 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
+- **测试基线**: **全量回归 1667 passed / 15 skipped / 0 failed** (166 warnings, 809.32s, 2026-11-12, v3.4.2); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; v3.4.2 调度器 22 passed + 组合回归 57 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
 - **构建日期**: 2026.11.12 (v3.4.2 调度收尾)
 - **状态**: STABLE (v3.4.2, 10 步 spec 工作流 §13.8 裁剪)

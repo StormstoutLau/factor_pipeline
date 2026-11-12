@@ -7,7 +7,7 @@
 每个 cell 的验收标准:
 - Cell 1: 成功加载合成因子数据 + 行业/市值/价格 (n_factors>=2, n_periods>=24)
 - Cell 2: 21 维指纹雷达图生成 (21 个维度全部标注, ar1_median/skew/kurt/snr 非 NaN)
-- Cell 3: 分类决策树输出 (primary_type/primary_prob/routing_weights 非空)
+- Cell 3: 分类决策树输出 (primary_type/primary_prob 非空; v3.4.0 起仅诊断, 无 routing_weights)
 - Cell 4: fit 各步分布直方图 (>=3 步, 含 imputer/outlier/neutralize/standardize 至少 4 步)
 - Cell 5: Spearman 排序相关矩阵 (shape >= 5×5, 对角线=1.0, 对称)
 - Cell 6: IC 变化追溯 (IC 序列长度 > 0, 累积 IC 单调或接近)
@@ -81,22 +81,19 @@ def test_cell_2_fingerprint_radar():
 # =============================================================================
 
 def test_cell_3_classification_tree():
-    """Cell 3: 分类结果含 primary_type/primary_prob/routing_weights"""
+    """Cell 3: 分类结果含 primary_type/primary_prob (v3.4.0 起仅诊断)."""
     from notebooks.demo_v3_1_0 import cell_1_load_data, cell_3_classification
     data = cell_1_load_data()
     result = cell_3_classification(data)
     assert isinstance(result, dict), "Cell 3 应返回 dict"
     assert 'classifications' in result, "缺少 classifications"
-    assert 'routing_weights' in result, "缺少 routing_weights"
+    assert 'routing_weights' not in result, \
+        "v3.4.0 ADR-042 已删除软路由权重, Cell 3 不应再返回 routing_weights"
     classifications = result['classifications']
-    routing_weights = result['routing_weights']
-    assert len(classifications) >= 1, f"至少 1 个分类结果"
+    assert len(classifications) >= 1, "至少 1 个分类结果"
     for name, cls_result in classifications.items():
         assert hasattr(cls_result, 'primary_type'), f"{name} 缺 primary_type"
         assert hasattr(cls_result, 'primary_prob'), f"{name} 缺 primary_prob"
-    for name, weights in routing_weights.items():
-        total = sum(weights.values())
-        assert abs(total - 1.0) < 1e-6, f"{name} 路由权重和应为 1.0, 实际 {total}"
 
 
 # =============================================================================

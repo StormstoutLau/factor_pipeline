@@ -61,7 +61,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
-| v3.4.2 | 断点监控调度 (O6) | 新增 `BreakMonitorScheduler`: daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; 数值型/tz-aware 输入拒绝; `StructuralBreakMonitor` 类零改动 | ADR-044 | 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5 |
+| v3.4.2 | 断点监控调度 (O6) | 新增 `BreakMonitorScheduler`: daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; 数值型/tz-aware 输入拒绝; `StructuralBreakMonitor` 类零改动 | ADR-044 | 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5; 全量回归 1667 passed / 15 skipped / 0 failed |
 | v3.4.1 | 非生产路径解耦器弃用 | `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 `DeprecationWarning`; 子包 1.2.1 | ADR-043 | 弃用契约 4 passed; 版本统一 + AR 因果性 27 passed; 解耦器/AR 阶数 51 passed; 手工校验 5/5 |
 | v3.4.0 | 路由过度工程化治理 | 统一横截面秩管道默认替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor; dynamic_ab 整臂 A/B | ADR-042 | T1-T14 + B1-B6 全绿; 审计 PASS (0 P0/P1); 真实数据 A/B 秩相关 ρ≥0.999999、ΔIC 不显著, 基线标签-执行错位 2/2 — 见 [实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
 | v3.3.7 | PL-08 | AR 阶数选择统一 hold_back 样本 + 有效样本守卫 | ADR-041 | AR(1) 选阶均值 4.800 → 1.233; `n_obs` 99..95 → 95×5; 输出 93%–96% 变化; 截断 11 点 0/0 |
@@ -221,6 +221,9 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 ---
 
 ## §5. 执行历史
+
+> **全量回归基线 (2026-11-12, v3.4.2)**: 全仓 `pytest` → **1667 passed / 15 skipped / 0 failed** (166 warnings, 809.32s, exit 0)。
+> 外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动运行脚本, 不参与收集。
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
