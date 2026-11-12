@@ -368,7 +368,7 @@ class PipelineV2ConfigUnified(BaseModel):
     """
     
     name: str = Field(default="factor_pipeline_v2", description="流水线名称")
-    version: str = Field(default="3.4.1", description="版本")
+    version: str = Field(default="3.4.2", description="版本")
     description: str = Field(default="", description="描述")
     
     # 全局设置
@@ -404,7 +404,7 @@ class PipelineV2ConfigUnified(BaseModel):
     # 回测配置 (P6 - Backtest 集成)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
 
-    # v3.4.0 ADR (暂用号 ADR-042): 统一路由/诊断/断点监控
+    # v3.4.0 ADR-042: 统一路由/诊断/断点监控
     pipeline_mode: Literal['unified', 'dynamic_ab'] = Field(
         default='unified',
         description="管道模式: unified(统一横截面秩管道) / dynamic_ab(显式 A/B 臂)",

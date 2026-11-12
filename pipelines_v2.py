@@ -489,14 +489,14 @@ class PipelineV2Config:
     # 接收 OrthogonalizationConfig (Pydantic) 整对象, enabled=False 时 None
     orthogonalization: Optional[Any] = None
 
-    # v3.4.0 ADR (暂用号 ADR-042): 统一管道模式 ('unified' | 'dynamic_ab')
+    # v3.4.0 ADR-042: 统一管道模式 ('unified' | 'dynamic_ab')
     pipeline_mode: str = 'unified'
     # 指纹诊断标签开关 (只读, 不参与路由; 指纹提取本身不受此开关影响)
     enable_fingerprint_diagnostics: bool = True
     # A/B 实验标识 (写入规格日志; 非 A/B 为 None)
     ab_experiment_id: Optional[str] = None
 
-    # v3.4.0 ADR (暂用号 ADR-042): 结构突变监控 (opt-in, 只告警)
+    # v3.4.0 ADR-042: 结构突变监控 (opt-in, 只告警)
     enable_break_monitor: bool = False
     break_monitor_window: int = 250
     break_monitor_stride: int = 20
@@ -594,7 +594,7 @@ class PipelineV2Config:
     bridge_decision_freq: str = 'M'                        # 决策频率 ('D'/'W'/'M'/'Q')
 
     def __post_init__(self):
-        """v3.4.0 ADR (暂用号 ADR-042): pipeline_mode 合法性校验."""
+        """v3.4.0 ADR-042: pipeline_mode 合法性校验."""
         if self.pipeline_mode not in ('unified', 'dynamic_ab'):
             raise ValueError(
                 f"pipeline_mode 必须为 'unified' 或 'dynamic_ab', "
@@ -618,7 +618,7 @@ class PipelineV2Config:
 
 
 # =============================================================================
-# v3.4.0 ADR (暂用号 ADR-042): 统一路由记录数据类
+# v3.4.0 ADR-042: 统一路由记录数据类
 # =============================================================================
 
 @dataclass(frozen=True)
@@ -1364,7 +1364,7 @@ class FactorProcessingPipelineV2:
         return self.static_pipeline
 
     # ------------------------------------------------------------------
-    # v3.4.0 ADR (暂用号 ADR-042): 统一路由私有方法
+    # v3.4.0 ADR-042: 统一路由私有方法
     # ------------------------------------------------------------------
 
     def _classify_diagnostics(

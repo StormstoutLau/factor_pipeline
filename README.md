@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.1 的"**因子路由统一化治理 + 非生产路径弃用**"（ADR-042：统一横截面秩管道替代三路指纹路由；ADR-043：非生产解耦器保留导入 + 构造告警），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.2 的"**因子路由统一化治理 + 非生产路径弃用 + 断点监控调度**"（ADR-042：统一横截面秩管道替代三路指纹路由；ADR-043：非生产解耦器保留导入 + 构造告警；ADR-044：断点监控日/周/月节拍器），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -44,6 +44,16 @@
 ---
 
 ## 版本更新摘要
+
+### v3.4.2 断点监控调度 (2026.11, 已实施)
+
+> **状态**: 已实施, 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5
+> **文档**: [ADR-044](DECISIONS.md) / [实施](docs/EXECUTION_V3.4.2_BREAK_SCHEDULER.md) v1.1
+> **版本 / 缓存**: 3.4.2 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: v3.4.0 的 `StructuralBreakMonitor` 仅能显式调用, 库内无周期触发路径; 若运行框架不显式调用, `break_alerts` 恒为空 (设计 §9 遗留 O6)。
+
+**新增**: `BreakMonitorScheduler` — `daily` / `weekly` / `monthly` 三档节拍, 周期键 (日 / ISO 周 / 月) 幂等; `run_if_due` 回调成功后才推进状态, 异常不推进、同周期可重试; 数值型/tz-aware `as_of` 显式拒绝, `cadence` 只读; 不侵入 `fit`/`transform`, 监控统计逻辑零改动。
 
 ### v3.4.1 非生产路径解耦器弃用 (2026.11, 已实施)
 
@@ -1090,13 +1100,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.4.1 (非生产路径解耦器弃用, ADR-043; 含 v3.4.0 统一横截面秩管道, ADR-042)
+- **Pipeline 版本**: v3.4.2 (断点监控调度, ADR-044; 含 v3.4.1 非生产路径弃用, ADR-043; v3.4.0 统一横截面秩管道, ADR-042)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
+- **测试基线**: 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; v3.4.2 调度器 22 passed + 组合回归 57 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.11 (v3.4.1 弃用收尾)
-- **状态**: STABLE (v3.4.1, 10 步 spec 工作流 §13.8 裁剪)
+- **构建日期**: 2026.11.12 (v3.4.2 调度收尾)
+- **状态**: STABLE (v3.4.2, 10 步 spec 工作流 §13.8 裁剪)
 
 ### 版本历史
 
@@ -1124,6 +1134,7 @@ factor_pipeline/
 | v3.3.7 | 2026.11.04 | PL-08 AR 阶数选择统一 hold_back 样本 (ADR-041): 信息准则跨阶可比 + 有效样本守卫; AR(1) 选阶均值 4.800→1.233 + 缓存代际 v2.2.5-cache |
 | v3.4.0 | 2026.11.10 | 因子路由统一化治理 (ADR-042): 统一横截面秩管道替代三路指纹路由; 删 3 路由函数 + 5 配置字段; 指纹降级只读诊断; StructuralBreakMonitor + dynamic_ab 整臂 A/B; 缓存代际 v2.3.0-cache |
 | v3.4.1 | 2026.11.11 | 非生产路径解耦器弃用 (ADR-043): `OptimizedARDecoupler` / `OptimizedCompositeDecoupler` / `TemporalDecoupler` / `decouple_*` 保留导入 + 构造 DeprecationWarning; 子包 1.2.1; 弃用契约 4 passed |
+| v3.4.2 | 2026.11.12 | 断点监控调度 (ADR-044): `BreakMonitorScheduler` daily/weekly/monthly 节拍 + 周期键幂等 + 失败不推进 + 数值/tz-aware 输入拒绝; 监控统计零改动; 调度器 22 passed |
 
 ---
 

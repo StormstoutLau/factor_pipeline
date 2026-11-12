@@ -2,7 +2,7 @@
 """v3.4.0 统一路由 TDD — Red Phase (T1-T14)
 
 对应实施文档 EXECUTION_V3.4.0_UNIFIED_ROUTING.md v1.3 §10.1。
-ADR: 编号待分配 (暂用号 ADR-042, 落库时回 DECISIONS.md 取号)。
+ADR-042 (已落库, 详见 DECISIONS.md)。
 
 Red 预期 (实施文档 §10.3):
 - T1-T12 失败 (配置字段不存在 / 行为仍旧 / 方法不存在)

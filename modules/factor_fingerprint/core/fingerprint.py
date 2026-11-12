@@ -115,7 +115,7 @@ class FingerprintConfig:
 
 
 def infer_sampling_frequency(index: pd.Index) -> str:
-    """v3.4.0 ADR (暂用号 ADR-042): 按索引相邻间隔中位数判定采样频率 (自然日).
+    """v3.4.0 ADR-042: 按索引相邻间隔中位数判定采样频率 (自然日).
 
     阈值链: <1 intraday / ≤2 daily / ≤8 weekly / ≤20 biweekly /
     ≤45 monthly / ≤135 quarterly / ≤400 annual / 其他 irregular.
@@ -319,7 +319,7 @@ class FactorFingerprinter:
 
     def compute_ar1_path(self, factor_data: pd.DataFrame,
                          window: int = 250, stride: int = 20) -> pd.Series:
-        """v3.4.0 ADR (暂用号 ADR-042): 逐窗口计算 AR(1) 中位数路径.
+        """v3.4.0 ADR-042: 逐窗口计算 AR(1) 中位数路径.
 
         与指纹同一口径 (_compute_ar1_median); 供 StructuralBreakMonitor 消费.
 

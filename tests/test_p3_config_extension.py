@@ -2,7 +2,7 @@
 """
 P3 Phase 1: 配置扩展 — 测试套件
 
-v3.4.0 ADR (暂用号 ADR-042): PipelineV2ConfigUnified 统一路由/诊断/断点监控 8 字段契约。
+v3.4.0 ADR-042: PipelineV2ConfigUnified 统一路由/诊断/断点监控 8 字段契约。
 
 字段契约:
   1. pipeline_mode                = 'unified'   Literal['unified', 'dynamic_ab']

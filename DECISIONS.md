@@ -44,7 +44,8 @@
 | ADR-041 | AR 阶数选择统一 hold_back 样本 (信息准则可比性) | v3.3.7, 2026-11-04 |
 | ADR-042 | 统一横截面秩管道替代三路指纹路由 | v3.4.0, 2026-11-10 |
 | ADR-043 | 非生产路径解耦器弃用 — 保留导入 + 构造告警 | v3.4.1, 2026-11-11 |
-| ADR-044 起 | 未占用 | — |
+| ADR-044 | 断点监控调度 — 节拍器注入, 幂等 + 失败不推进 | v3.4.2, 2026-11-12 |
+| ADR-045 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3002,6 +3003,75 @@ ADR-042 的治理原则是"零生产调用即退场"; 但这些是公开导出�
 ### 回滚方案
 
 移除 3 处 `warnings.warn` 与 docstring 标记; 子包版本回 1.2.0, 项目版本回 3.4.0。
+
+---
+
+## ADR-044: 断点监控调度 — 节拍器注入 (v3.4.2)
+
+**日期**: 2026-11-12
+**状态**: 已实施 (2026-11-12, v3.4.2)
+**优先级**: P2
+**关联测试**: `tests/test_break_monitor_scheduler.py` (22 例)
+**关联文档**: [设计 §9 O6](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) / [设计 §3.7](docs/analysis/FACTOR_ROUTING_OVERENGINEERING_DESIGN.md) / [实施 v3.4.2](docs/EXECUTION_V3.4.2_BREAK_SCHEDULER.md) / [ARCHITECTURE.md §3.3](docs/ARCHITECTURE.md)
+
+### 背景
+
+v3.4.0 引入 `StructuralBreakMonitor` + `FactorProcessingPipelineV2.monitor_structural_breaks()`,
+设计定位为 "opt-in 只告警"; 设计文档 §9 将 "接入调度" 记为遗留 O6, 理由是
+"当前仅显式调用, 由运行框架决定 (周/月度任务)"。
+
+直接后果: 库内没有任何代码路径会周期性触发它; 若运行框架未显式调用
+`monitor_structural_breaks()`, `break_alerts` 恒为空 —— "只告警" 的告警
+不会自动发出。
+
+### 决策
+
+1. 新增 `BreakMonitorScheduler` (位于 `backtest/structural_break_monitor.py`,
+   与监控器同文件同职责域), 只负责 **何时运行**, 不触碰统计逻辑;
+2. 支持 `daily` / `weekly` / `monthly` 三档节拍, 以**周期键**判定到期:
+   - daily → `(年, 月, 日)`; weekly → ISO `(ISO年, ISO周)`; monthly → `(年, 月)`;
+   - 首次调用必然到期; 同进程同周期串行成功后重复调用幂等; 周期键变化
+     (含历史回放) 再次到期;
+3. `run_if_due(as_of, func, *args, **kwargs)`: 到期才执行, **回调成功后才推进状态**
+   — 失败不推进, 同周期可重试 (避免"一次异常吞掉整月监控");
+4. 提供 `due` / `mark_run` / `reset` / `runs` / `last_run_as_of` 供嵌入自定义循环;
+5. `StructuralBreakMonitor` 原接口与语义**完全不改**; 不引入后台线程/定时器,
+   不接入 `fit`/`transform`, 调度节拍由运行框架注入;
+6. `as_of` 仅接受 naive 的 `str` / `date` / `datetime` / `Timestamp` /
+   `np.datetime64`; 数值型 (会被 pandas 解释为 1970 纳秒时间戳) 与 tz-aware
+   值一律 `ValueError`, 避免静默错键;
+7. `cadence` 只读 (运行中改档会使周期键口径不一致); 调度器**非线程安全**,
+   要求单线程串行调用, 并发由调用方加锁。
+
+### 后果
+
+- 可被日/周/月循环驱动; **同进程、同周期、串行成功后**重复调用幂等,
+  不产生重复告警; 历史回放 (周期键回退) 或 `reset()` 后会再次运行并再次告警;
+- 状态仅驻内存, 进程重启后首调用重新到期 (如需跨进程持久化, 由运行框架落盘
+  `last_run_as_of` 并在启动时 `mark_run` 回填; 回填本身计入 `runs`);
+- 单线程串行是显式前提; 并发调用需调用方加锁, 否则 `due`/`mark_run`
+  非原子可能重复执行;
+- 无统计逻辑变化, 无配置字段新增, 缓存代际不变 (`v2.3.0-cache`);
+- `weekly` 采用 ISO 周, 跨公历年边界不会重复/漏跑 (含 ISO 53 周年)。
+
+### 替代方案
+
+- **基于 `cron` / APScheduler 等外部调度** — 否决: 引入新依赖且把"幂等语义"
+  推给调用方; 节拍器约 110 行 (含 docstring), 无依赖;
+- **在 `transform` 内部按 `stride` 自动触发** — 否决: 违背 v3.4.0 "监控不侵入
+  处理链路、只告警" 的定位, 且会让 `transform` 的耗时不可预期;
+- **后台线程/定时器** — 否决: 线程安全与生命周期管理成本远超收益, 且与
+  "由运行框架决定节拍" 的设计原意相反;
+- **状态持久化到 DuckDB** — 延后: 当前无跨进程调度场景, 一旦需要可由调用方
+  用 `mark_run` 回填, 不必为假想需求扩 schema。
+
+### 回滚方案
+
+删除 `BreakMonitorScheduler` 类、`_VALID_CADENCES` 与模块 docstring 的调度说明,
+移除 `Callable` 导入; 删除 `tests/test_break_monitor_scheduler.py`; 2 处测试锚点
+版本回 3.4.1, 项目版本回 3.4.1, 并回退 ADR/CHANGELOG/README/PROJECT_STATUS/
+ARCHITECTURE/DEV_PROGRESS 的 v3.4.2 条目 (`StructuralBreakMonitor` 类本身
+未改动, 无需回滚)。
 
 ---
 

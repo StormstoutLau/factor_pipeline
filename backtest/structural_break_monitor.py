@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""结构突变监控 (v3.4.0 ADR, 暂用号 ADR-042).
+"""结构突变监控 (v3.4.0 ADR-042; 调度 v3.4.2 ADR-044).
 
 输入: AR(1) 中位数路径 (FactorFingerprinter.compute_ar1_path).
 输出: 只读告警字典; 不参与路由/不修改因子值.
@@ -19,9 +19,13 @@
 - CUSUM 为 Inclán-Tiao (1994) ICSS 工程化变体: 用 (y−ȳ)² 而非残差平方
   (路径已是 AR(1) 中位数序列, 无逐期残差可得);
 - 自助 p 值 p = (1 + #{stat_b >= observed}) / (B + 1) (标准保守形式).
+
+调度 (v3.4.2 O6, ADR-044):
+- BreakMonitorScheduler 提供 daily / weekly / monthly 三档节拍,
+  由运行框架注入; 监控器本身仍可显式调用 (不改变原语义).
 """
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -206,3 +210,126 @@ class StructuralBreakMonitor:
             'detected': False,
             'reason': 'insufficient data',
         }
+
+
+# ----------------------------------------------------------------------
+# 调度 (v3.4.2 O6, ADR-044)
+# ----------------------------------------------------------------------
+
+_VALID_CADENCES: Tuple[str, ...] = ('daily', 'weekly', 'monthly')
+
+
+class BreakMonitorScheduler:
+    """断点监控节拍器 (v3.4.2 O6).
+
+    只负责"何时运行", 不改变监控统计逻辑; 由运行框架在日/周/月循环中注入。
+    如需显式调用, `StructuralBreakMonitor` 原接口保持不变。
+
+    语义:
+    - `due(as_of)`: 周期键与上次运行不同即到期 (首次调用必然到期);
+    - 同进程、同周期、串行成功后重复调用幂等; 周期键变化 (含历史回放)
+      会再次到期, 并再次产生告警日志;
+    - `run_if_due` 仅在回调成功后推进状态, 异常时同周期可重试。
+
+    前提 (调用方责任):
+    - **非线程安全**: `due` 与 `mark_run` 非原子, 要求单线程串行调用;
+      并发场景请由调用方加锁;
+    - `as_of` 必须为 **naive** 时间戳 (str/date/datetime/Timestamp);
+      tz-aware 值请先统一时区或去除时区, 否则抛 `ValueError`;
+    - 数值型 `as_of` 会被 pandas 解释为 1970 纳秒时间戳, 一律拒绝。
+
+    Usage:
+        scheduler = BreakMonitorScheduler(cadence='monthly')
+        alerts = scheduler.run_if_due(
+            as_of, pipeline.monitor_structural_breaks, factor_data)
+    """
+
+    def __init__(self, cadence: str = 'monthly'):
+        if cadence not in _VALID_CADENCES:
+            raise ValueError(
+                f"cadence 必须为 {_VALID_CADENCES} 之一, 实际: {cadence!r}"
+            )
+        self._cadence = cadence
+        self._last_key: Optional[Tuple[int, ...]] = None
+        self._last_run_as_of: Optional[pd.Timestamp] = None
+        self._runs = 0
+
+    @property
+    def cadence(self) -> str:
+        """节拍档位 (只读, 运行中改档会使周期键口径不一致)."""
+        return self._cadence
+
+    @property
+    def last_run_as_of(self) -> Optional[pd.Timestamp]:
+        """上次登记的 as_of (未运行过为 None)."""
+        return self._last_run_as_of
+
+    @property
+    def runs(self) -> int:
+        """累计登记次数 (run_if_due 成功执行或手工 mark_run 均计数)."""
+        return self._runs
+
+    @staticmethod
+    def _validate_as_of(as_of: Any) -> pd.Timestamp:
+        if as_of is None:
+            raise ValueError("as_of 不能为 None")
+        if isinstance(as_of, (bool, int, float, np.integer, np.floating)):
+            raise ValueError(
+                "as_of 不接受数值型 (pandas 会将其解释为 1970 纳秒时间戳): "
+                f"{as_of!r}; 请传字符串/date/datetime/Timestamp"
+            )
+        try:
+            ts = pd.Timestamp(as_of)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"as_of 无法解析为时间戳: {as_of!r}") from e
+        if pd.isna(ts):
+            raise ValueError(f"as_of 不能为 NaT: {as_of!r}")
+        if ts.tz is not None:
+            raise ValueError(
+                f"as_of 必须为 naive 时间戳, 收到 tz-aware 值: {as_of!r}; "
+                "请先统一时区或去除时区"
+            )
+        return ts
+
+    def _period_key(self, ts: pd.Timestamp) -> Tuple[int, ...]:
+        if self.cadence == 'daily':
+            return (ts.year, ts.month, ts.day)
+        if self.cadence == 'weekly':
+            iso = ts.isocalendar()
+            return (int(iso.year), int(iso.week))
+        return (ts.year, ts.month)
+
+    def due(self, as_of: Any) -> bool:
+        """当前 as_of 是否到期 (纯查询, 不改变状态)."""
+        key = self._period_key(self._validate_as_of(as_of))
+        return self._last_key != key  # None != key → 首次调用到期
+
+    def mark_run(self, as_of: Any) -> None:
+        """手工登记一次运行 (供自定义流程绕过 run_if_due 时使用).
+
+        注意: 每调用一次 `runs` 即 +1 (含重复登记); 传入晚于当前周期的
+        as_of 会跳过中间所有周期 (适用于回填/追赶, 需调用方自行确认)。
+        """
+        ts = self._validate_as_of(as_of)
+        self._last_key = self._period_key(ts)
+        self._last_run_as_of = ts
+        self._runs += 1
+
+    def run_if_due(self, as_of: Any, func: Callable[..., Any],
+                   *args: Any, **kwargs: Any) -> Any:
+        """到期时执行 `func(*args, **kwargs)` 并推进状态; 未到期返回 None.
+
+        注意: 若 func 自身返回 None, 与"未到期"不可区分, 可用 `runs` /
+        `last_run_as_of` 判断是否实际执行。要求单线程串行调用。
+        """
+        if not self.due(as_of):
+            return None
+        result = func(*args, **kwargs)
+        self.mark_run(as_of)
+        return result
+
+    def reset(self) -> None:
+        """清空状态, 下一次调用重新到期."""
+        self._last_key = None
+        self._last_run_as_of = None
+        self._runs = 0

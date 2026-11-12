@@ -1,5 +1,51 @@
 # 开发日志 (Changelog)
 
+## v3.4.2 — 断点监控调度 (O6) (已实施, 2026-11-12)
+
+### 概览
+
+补齐 v3.4.0 遗留 O6: `StructuralBreakMonitor` 此前仅能显式调用, 库内无周期触发路径;
+若运行框架不显式调用, `break_alerts` 恒为空。按 **ADR-044** 新增
+`BreakMonitorScheduler` (纯增量, 不侵入 `fit`/`transform`, 不改监控统计逻辑)。
+
+**核心产出**:
+- `BreakMonitorScheduler`: `daily` / `weekly` / `monthly` 三档节拍,
+  周期键 (日 / ISO 周 / 月) 幂等; 首次调用到期, 同周期跳过, 周期键变化再次到期
+- `run_if_due(as_of, func, *args, **kwargs)`: 回调成功后才推进状态, 异常不推进、
+  同周期可重试; 另有 `due` / `mark_run` / `reset` / `runs` / `last_run_as_of`
+- `as_of` 仅接受 naive 时间戳; 数值型 (1970 纳秒陷阱) 与 tz-aware 值显式
+  `ValueError`; `cadence` 只读; 单线程串行是显式前提
+- 项目版本 **3.4.2**; 缓存代际不变 **`v2.3.0-cache`**
+- 新增 `tests/test_break_monitor_scheduler.py` (**22 例**)
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/structural_break_monitor.py` | **新增** `BreakMonitorScheduler` (+129/−2, `StructuralBreakMonitor` 类零改动) |
+| `tests/test_break_monitor_scheduler.py` | **新增** S1–S21 场景 (22 例) |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.1 → 3.4.2 |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | 期望版本 3.4.2 |
+| `DECISIONS.md` / `docs/EXECUTION_V3.4.2_BREAK_SCHEDULER.md` | **ADR-044** + 实施文档 |
+| `README.md` / `CHANGELOG.md` / `docs/PROJECT_STATUS.md` / `docs/ARCHITECTURE.md` / `docs/DEV_PROGRESS.md` | 版本与状态同步 |
+
+### 兼容性
+
+- **兼容**: `StructuralBreakMonitor` 类 / `monitor_structural_breaks()` /
+  `BreakMonitorConfig` / 管道配置字段全部不变; 既有调用方无需改动。
+- **新增**: `BreakMonitorScheduler` 纯增量类, 未使用则零影响; 数值型与
+  tz-aware `as_of` 抛 `ValueError` (仅新类)。
+- **数值 / 缓存**: 零变化, 仍为 `v2.3.0-cache`。
+
+### 实测矩阵
+
+| 层级 | 对象 | 实施前 (Red) | 实施后 (Green) |
+|------|------|-------------|---------------|
+| unit | 调度器 S1–S21 | ImportError (收集失败) | **22 passed** (0.40s) |
+| regression | 调度器 + 断点监控 + 版本统一 + 统一路由 | — | **57 passed** (22.20s) |
+| manual | `verify_fix3_manual.py` | — | **5/5 通过** (6 处版本位置) |
+| invariant | `StructuralBreakMonitor` 类统计/自助/配置 | — | 零改动 (仅新增类) |
+
 ## v3.4.1 — 非生产路径解耦器弃用 (已实施, 2026-11-11)
 
 ### 概览
