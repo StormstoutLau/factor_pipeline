@@ -1489,8 +1489,8 @@ Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
 | `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`); v3.4.4 起 `market_cap_data` 真正转发 |
 | `run_l1_decoupler(...)` | **v3.4.4**: 仅 `dynamic_ab` 的 AR 解耦消融 — `L1_dynamic_ref` (AR 开) vs `L1_decoupler_off` (`module_enabled={'decoupler': False}`); 支持参照复用 |
 | `run_l2(...)` | L2 路由模式消融 (2 臂 + 可选 B3 参照); v3.4.5 起 `market_cap_data` 真正转发 |
-| `run_l3(...)` | L3 参数网格 (CUSUM / EWMA / 缩尾比例 / 校正方法 / MAD) |
-| `run_l4_oat(...)` | L4 前置处理 OAT |
+| `run_l3(...)` | L3 参数网格 (CUSUM / EWMA / 缩尾比例 / 校正方法 / MAD); v3.4.6 起 `market_cap_data` 统一转发到 B3 + 24 臂 |
+| `run_l4_oat(...)` | L4 前置处理 OAT; v3.4.6 起 `market_cap_data` 转发到 B3 + 18 臂, `neutralization='industry'` 臂**不转发** (传市值会被管线自动切 `industry_marketcap`), 默认口径随数据可用性切换 |
 | `run_single(...)` | 单实验运行 (Baseline 阶梯 + 指标计算) |
 
 > **v3.4.4 注**: `L1_MODULES` 仍为 5 项 (unified 口径); `decoupler` 作为

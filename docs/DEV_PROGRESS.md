@@ -1,6 +1,6 @@
 # 开发进度总览 (版本 × 模块双维度)
 
-> **版本**: v1.3 (2026-11-12; v1.2 = 2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
+> **版本**: v1.4 (2026-11-13; v1.3 = 2026-11-12; v1.2 = 2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
 > **范围**: 跨会话单一真相源,记录每个版本每个模块的完成状态
 > **更新规则**: 每次发版 / 完成任务后更新对应单元格;新增版本时追加列
 > **关联文档**: [ARCHITECTURE.md](ARCHITECTURE.md) | [PROJECT_STATUS.md](PROJECT_STATUS.md) | [../CHANGELOG.md](../CHANGELOG.md)
@@ -36,7 +36,8 @@ v3.4.2 (2026-11-12) 断点监控调度 (ADR-044), 缓存代际不变
 v3.4.3 (2026-11-12) Dynamic 组件可分离性 (ADR-045), 缓存代际不变
 v3.4.4 (2026-11-13) AblationRunner decoupler 消融臂, 缓存代际不变
 v3.4.5 (2026-11-13) run_l2 / run_baselines 市值转发断链修复, 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.5
+v3.4.6 (2026-11-13) run_l3 / run_l4_oat 市值口径对齐, 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.6
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -52,6 +53,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > v3.4.3 模块影响: `factor_decoupler/core/dual_neutralizer.py` `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `pipelines_v2.py` `DynamicFactorPipeline` 新增 `module_enabled['decoupler']` (ADR-045); 默认路径逐位不变。
 > v3.4.4 模块影响: `backtest/ablation_runner.py` 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂); ρ_step 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 默认 `run_l1` 6 臂契约不变。
 > v3.4.5 模块影响: `backtest/ablation_runner.py` 补齐 `run_l2` / `run_baselines` 的 `market_cap_data` 转发 (仅非 None 注入); 臂集合与返回数量不变。
+> v3.4.6 模块影响: `backtest/ablation_runner.py` 补齐 `run_l3` / `run_l4_oat` 的 `market_cap_data` 入口 — L3 统一注入 (B3 + 24 臂), L4 选择性注入 (B3 + 18 臂, `neutralization='industry'` 臂跳过), L4 默认口径随数据可用性切换; 臂集合与返回数量不变。
 
 ### §2.1 核心编排层
 

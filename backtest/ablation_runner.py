@@ -1087,21 +1087,33 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
         b3_full_result: Optional[AblationResult] = None,
     ) -> List[AblationResult]:
         """L4 前置处理 OAT 单维消融: 6 自由度
 
         每个自由度单独消融, 其余固定为默认.
         返回 ≥20 个 AblationResult (6 DOF × 3-4 选项 + 1 baseline)
+
+        v3.4.6: 支持市值口径 (与 L1/L2/B3 对齐); `neutralization='industry'`
+        臂不注入市值 — 管线收到市值会自动切 `industry_marketcap`
+        (pipelines_v2.py `_build_neutralizer_params`), 否则该自由度失效.
         """
         results = []
+
+        # v3.4.6: 统一转发市值 (仅非 None 注入, 保持既有 monkeypatch 签名兼容)
+        extra_kwargs = {}
+        if market_cap_data is not None:
+            extra_kwargs['market_cap_data'] = market_cap_data
 
         # B3_full 参照
         if b3_full_result is not None:
             results.append(b3_full_result)
         else:
             b3_config = AblationConfig(name='B3_full', layer='baseline', baseline_level='B3')
-            results.append(self.run_single(b3_config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                b3_config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # 6 个自由度的 OAT 选项
         oat_specs = [
@@ -1129,11 +1141,14 @@ class AblationRunner:
 
         # M5 修正: 各自由度的默认选项 (与 baseline 相同, 标记为 trivial)
         # spec §5.2: 默认选项构成平凡比较, 不参与 BH-FDR 校正
+        # v3.4.6: 默认口径随数据可用性切换 — 传市值时 B3 走 industry_marketcap,
+        # 因此默认选项也必须是 industry+mktcap, 平凡比较才成立.
         defaults = {
             'outlier_method': 'mad',
             'scaler_method': 'zscore',
             'missing_method': 'median',
-            'neutralization': 'industry',
+            'neutralization': (
+                'industry+mktcap' if market_cap_data is not None else 'industry'),
             'time_align': 't+1',
             'data_window': ('2010-01-01', '2020-12-31'),
         }
@@ -1148,7 +1163,14 @@ class AblationRunner:
                     _is_trivial=is_trivial,
                     **{param_name: option},
                 )
-                results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+                # v3.4.6: 'industry' 臂要求「仅行业」, 必须不传市值;
+                # 若传市值, 管线会自动切 industry_marketcap, 该自由度即失效.
+                arm_kwargs = extra_kwargs
+                if param_name == 'neutralization' and option == 'industry':
+                    arm_kwargs = {}
+                results.append(self.run_single(
+                    config, factor_data, fwd_returns, industry_data,
+                    **arm_kwargs))
 
         return results
 
@@ -1157,6 +1179,7 @@ class AblationRunner:
         factor_data: Dict[str, pd.DataFrame],
         fwd_returns: pd.DataFrame,
         industry_data: Optional[pd.Series] = None,
+        market_cap_data: Optional[pd.DataFrame] = None,
         b3_full_result: Optional[AblationResult] = None,
     ) -> List[AblationResult]:
         """L3 参数消融 (依赖 T3 CUSUM 已完成)
@@ -1168,15 +1191,25 @@ class AblationRunner:
         - winsorize 比例 (3) + MAD 3σ (1) = 4 配置 (P1-5 修正)
         - correction_method (3: bh/bonferroni/none, P1-3 修正)
         返回 ~25 个 AblationResult (1 baseline + 24 消融)
+
+        v3.4.6: 支持市值口径 (与 L1/L2/B3 对齐); 全部臂统一注入,
+        因 L3 不消融中性化方式, 只消融处理参数 — 口径应与 B3 参照一致.
         """
         results = []
+
+        # v3.4.6: 统一转发市值 (仅非 None 注入, 保持既有 monkeypatch 签名兼容)
+        extra_kwargs = {}
+        if market_cap_data is not None:
+            extra_kwargs['market_cap_data'] = market_cap_data
 
         # B3_full 参照
         if b3_full_result is not None:
             results.append(b3_full_result)
         else:
             b3_config = AblationConfig(name='B3_full', layer='baseline', baseline_level='B3')
-            results.append(self.run_single(b3_config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                b3_config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # CUSUM k 参数 (OAT: h 固定 5.5, P1-4 修正 — 原组合对改为 OAT)
         # spec §6.2: k ∈ {0.25, 0.5, 0.75}, h=5.5 fixed
@@ -1186,7 +1219,9 @@ class AblationRunner:
                 name=f'L3_cusum_oat_k{k}',
                 layer='L3', baseline_level='B3', cusum_k=k, cusum_h=5.5,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # CUSUM h 参数 (OAT: k 固定 0.5, P1-4 修正)
         # spec §6.2: h ∈ {4.0, 5.5, 7.0}, k=0.5 fixed
@@ -1196,7 +1231,9 @@ class AblationRunner:
                 name=f'L3_cusum_oat_h{h}',
                 layer='L3', baseline_level='B3', cusum_k=0.5, cusum_h=h,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # EWMA halflife (M4 修正)
         for hl in [6, 12, 24]:
@@ -1204,7 +1241,9 @@ class AblationRunner:
                 name=f'L3_ewma_halflife_{hl}',
                 layer='L3', baseline_level='B3', ewma_halflife=hl,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # EWMA alpha (5 分叉, M4 修正)
         for alpha in [0.1, 0.3, 0.5, 0.7, 0.9]:
@@ -1212,7 +1251,9 @@ class AblationRunner:
                 name=f'L3_ewma_alpha_{alpha}',
                 layer='L3', baseline_level='B3', ewma_alpha=alpha,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # 5 叉阈值缩放 (M4 修正)
         for scale in [1.0, 1.2, 1.5]:
@@ -1220,7 +1261,9 @@ class AblationRunner:
                 name=f'L3_threshold_scale_{scale}',
                 layer='L3', baseline_level='B3', routing_threshold_scale=scale,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # winsorize 比例 (P1-5: 含 MAD 3σ, 共 4 选项)
         # spec §6.2: 1% / 3% / 5% / MAD 3σ
@@ -1229,13 +1272,17 @@ class AblationRunner:
                 name=f'L3_winsorize_{ratio}',
                 layer='L3', baseline_level='B3', winsorize_ratio=ratio,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
         # MAD 3σ: winsorize_ratio 为 float 无法表示 MAD, 用 outlier_method='mad' (P1-5 修正)
         mad_config = AblationConfig(
             name='L3_winsorize_mad',
             layer='L3', baseline_level='B3', outlier_method='mad',
         )
-        results.append(self.run_single(mad_config, factor_data, fwd_returns, industry_data))
+        results.append(self.run_single(
+            mad_config, factor_data, fwd_returns, industry_data,
+            **extra_kwargs))
 
         # 多重比较校正方法 (P1-3 修正: 原缺失, 补充 3 配置)
         # spec §6.2: correction_method ∈ {benjamini_hochberg, bonferroni, none}
@@ -1244,7 +1291,9 @@ class AblationRunner:
                 name=f'L3_correction_{method}',
                 layer='L3', baseline_level='B3', correction_method=method,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         return results
 

@@ -1,5 +1,75 @@
 # 开发日志 (Changelog)
 
+## v3.4.6 — `run_l3` / `run_l4_oat` 市值口径对齐 (已实施, 2026-11-13)
+
+### 概览
+
+v3.4.4 / v3.4.5 让 L1 / L2 / Baseline 真正使用市值中性化后, L3 与 L4 成为仅剩的两层
+"无市值入口" —— 两者的消融臂全部走"仅行业"口径, 而同一次消融中 B3 参照走
+"行业 + 市值", 跨层 ΔIC/ΔSharpe 因此混入了中性化口径差异 (违反消融归因前提:
+参照臂与实验臂仅目标组件不同; Meyes et al. 2019, arXiv:1901.08644;
+Athey & Imbens 2017, DOI 10.1257/jep.31.2.3)。本版补齐两处入口。
+
+过程中发现两个必须区别对待的事实:
+- 管线在 `market_cap_data is not None` 时**自动**把中性化切到
+  `industry_marketcap` (`pipelines_v2._build_neutralizer_params`, 硬编码无开关),
+  因此 L3 可以统一注入, 而 L4 的 `neutralization='industry'` 臂**必须不传市值**,
+  否则该自由度失效、与 `industry+mktcap` 臂恒等;
+- 传市值后 B3 参照口径变为 `industry+mktcap`, 故 L4 的默认 (trivial) 选项必须
+  随数据可用性切换, 否则平凡比较不成立。
+
+**核心产出**:
+- `run_l3`: 新增 `market_cap_data`, B3 + 24 臂统一注入 (仅非 None)
+- `run_l4_oat`: 新增 `market_cap_data`, B3 + 18 臂注入 (`industry` 臂跳过);
+  `defaults['neutralization']` 随数据可用性在 `industry` / `industry+mktcap` 间切换
+- 项目版本 **3.4.6** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+- 新增 8 例测试 (E1-E7, 其中 E7 拆为 E7a/E7b)
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | `run_l3` / `run_l4_oat` 新增 `market_cap_data` + 注入规则 + 默认口径切换 |
+| `tests/test_backtest/test_ablation_mktcap_alignment.py` | **新增** E1-E7 (8 例) |
+| `docs/research/RESEARCH_ABLATION_MKTCAP_ALIGNMENT.md` | 调研 (F1-F12 / Q1-Q5 / O1-O3) |
+| `docs/EXECUTION_V3.4.6_ABLATION_MKTCAP_ALIGNMENT.md` | 实施文档 |
+| `docs/audit/2026-11-13-ablation-mktcap-alignment-audit.md` | 审计报告 (92 分 A) |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | `EXPECTED_VERSION` → `3.4.6` |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.5 → 3.4.6 |
+
+### 兼容性
+
+- **兼容**: 臂集合 / 返回数量不变 (L3 = 25, L4 = 20); 未传市值时不注入该关键字,
+  既有 monkeypatch 测试签名不受影响; 未传市值路径与 v3.4.5 逐位一致
+  (L4 默认仍为 `industry`, 既有 trivial 断言不破坏);
+- **行为变化 (修复)**: 显式传入 `market_cap_data` 时 L3/L4 真正使用市值中性化,
+  相关臂与 B3 参照数值会变化;
+- **数值 / 缓存**: 默认路径零变化, 仍为 `v2.3.0-cache`; 未新增依赖。
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | E1-E7 (L3/L4 市值口径) | **8 passed** (Red: 6 failed / 2 passed) |
+| 定向回归 | ablation_runner + decoupler 臂 + 本文件 | **113 passed** (18.14s) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **5/5** |
+| 全量回归 | `pytest tests` | **1715 passed / 15 skipped / 0 failed** (2525.38s) |
+
+> 全量基线 1707 → 1715 (仅新增 8 例, 无既有用例改动)。
+
+### 已知遗留 (不在本版范围)
+
+- **O1**: L3/L4 多数自由度开关 (`_l3_ewma_*` / `_l3_threshold_scale` /
+  `_l3_winsorize_ratio` / `_l3_correction_method` / `_l4_outlier_method` /
+  `_l4_scaler_method` / `_l4_imputer_strategy` / `_l4_time_align` / `_l4_data_window`)
+  在全仓**无消费者**,
+  对应消融臂与基线数值完全相同 —— 报表中这些臂的 Δ≈0 是"空转"而非"无效应"。
+  真正生效的只有 `cusum_k/h`、`missing_method='drop'`、`neutralization='none'`。
+  需逐旋钮映射到真实管线配置, 单独立项。
+- **O3**: 调用方若传入 `b3_full_result`, 其口径由调用方负责 (runner 不校验)。
+
+---
+
 ## v3.4.5 — 修复 `run_l2` / `run_baselines` 市值转发断链 (已实施, 2026-11-13)
 
 ### 概览
