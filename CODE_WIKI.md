@@ -1488,7 +1488,7 @@ Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
 |------|------|
 | `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`); v3.4.4 起 `market_cap_data` 真正转发 |
 | `run_l1_decoupler(...)` | **v3.4.4**: 仅 `dynamic_ab` 的 AR 解耦消融 — `L1_dynamic_ref` (AR 开) vs `L1_decoupler_off` (`module_enabled={'decoupler': False}`); 支持参照复用 |
-| `run_l2(...)` | L2 路由模式消融 |
+| `run_l2(...)` | L2 路由模式消融 (2 臂 + 可选 B3 参照); v3.4.5 起 `market_cap_data` 真正转发 |
 | `run_l3(...)` | L3 参数网格 (CUSUM / EWMA / 缩尾比例 / 校正方法 / MAD) |
 | `run_l4_oat(...)` | L4 前置处理 OAT |
 | `run_single(...)` | 单实验运行 (Baseline 阶梯 + 指标计算) |

@@ -2,6 +2,7 @@
 """v3.4.4: AblationRunner decoupler 消融臂测试 (TDD).
 
 规格: docs/EXECUTION_V3.4.4_ABLATION_DECOUPLER_ARM.md §3 (D1-D11)
+      + v3.4.5 D12/D13 (run_l2 / run_baselines 市值转发断链)
 上游: docs/research/RESEARCH_ABLATION_DECOUPLER_ARM.md
       docs/private/DESIGN_ABLATION_DECOUPLER_ARM.md
 
@@ -360,6 +361,49 @@ class TestRunL1MarketCapForwarding:
         captured.clear()
         runner.run_l1(factor_data, fwd_returns)
         assert len(captured) == 6
+        assert all(c['market_cap_data'] is None for c in captured)
+
+    def test_run_l2_forwards_market_cap_data(self, monkeypatch):
+        """D12: run_l2 两臂均转发市值; 未传时不注入该关键字."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = AblationRunner(PipelineV2Config())
+        factor_data = _make_factor_data()
+        fwd_returns = _make_factor_data()
+        market_cap = pd.DataFrame(
+            np.ones((2, 2)), index=['d1', 'd2'], columns=['S1', 'S2'])
+
+        captured = _capture_run_single(monkeypatch, runner)
+        results = runner.run_l2(
+            factor_data, fwd_returns, market_cap_data=market_cap)
+
+        assert len(results) == 2
+        assert all(c['market_cap_data'] is market_cap for c in captured)
+
+        captured.clear()
+        runner.run_l2(factor_data, fwd_returns)
+        assert len(captured) == 2
+        assert all(c['market_cap_data'] is None for c in captured)
+
+    def test_run_baselines_forwards_market_cap_data(self, monkeypatch):
+        """D13: B0-B3 阶梯均转发市值 (B3 是 L1/L2 参照, 口径须一致)."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = AblationRunner(PipelineV2Config())
+        factor_data = _make_factor_data()
+        fwd_returns = _make_factor_data()
+        market_cap = pd.DataFrame(
+            np.ones((2, 2)), index=['d1', 'd2'], columns=['S1', 'S2'])
+
+        captured = _capture_run_single(monkeypatch, runner)
+        results = runner.run_baselines(
+            factor_data, fwd_returns, market_cap_data=market_cap)
+
+        assert len(results) == 4
+        assert all(c['market_cap_data'] is market_cap for c in captured)
+
+        captured.clear()
+        runner.run_baselines(factor_data, fwd_returns)
         assert all(c['market_cap_data'] is None for c in captured)
 
 

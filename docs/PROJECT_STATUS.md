@@ -44,7 +44,8 @@ v3.4.1 (2026-11-11) 非生产路径解耦器弃用 (ADR-043)                    
 v3.4.2 (2026-11-12) 断点监控调度 — 节拍器 (ADR-044)                           [x]
 v3.4.3 (2026-11-12) Dynamic 组件可分离性 — 中性化/AR 独立开关 (ADR-045)        [x]
 v3.4.4 (2026-11-13) AblationRunner decoupler 消融臂 — dynamic_ab 内 AR 开/关   [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.4
+v3.4.5 (2026-11-13) run_l2 / run_baselines 市值转发断链修复                      [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.5
 v3.4.x (候选)     非生产路径解耦器数值修复 (可选, 当前仅告警)                  [ ]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
@@ -59,10 +60,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 (v3.4.0 – v3.4.4)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值转发修复 (v3.4.0 – v3.4.5)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.5 | 市值转发断链修复 | `run_l2` (2 臂) 与 `run_baselines` (B0-B3) 补齐 `market_cap_data` 转发 (仅非 None 注入); 新增 D12/D13 | ADR-042 观察项收口 | 新增 2 passed; 定向回归 115 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1707 passed / 15 skipped / 0 failed |
 | v3.4.4 | AblationRunner decoupler 消融臂 | 新增 `run_l1_decoupler` (dynamic_ab 内 `L1_dynamic_ref` vs `L1_decoupler_off`, 参照可复用); ρ_step 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发 | ADR-045 实现补充 | 新增 11 passed; 定向回归 121 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1705 passed / 15 skipped / 0 failed |
 | v3.4.3 | Dynamic 组件可分离性 (O2) | `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 仅关中性化; 默认路径逐位不变 | ADR-045 | 新增 15 passed; 定向回归 190 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1682 passed / 15 skipped / 0 failed |
 | v3.4.2 | 断点监控调度 (O6) | 新增 `BreakMonitorScheduler`: daily/weekly/monthly 节拍, 周期键幂等, 失败不推进; 数值型/tz-aware 输入拒绝; `StructuralBreakMonitor` 类零改动 | ADR-044 | 调度器 22 passed; 调度器 + 断点监控 + 版本统一 + 统一路由 57 passed; 手工校验 5/5; 全量回归 1667 passed / 15 skipped / 0 failed |

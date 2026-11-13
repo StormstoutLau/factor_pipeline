@@ -1,5 +1,53 @@
 # 开发日志 (Changelog)
 
+## v3.4.5 — 修复 `run_l2` / `run_baselines` 市值转发断链 (已实施, 2026-11-13)
+
+### 概览
+
+v3.4.4 修复了 `run_l1` 与 `run_single` 两处 `market_cap_data` 断链, 但
+`run_l2` 与 `run_baselines` 的同名参数仍被静默丢弃。前者使 L2 两臂的中性化
+只用行业; 后者更严重 — `run_baselines` 产出的 B3 是 L1/L2 的参照臂,
+参照与实验臂中性化口径不一致会直接污染消融归因 (Meyes et al. 2019;
+Athey & Imbens 2017)。本版补齐这两处转发。
+
+**核心产出**:
+- `run_l2`: 两臂转发 `market_cap_data` (仅非 None 时注入)
+- `run_baselines`: B0-B3 阶梯转发 `market_cap_data` (仅非 None 时注入)
+- 项目版本 **3.4.5** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+- 新增 2 例测试 (D12 / D13)
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | `run_l2` / `run_baselines` 市值转发 |
+| `tests/test_backtest/test_ablation_decoupler_arm.py` | **新增** D12 / D13 (2 例) |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | `EXPECTED_VERSION` → `3.4.5` |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.4 → 3.4.5 |
+
+### 兼容性
+
+- **兼容**: 臂集合 / 返回数量不变; 未传市值的调用完全不注入该关键字,
+  既有 monkeypatch 测试签名不受影响;
+- **行为变化 (修复)**: 显式传入 `market_cap_data` 的 `run_l2` /
+  `run_baselines` 调用 (`scripts/run_ablation_real.py`) 现在真正使用市值
+  中性化, 相关臂与 B3 参照数值会变化 (此前参数被静默丢弃);
+- **数值 / 缓存**: 默认路径 (`market_cap_data=None`) 零变化, 仍为
+  `v2.3.0-cache`; 未新增依赖、未改配置契约。
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | D12 / D13 (市值转发) | **2 passed** |
+| 定向回归 | decoupler 臂 + ablation_runner + L2 路由 + 版本统一 | **115 passed** (29.25s) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **5/5** |
+| 全量回归 | `pytest tests` | **1707 passed / 15 skipped / 0 failed** (2220.72s) |
+
+> 全量基线 1705 → 1707 (仅新增 D12/D13, 无既有用例改动)。
+
+---
+
 ## v3.4.4 — AblationRunner `decoupler` 消融臂 (已实施, 2026-11-13)
 
 ### 概览
@@ -39,7 +87,7 @@ v3.4.3 使 `module_enabled['decoupler']` 可独立关闭 AR 解耦, 但
 - **行为变化 (修复)**: 显式传入 `market_cap_data` 的 `run_l1` 调用
   (`scripts/run_ablation_real.py`) 现在真正使用市值中性化, 相关臂数值会变化
   (此前参数被静默丢弃);
-- **未修**: `run_l2` 入口的同类市值断链保留为观察项;
+- **未修 (v3.4.5 已补)**: `run_l2` 入口的同类市值断链保留为观察项, 于 v3.4.5 修复;
 - **数值 / 缓存**: 默认路径零变化, 仍为 `v2.3.0-cache`。
 
 ### 实测矩阵

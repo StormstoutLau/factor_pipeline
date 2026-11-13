@@ -1026,6 +1026,12 @@ class AblationRunner:
             ('L2_dynamic', 'dynamic'),
         ]
 
+        # v3.4.5: 转发市值数据 (此前参数被静默丢弃, 中性化只用行业);
+        # 仅非 None 时注入, 保持既有 monkeypatch 调用签名兼容.
+        extra_kwargs = {}
+        if market_cap_data is not None:
+            extra_kwargs['market_cap_data'] = market_cap_data
+
         for name, mode in routing_configs:
             config = AblationConfig(
                 name=name,
@@ -1033,7 +1039,9 @@ class AblationRunner:
                 routing_mode=mode,
                 baseline_level='B3',
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
 
         # 参照: M6 修正 — 引用复用 B3_full, 不重复 run_single
         if b3_full_result is not None:
@@ -1056,13 +1064,22 @@ class AblationRunner:
         - B3: 完整管线 (默认配置, 参照)
         """
         results = []
+
+        # v3.4.5: 转发市值数据, 否则 B3 参照与 L1/L2 实验臂的中性化口径不一致
+        # (参照臂与实验臂仅目标组件不同 — 消融归因前提).
+        extra_kwargs = {}
+        if market_cap_data is not None:
+            extra_kwargs['market_cap_data'] = market_cap_data
+
         for level in ['B0', 'B1', 'B2', 'B3']:
             config = AblationConfig(
                 name=f'{level}_baseline',
                 layer='baseline',
                 baseline_level=level,
             )
-            results.append(self.run_single(config, factor_data, fwd_returns, industry_data))
+            results.append(self.run_single(
+                config, factor_data, fwd_returns, industry_data,
+                **extra_kwargs))
         return results
 
     def run_l4_oat(

@@ -2,7 +2,7 @@
 """Fix 3 手工校验脚本
 
 校验:
-  1. 6 个预期位置的版本号均为 3.4.4 (v3.4.0: 本脚本自身成为第 6 处版本锚点)
+  1. 6 个预期位置的版本号均为 3.4.5 (v3.4.0: 本脚本自身成为第 6 处版本锚点)
   2. 全局扫描旧版本号 (2.0.0, 2.1.0) 残留
   3. 缓存 code_version 独立于项目版本
   4. pyproject.toml 版本号状态
@@ -18,7 +18,7 @@ _PROJECT_ROOT = _PROJECT_PARENT / "factor_pipeline"
 if str(_PROJECT_PARENT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_PARENT))
 
-EXPECTED_VERSION = "3.4.4"
+EXPECTED_VERSION = "3.4.5"
 OLD_VERSIONS = ["2.0.0", "2.1.0"]
 
 

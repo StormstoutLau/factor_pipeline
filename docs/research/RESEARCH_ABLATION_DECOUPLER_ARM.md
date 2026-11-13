@@ -45,7 +45,7 @@
 | A7 | `_collect_rho_steps` 只遍历 `L1_MODULES`，且仅实现 5 个步骤分支 | `ablation_runner.py:702-725` | ✅ |
 | A8 | B0 的 `rho_step` 同样由 `L1_MODULES` 初始化 | `ablation_runner.py:460` | ✅ |
 | A9 | `run_l1` 接受 `market_cap_data` 参数，但调用 `run_single` 时未转发；且 `run_single` 的 B3 分支也未把它传给 `_run_pipeline`（两处断链） | `ablation_runner.py:877`（签名） vs `897/908/919`（调用）; `run_single` B3 分支 v3.4.4 前仅传 `industry_data` | ✅ |
-| A10 | `run_l2` 存在同样的 `market_cap_data` 未转发问题（`run_single` 修好后其 B3 分支自动受益，但 `run_l2` 自身仍未转发） | `ablation_runner.py:928` vs `950` | ✅（本次不修 `run_l2` 入口，登记为观察项） |
+| A10 | `run_l2` 存在同样的 `market_cap_data` 未转发问题（`run_single` 修好后其 B3 分支自动受益，但 `run_l2` 自身仍未转发） | `ablation_runner.py:928` vs `950` | ✅（v3.4.4 登记为观察项；v3.4.5 已修复 `run_l2` 与 `run_baselines`） |
 | A11 | 报告 ρ_step 表固定 5 列，未包含 `decoupler` | `ablation_runner.py:1434-1454` | ✅ |
 | A12 | `RHO_REF` 常量当前无任何消费者 | 全仓 grep 仅定义处 `ablation_runner.py:411-414` | ✅ |
 | A13 | `CompositeDecoupler(enable_ar=False)` 不构建 `ARDecoupler`，中性化保留 | `modules/factor_decoupler/core/dual_neutralizer.py`（v3.4.3 O2 实现） | ✅ |
@@ -67,7 +67,7 @@
 
 - CrossRef 未收录 Meyes et al. (2019) 的 arXiv 预印本条目（本次检索返回其 2022 年 Springer 专著章节）；该引用沿用 v3.4.3 已核实的 arXiv abs 页面，不额外推断页码。
 - 项目未提供 `decoupler` 的 ρ_step 经验参照值；本次**不新增** `RHO_REF['decoupler']`（A12 表明该常量无消费者，避免引入无依据数字）。
-- `run_l2` 的 `market_cap_data` 未转发（A10）真实影响尚未用真实数据量化；本次仅登记，不在本任务修复。
+- `run_l2` 的 `market_cap_data` 未转发（A10）真实影响尚未用真实数据量化；v3.4.4 仅登记，v3.4.5 已修复代码（数值影响仍未量化）。
 
 ---
 
@@ -99,4 +99,4 @@
 | L2 行号 | A1–A14 全部与当前源码一致 | ✅ 逐条 grep 复核 | 初稿将 `run_l1` 签名与调用行混写, 已拆为 A9 两处 |
 | L3 语义 | "unified 中 decoupler 为 no-op" 的推断 | ✅ 由 A3/A4 与 `pipelines_v2.py:1164` 共同支持 | — |
 | L4 数字 | 未给出无依据的 ρ 参照值/性能数字 | ✅ | 明确不新增 `RHO_REF` |
-| L5 范围 | 未把 `run_l2` 修复纳入本任务 | ✅ | 登记为观察项 A10 |
+| L5 范围 | 未把 `run_l2` 修复纳入本任务 | ✅ | 登记为观察项 A10，v3.4.5 已补 |
