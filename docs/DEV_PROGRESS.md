@@ -37,7 +37,8 @@ v3.4.3 (2026-11-12) Dynamic 组件可分离性 (ADR-045), 缓存代际不变
 v3.4.4 (2026-11-13) AblationRunner decoupler 消融臂, 缓存代际不变
 v3.4.5 (2026-11-13) run_l2 / run_baselines 市值转发断链修复, 缓存代际不变
 v3.4.6 (2026-11-13) run_l3 / run_l4_oat 市值口径对齐, 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.6
+v3.4.7 (2026-11-15) L3/L4 旋钮接线审计 (去极值参数化 + 臂集合收敛), 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.7
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -54,6 +55,7 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > v3.4.4 模块影响: `backtest/ablation_runner.py` 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂); ρ_step 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 默认 `run_l1` 6 臂契约不变。
 > v3.4.5 模块影响: `backtest/ablation_runner.py` 补齐 `run_l2` / `run_baselines` 的 `market_cap_data` 转发 (仅非 None 注入); 臂集合与返回数量不变。
 > v3.4.6 模块影响: `backtest/ablation_runner.py` 补齐 `run_l3` / `run_l4_oat` 的 `market_cap_data` 入口 — L3 统一注入 (B3 + 24 臂), L4 选择性注入 (B3 + 18 臂, `neutralization='industry'` 臂跳过), L4 默认口径随数据可用性切换; 臂集合与返回数量不变。
+> v3.4.7 模块影响: `pipelines_v2.py` Static 管道去极值参数化 (`static_outlier_method` / 分位点, 默认 percentile 1/99 零行为变更); `backtest/ablation_runner.py` 臂集合重建 (L3 25→7, L4 20→9), outlier 4 臂真实接线, 新增 `_wiring_status` 与报告 `Wiring` 列; L3 CUSUM 6 臂全部 trivial。
 
 ### §2.1 核心编排层
 

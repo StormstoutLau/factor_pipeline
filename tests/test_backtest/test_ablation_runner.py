@@ -663,8 +663,8 @@ class TestAblationRunnerBatch:
         assert any('B2' in n for n in names)
         assert any('B3' in n for n in names)
 
-    def test_run_l4_oat_returns_20_plus(self, monkeypatch):
-        """run_l4_oat → ≥ 20 个 (6 DOF × 3-4 选项 + 1 baseline)"""
+    def test_run_l4_oat_returns_9(self, monkeypatch):
+        """v3.4.7: run_l4_oat → 9 个 (3 自由度 × 8 臂 + 1 baseline)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
@@ -679,8 +679,8 @@ class TestAblationRunnerBatch:
         monkeypatch.setattr(runner, 'run_single', mock_run_single)
         results = runner.run_l4_oat(factor_data, fwd_returns)
 
-        assert len(results) >= 20, f"Expected ≥20 results, got {len(results)}"
-        assert call_count[0] >= 20
+        assert len(results) == 9, f"Expected 9 results, got {len(results)}"
+        assert call_count[0] == 9
 
 
 # =============================================================================
@@ -1268,33 +1268,12 @@ class TestL4OAT:
         assert len(caps) == 1
         assert caps[0]['config'].outlier_method == 'winsorize_1pct'
 
-    def test_scaler_rank(self, monkeypatch):
-        """scaler=rank → config.scaler_method='rank'"""
-        captured = self._run_l4_and_capture(monkeypatch)
-        caps = [c for c in captured if c['config'].name == 'L4_scaler_method_rank']
-        assert len(caps) == 1
-        assert caps[0]['config'].scaler_method == 'rank'
-
-    def test_scaler_minmax(self, monkeypatch):
-        """scaler=minmax → config.scaler_method='minmax'"""
-        captured = self._run_l4_and_capture(monkeypatch)
-        caps = [c for c in captured if c['config'].name == 'L4_scaler_method_minmax']
-        assert len(caps) == 1
-        assert caps[0]['config'].scaler_method == 'minmax'
-
     def test_missing_drop(self, monkeypatch):
         """missing=drop → config.missing_method='drop'"""
         captured = self._run_l4_and_capture(monkeypatch)
         caps = [c for c in captured if c['config'].name == 'L4_missing_method_drop']
         assert len(caps) == 1
         assert caps[0]['config'].missing_method == 'drop'
-
-    def test_missing_knn(self, monkeypatch):
-        """missing=knn → config.missing_method='knn'"""
-        captured = self._run_l4_and_capture(monkeypatch)
-        caps = [c for c in captured if c['config'].name == 'L4_missing_method_knn']
-        assert len(caps) == 1
-        assert caps[0]['config'].missing_method == 'knn'
 
     def test_neutralization_none(self, monkeypatch):
         """neutralization=none → config.neutralization='none'"""
@@ -1304,27 +1283,8 @@ class TestL4OAT:
         assert len(caps) == 1
         assert caps[0]['config'].neutralization == 'none'
 
-    def test_time_align_t5(self, monkeypatch):
-        """time_align=t+5 → config.time_align='t+5'"""
-        captured = self._run_l4_and_capture(monkeypatch)
-        caps = [c for c in captured if c['config'].name == 'L4_time_align_t+5']
-        assert len(caps) == 1
-        assert caps[0]['config'].time_align == 't+5'
-
-    def test_data_window_2010_2020(self, monkeypatch):
-        """data_window → config.data_window 正确设置"""
-        captured = self._run_l4_and_capture(monkeypatch)
-        # 验证 data_window 类配置存在
-        dw_caps = [c for c in captured
-                   if c['config'].name.startswith('L4_data_window_')]
-        assert len(dw_caps) >= 1
-        for c in dw_caps:
-            assert c['config'].data_window is not None
-            assert isinstance(c['config'].data_window, tuple)
-            assert len(c['config'].data_window) == 2
-
     def test_outlier_mad(self, monkeypatch):
-        """outlier=mad → config.outlier_method='mad' (默认选项)"""
+        """outlier=mad → config.outlier_method='mad' (非默认臂)"""
         captured = self._run_l4_and_capture(monkeypatch)
         caps = [c for c in captured if c['config'].name == 'L4_outlier_method_mad']
         assert len(caps) == 1
@@ -1365,54 +1325,48 @@ class TestL4OAT:
         assert "L4_outlier_method_3sigma" in report
 
     def test_l4_oat_marks_trivial_configs(self, monkeypatch):
-        """P1-7: run_l4_oat 标记默认选项为 _is_trivial=True (M5 修正)
+        """v3.4.7: 按实跑口径标记 trivial — 2 trivial + 6 非平凡.
 
-        Spec §5.2 M5: 每个自由度的默认选项与 baseline 相同, 构成平凡比较.
-        默认选项: outlier=mad, scaler=zscore, missing=median,
-                 neutralization=industry, time_align=t+1, data_window=full
-        6 个 trivial + 13 个非平凡 = 19 个 L4 消融配置.
+        - outlier_method='winsorize_1pct' 与默认 percentile 1/99 等价;
+        - 不传市值时 neutralization='industry' 为默认口径.
         """
         captured = self._run_l4_and_capture(monkeypatch)
-        # 默认选项配置应标记为 trivial
         trivial_configs = [c for c in captured
                            if getattr(c['config'], '_is_trivial', False)]
-        # 6 个自由度各 1 个默认选项 = 6 个 trivial
-        assert len(trivial_configs) == 6, (
-            f"Expected 6 trivial configs (one per DOF default), "
-            f"got {len(trivial_configs)}"
+        assert len(trivial_configs) == 2, (
+            f"Expected 2 trivial configs, got {len(trivial_configs)}"
         )
-        # 非默认选项不应标记为 trivial (排除 baseline B3_full)
+        assert {c['config'].name for c in trivial_configs} == {
+            'L4_outlier_method_winsorize_1pct',
+            'L4_neutralization_industry',
+        }
         non_trivial_l4 = [c for c in captured
                           if c['config'].layer == 'L4'
                           and not getattr(c['config'], '_is_trivial', False)]
-        assert len(non_trivial_l4) == 13, (
-            f"Expected 13 non-trivial L4 configs, got {len(non_trivial_l4)}"
+        assert len(non_trivial_l4) == 6, (
+            f"Expected 6 non-trivial L4 configs, got {len(non_trivial_l4)}"
         )
 
     def test_l4_trivial_comparisons_excluded_from_bh_fdr(self):
-        """P1-7: compare_all 排除 _is_trivial 比较不参与 BH-FDR (M5 修正)
+        """v3.4.7: compare_all 排除 _is_trivial 比较不参与 BH-FDR.
 
-        Spec §5.3 M5: BH-FDR 校正 13 个非平凡比较 (排除 6 个 trivial).
-        trivial 比较仍保留在结果列表中, 但 _is_trivial=True 且不占用多重比较额度.
+        8 个 L4 结果 = 2 trivial + 6 non-trivial; BH-FDR 只看到 6 个 p 值.
+        trivial 比较仍保留在结果列表中, 但 _is_trivial=True 且不占额度.
         """
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config(), n_bootstrap=100)
         reference = _make_layer_result('B3_full', 'baseline', seed=99)
 
-        # 构造 19 个 L4 结果: 6 trivial + 13 non-trivial
         results = []
-        # 6 trivial (默认选项, 与 baseline 相同)
-        for i, name in enumerate(['L4_outlier_method_mad', 'L4_scaler_method_zscore',
-                                   'L4_missing_method_median',
-                                   'L4_neutralization_industry',
-                                   'L4_time_align_t+1',
-                                   'L4_data_window_full']):
+        # 2 trivial (与 baseline 同口径)
+        for i, name in enumerate(['L4_outlier_method_winsorize_1pct',
+                                   'L4_neutralization_industry']):
             r = _make_layer_result(name, 'L4', seed=i)
             r.config._is_trivial = True
             results.append(r)
-        # 13 non-trivial
-        for i in range(13):
+        # 6 non-trivial
+        for i in range(6):
             results.append(_make_layer_result(f'L4_nontrivial_{i}', 'L4',
                                                seed=i + 10))
 
@@ -1421,22 +1375,15 @@ class TestL4OAT:
             comparisons = runner.compare_all(results, reference)
             assert mock_bh.called
             called_p_values = mock_bh.call_args[0][0]
-            # BH-FDR 仅校正 13 个非平凡比较 (排除 6 个 trivial)
-            assert len(called_p_values) == 13, (
-                f"Expected 13 p_values in BH-FDR (excluding 6 trivial), "
+            assert len(called_p_values) == 6, (
+                f"Expected 6 p_values in BH-FDR (excluding 2 trivial), "
                 f"got {len(called_p_values)}"
             )
 
-        # trivial 比较应标记 _is_trivial=True 且保留在结果中
         trivial_comparisons = [c for c in comparisons
                                if getattr(c, '_is_trivial', False)]
-        assert len(trivial_comparisons) == 6, (
-            f"Expected 6 trivial comparisons marked, got {len(trivial_comparisons)}"
-        )
-        # 总比较数 = 19 (trivial + non-trivial 都保留)
-        assert len(comparisons) == 19, (
-            f"Expected 19 total comparisons (trivial+non-trivial), got {len(comparisons)}"
-        )
+        assert len(trivial_comparisons) == 2
+        assert len(comparisons) == 8
 
 
 # =============================================================================
@@ -1486,32 +1433,16 @@ class TestL3Ablation:
             f"BH ({sum(sig_bh)}) should detect ≥ Bonferroni ({sum(sig_bonf)})"
         )
 
-    def test_winsorize_1pct_vs_5pct(self, monkeypatch):
-        """1% vs 5% → winsorize_ratio 配置不同"""
-        captured = self._run_l3_and_capture(monkeypatch)
-        winsor_results = [c for c in captured
-                         if c['config'].winsorize_ratio is not None]
-        ratios = {c['config'].winsorize_ratio for c in winsor_results}
-        assert 0.01 in ratios or 0.01 in {float(r) for r in ratios}, (
-            f"Expected 0.01 in winsorize ratios, got {ratios}"
-        )
-        assert 0.05 in ratios or 0.05 in {float(r) for r in ratios}, (
-            f"Expected 0.05 in winsorize ratios, got {ratios}"
-        )
-
-    def test_l3_returns_25_results(self, monkeypatch):
-        """run_l3 → ~25 个 AblationResult (M4: 含 EWMA + 5叉阈值)"""
+    def test_l3_returns_7_results(self, monkeypatch):
+        """v3.4.7: run_l3 → 7 个 (B3 + 6 CUSUM 诊断臂)"""
         from factor_pipeline.pipelines_v2 import PipelineV2Config
 
         runner = AblationRunner(PipelineV2Config())
         captured = _capture_pipeline_configs(monkeypatch, runner)
         results = runner.run_l3(_make_factor_data(), _make_fwd_returns())
 
-        # 1 baseline + 4 cusum + 3 ewma_hl + 5 ewma_alpha + 3 threshold + 3 winsor = 19
-        # 规格允许 ≥19 (M4 修正 ~25, 当前实现 19)
-        assert len(results) >= 19, (
-            f"Expected ≥19 L3 results, got {len(results)}"
-        )
+        assert len(results) == 7, f"Expected 7 L3 results, got {len(results)}"
+        assert len(captured) == 7
 
     def test_l3_uses_t3_cusum(self, monkeypatch):
         """L3 消融复用 T3 CUSUM (cusum_k/h 参数覆盖)"""
@@ -1557,23 +1488,6 @@ class TestL3Ablation:
         report = runner.generate_report(results, comparisons)
         assert "L3 参数消融" in report
         assert "L3_cusum_0" in report
-
-    def test_l3_correction_method_variants(self, monkeypatch):
-        """P1-3: run_l3 includes 3 correction_method configs (bh/bonferroni/none)
-
-        Spec §6.2: correction_method ∈ {'benjamini_hochberg', 'bonferroni', 'none'}.
-        当前 run_l3 缺失 correction_method 消融, 需补充 3 配置.
-        """
-        captured = self._run_l3_and_capture(monkeypatch)
-        correction_configs = [c for c in captured
-                              if c['config'].correction_method is not None]
-        methods = {c['config'].correction_method for c in correction_configs}
-        assert methods == {'benjamini_hochberg', 'bonferroni', 'none'}, (
-            f"Expected 3 correction_method variants, got {methods}"
-        )
-        assert len(correction_configs) == 3, (
-            f"Expected 3 correction_method configs, got {len(correction_configs)}"
-        )
 
     def test_l3_cusum_oat_k_variants(self, monkeypatch):
         """P1-4: CUSUM OAT k 变体 — 3 配置 k=0.25/0.5/0.75, h 固定 5.5
@@ -1624,27 +1538,14 @@ class TestL3Ablation:
                 f"got k={c['config'].cusum_k}"
             )
 
-    def test_l3_winsorize_includes_mad(self, monkeypatch):
-        """P1-5: run_l3 winsorize 包含 MAD 3σ 选项
-
-        Spec §6.2: winsorize 4 选项 — 1% / 3% / 5% / MAD 3σ.
-        当前仅 0.01/0.03/0.05, 缺失 MAD. MAD 用 outlier_method='mad' 表示
-        (winsorize_ratio 为 float 无法表示 MAD).
-        """
+    def test_l3_arms_are_diagnostic_and_trivial(self, monkeypatch):
+        """v3.4.7: 6 个 CUSUM 臂全为诊断型 — trivial 且 wiring_status=diagnostic."""
         captured = self._run_l3_and_capture(monkeypatch)
-        # 检查 MAD 选项: 通过 outlier_method='mad' 配置
-        mad_configs = [c for c in captured
-                       if c['config'].outlier_method == 'mad']
-        assert len(mad_configs) >= 1, (
-            "run_l3 should include MAD 3σ winsorize option (outlier_method='mad')"
-        )
-        # 同时验证 3 个 winsorize_ratio 仍存在
-        winsor_configs = [c for c in captured
-                          if c['config'].winsorize_ratio is not None]
-        ratios = {c['config'].winsorize_ratio for c in winsor_configs}
-        assert {0.01, 0.03, 0.05}.issubset(ratios), (
-            f"Expected winsorize ratios {{0.01, 0.03, 0.05}}, got {ratios}"
-        )
+        l3_configs = [c['config'] for c in captured if c['config'].layer == 'L3']
+        assert len(l3_configs) == 6
+        for cfg in l3_configs:
+            assert cfg._is_trivial is True
+            assert cfg._wiring_status == 'diagnostic'
 
 
 # =============================================================================
@@ -1826,16 +1727,6 @@ class TestL3ParameterInjection:
         assert modified_config.cusum_h == 4.0
         assert modified_config.enable_cusum_drift_monitor is True
 
-    def test_l3_winsorize_ratio_injected(self):
-        """winsorize_ratio=0.03 → modified_config 携带该参数 (spec §6.4: _l3_winsorize_ratio)"""
-        runner, modified_config = self._make_runner_and_config()
-
-        abl_cfg = AblationConfig(name='L3_test', layer='L3', winsorize_ratio=0.03)
-        runner._apply_l3_overrides(modified_config, abl_cfg)
-
-        # winsorize_ratio 不在 PipelineV2Config 直接字段, spec 使用 _l3_winsorize_ratio
-        assert getattr(modified_config, '_l3_winsorize_ratio', None) == 0.03
-
     def test_l3_none_values_skipped(self):
         """所有 L3 字段为 None → modified_config 不变 (cusum_k/h/enable_cusum_drift_monitor 保持默认)"""
         runner, modified_config = self._make_runner_and_config()
@@ -1864,42 +1755,33 @@ class TestL4ParameterInjection:
         return runner, modified_config
 
     def test_l4_outlier_method_injected(self):
-        """outlier_method='mad' → modified_config 携带该参数 (spec §5.4: _l4_outlier_method)"""
+        """outlier_method='mad' → static_outlier_method='mad' (v3.4.7 真实接线)"""
         runner, modified_config = self._make_runner_and_config()
 
         abl_cfg = AblationConfig(name='L4_test', layer='L4', outlier_method='mad')
         runner._apply_l4_overrides(modified_config, abl_cfg)
 
-        assert getattr(modified_config, '_l4_outlier_method', None) == 'mad'
+        assert modified_config.static_outlier_method == 'mad'
 
-    def test_l4_scaler_method_injected(self):
-        """scaler_method='rank' → modified_config 携带该参数 (spec §5.4: _l4_scaler_method)"""
+    def test_l4_missing_drop_disables_imputer(self):
+        """missing_method='drop' → module_enabled['imputer']=False"""
         runner, modified_config = self._make_runner_and_config()
 
-        abl_cfg = AblationConfig(name='L4_test', layer='L4', scaler_method='rank')
+        abl_cfg = AblationConfig(name='L4_test', layer='L4', missing_method='drop')
         runner._apply_l4_overrides(modified_config, abl_cfg)
 
-        assert getattr(modified_config, '_l4_scaler_method', None) == 'rank'
-
-    def test_l4_missing_method_injected(self):
-        """missing_method='median' → modified_config 携带插补策略 (spec §5.4: _l4_imputer_strategy)"""
-        runner, modified_config = self._make_runner_and_config()
-
-        abl_cfg = AblationConfig(name='L4_test', layer='L4', missing_method='median')
-        runner._apply_l4_overrides(modified_config, abl_cfg)
-
-        # spec §5.4: 'median' → _l4_imputer_strategy='median'
-        assert getattr(modified_config, '_l4_imputer_strategy', None) == 'median'
+        assert modified_config.module_enabled['imputer'] is False
 
     def test_l4_none_values_skipped(self):
         """所有 L4 字段为 None → modified_config 不变"""
         runner, modified_config = self._make_runner_and_config()
         original_module_enabled = modified_config.module_enabled
+        original_outlier_method = modified_config.static_outlier_method
 
         abl_cfg = AblationConfig(name='L4_test', layer='L4')  # 全 None
         runner._apply_l4_overrides(modified_config, abl_cfg)
 
         assert modified_config.module_enabled == original_module_enabled
+        assert modified_config.static_outlier_method == original_outlier_method
         assert not hasattr(modified_config, '_l4_outlier_method')
         assert not hasattr(modified_config, '_l4_scaler_method')
-        assert not hasattr(modified_config, '_l4_imputer_strategy')

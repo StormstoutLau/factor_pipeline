@@ -469,6 +469,10 @@ class PipelineV2Config:
     # 变换配置 (Static / Mixed 共用一套, PL-02)
     static_transformation_method: str = 'rank'
     static_target_distribution: str = 'normal'
+    # v3.4.7: Static 管道去极值参数 (默认值与 v3.4.6 硬编码一致, 零行为变更)
+    static_outlier_method: str = 'percentile'
+    static_outlier_percentile_lower: float = 1.0
+    static_outlier_percentile_upper: float = 99.0
     mixed_transformation_method: str = 'rank'
     mixed_target_distribution: str = 'normal'
     # 静态因子是否启用GARCH白化（默认关闭）
@@ -701,7 +705,10 @@ class StaticFactorPipeline(_BaseFactorPipeline):
                  transformation_params: Optional[Dict] = None,
                  enable_garch: bool = False,
                  garch_params: Optional[Dict] = None,
-                 module_enabled: Optional[Dict[str, bool]] = None):
+                 module_enabled: Optional[Dict[str, bool]] = None,
+                 outlier_method: str = 'percentile',
+                 outlier_percentile_lower: float = 1.0,
+                 outlier_percentile_upper: float = 99.0):
         super().__init__()
         me = module_enabled or {}
         tp = transformation_params or {}
@@ -711,11 +718,18 @@ class StaticFactorPipeline(_BaseFactorPipeline):
             k: v for k, v in tp.items()
             if k not in ('method', 'target_distribution')
         }
+        # v3.4.7: 仅分位类方法使用分位点, 其他方法 (z_score/mad/iqr/...) 不传
+        outlier_kwargs = {}
+        if outlier_method in ('percentile', 'quantile'):
+            outlier_kwargs = {
+                'percentile_lower': outlier_percentile_lower,
+                'percentile_upper': outlier_percentile_upper,
+            }
         self.steps = [
             ('imputer', ImputerAdapter(strategy='ffill_ts', enabled=me.get('imputer', True))),
-            ('outlier', ProcessingAdapter(process_type='outlier', method='percentile',
-                                          percentile_lower=1.0, percentile_upper=99.0,
-                                          enabled=me.get('winsorizer', True))),
+            ('outlier', ProcessingAdapter(process_type='outlier', method=outlier_method,
+                                          enabled=me.get('winsorizer', True),
+                                          **outlier_kwargs)),
             # P1: neutralize before transform — 先剥离行业暴露再变换
             ('neutralize', NeutralizerAdapter(enabled=me.get('neutralizer', True),
                                               **(neutralizer_params or {}))),
@@ -1329,6 +1343,9 @@ class FactorProcessingPipelineV2:
                     'min_obs': self.config.static_garch_min_obs,
                 } if self.config.static_enable_garch else None,
                 module_enabled=module_enabled,
+                outlier_method=self.config.static_outlier_method,
+                outlier_percentile_lower=self.config.static_outlier_percentile_lower,
+                outlier_percentile_upper=self.config.static_outlier_percentile_upper,
             )
         elif pipe_type == 'dynamic':
             return DynamicFactorPipeline(

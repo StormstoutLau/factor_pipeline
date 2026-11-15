@@ -79,7 +79,7 @@ def _data():
 class TestRunL3MarketCap:
 
     def test_run_l3_forwards_market_cap_to_all_arms(self, monkeypatch):
-        """E1: 25 个臂 (B3 + 24) 全部带同一市值对象."""
+        """E1: 7 个臂 (B3 + 6) 全部带同一市值对象."""
         runner = _runner()
         factor_data, fwd_returns, industry = _data()
         market_cap = _make_market_cap(factor_data['factor_0'].index,
@@ -89,8 +89,8 @@ class TestRunL3MarketCap:
         results = runner.run_l3(
             factor_data, fwd_returns, industry, market_cap_data=market_cap)
 
-        assert len(results) == 25
-        assert len(captured) == 25
+        assert len(results) == 7
+        assert len(captured) == 7
         assert all(c['has_key'] for c in captured)
         assert all(c['market_cap_data'] is market_cap for c in captured)
 
@@ -102,7 +102,7 @@ class TestRunL3MarketCap:
         captured = _capture_run_single(monkeypatch, runner)
         runner.run_l3(factor_data, fwd_returns, industry)
 
-        assert len(captured) == 25
+        assert len(captured) == 7
         assert not any(c['has_key'] for c in captured)
 
     def test_run_l3_b3_reference_receives_market_cap(self, monkeypatch):
@@ -129,7 +129,7 @@ class TestRunL4MarketCap:
 
     def test_run_l4_forwards_market_cap_to_non_neutralization_arms(
             self, monkeypatch):
-        """E3: 非中性化自由度 (outlier/scaler/missing/time_align/data_window) 均带市值."""
+        """E3: 非中性化臂 (outlier / missing) 均带市值."""
         runner = _runner()
         factor_data, fwd_returns, industry = _data()
         market_cap = _make_market_cap(factor_data['factor_0'].index,
@@ -139,13 +139,11 @@ class TestRunL4MarketCap:
         results = runner.run_l4_oat(
             factor_data, fwd_returns, industry, market_cap_data=market_cap)
 
-        assert len(results) == 20
-        prefixes = ('L4_outlier_method_', 'L4_scaler_method_',
-                    'L4_missing_method_', 'L4_time_align_')
+        assert len(results) == 9
+        prefixes = ('L4_outlier_method_', 'L4_missing_method_')
         arms = [c for c in captured
-                if c['config'].name.startswith(prefixes)
-                or c['config'].name.startswith('L4_data_window_')]
-        assert len(arms) == 16
+                if c['config'].name.startswith(prefixes)]
+        assert len(arms) == 5
         assert all(c['market_cap_data'] is market_cap for c in arms)
 
     def test_run_l4_neutralization_industry_arm_skips_market_cap(

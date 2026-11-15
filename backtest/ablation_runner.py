@@ -327,21 +327,22 @@ class AblationConfig:
     random_seed: Optional[int] = None   # v3.4.0: 字段保留 (无消费者), 避免破坏外部构造
 
     # ── L3 参数覆盖 ──
+    # v3.4.7: 仅 cusum_k/cusum_h 有消费者 (诊断层); 其余字段保留但不再注入
     cusum_k: Optional[float] = None
     cusum_h: Optional[float] = None
-    correction_method: Optional[str] = None
-    winsorize_ratio: Optional[float] = None
-    ewma_halflife: Optional[int] = None
-    ewma_alpha: Optional[float] = None
-    routing_threshold_scale: Optional[float] = None
+    correction_method: Optional[str] = None    # 保留字段, 本版起无消费者 (属 compare 层)
+    winsorize_ratio: Optional[float] = None    # 保留字段, 本版起无消费者 (归口 L4 outlier)
+    ewma_halflife: Optional[int] = None        # 保留字段, 本版起无消费者 (度量层口径)
+    ewma_alpha: Optional[float] = None         # 保留字段, 本版起无消费者 (与 halflife 共线)
+    routing_threshold_scale: Optional[float] = None  # 保留字段, 无消费者 (ADR-042 已删路由)
 
     # ── L4 前置处理 OAT ──
-    outlier_method: Optional[str] = None
-    scaler_method: Optional[str] = None
-    missing_method: Optional[str] = None
+    outlier_method: Optional[str] = None       # v3.4.7: 真实接线到 static_outlier_*
+    scaler_method: Optional[str] = None        # 保留字段, 本版起无消费者
+    missing_method: Optional[str] = None       # 仅 'drop' 有效 (关闭 imputer)
     neutralization: Optional[str] = None
-    time_align: Optional[str] = None
-    data_window: Optional[Tuple[str, str]] = None
+    time_align: Optional[str] = None           # 保留字段, 本版起无消费者 (ADR-040)
+    data_window: Optional[Tuple[str, str]] = None  # 保留字段, 本版起无消费者
 
     # ── L1 ortho 开关 ──
     ortho_enabled: Optional[bool] = None
@@ -352,6 +353,10 @@ class AblationConfig:
     # ── M5 修正: 平凡比较标记 ──
     # True = 此配置与 baseline 相同 (默认选项), 比较结果 trivial, 不参与 BH-FDR
     _is_trivial: bool = False
+
+    # ── v3.4.7: 接线状态 ──
+    # 'wired' = 作用于处理链, 可能改变指标; 'diagnostic' = 只改诊断输出, 指标恒等
+    _wiring_status: str = 'wired'
 
 
 @dataclass
@@ -592,25 +597,16 @@ class AblationRunner:
         modified_config: Any,
         ablation_config: AblationConfig,
     ) -> None:
-        """P0-3: L3 参数覆盖, 注入 modified_config (spec §6.4).
+        """P0-3: L3 参数覆盖, 注入 modified_config.
 
-        在实例化 pipeline 前调用 (config 必须在构造前就绪).
+        v3.4.7 接线审计后 L3 只保留 CUSUM 诊断维度:
+            cusum_k / cusum_h → 直接字段 + enable_cusum_drift_monitor=True
 
-        字段映射 (PipelineV2Config 实际字段):
-            直接字段 (PipelineV2Config 已有):
-              - cusum_k → modified_config.cusum_k (并 enable_cusum_drift_monitor=True)
-              - cusum_h → modified_config.cusum_h (并 enable_cusum_drift_monitor=True)
-            间接字段 (PipelineV2Config 无直接字段, 使用 _l3_* 前缀属性,
-                      由下游模块按需读取):
-              - ewma_halflife → modified_config._l3_ewma_halflife
-              - ewma_alpha → modified_config._l3_ewma_alpha
-              - routing_threshold_scale → modified_config._l3_routing_threshold_scale
-              - winsorize_ratio → modified_config._l3_winsorize_ratio
-              - correction_method → modified_config._l3_correction_method
-
+        其余 L3 字段 (ewma_* / routing_threshold_scale / winsorize_ratio /
+        correction_method) 已在臂集合中移除, 不再注入任何 `_l3_*` 属性.
         None 值跳过 (不覆盖).
         """
-        # 直接字段: cusum_k / cusum_h (PipelineV2Config 已有, spec §6.4)
+        # 直接字段: cusum_k / cusum_h (PipelineV2Config 已有)
         if ablation_config.cusum_k is not None:
             modified_config.cusum_k = ablation_config.cusum_k
             modified_config.enable_cusum_drift_monitor = True
@@ -618,74 +614,65 @@ class AblationRunner:
             modified_config.cusum_h = ablation_config.cusum_h
             modified_config.enable_cusum_drift_monitor = True
 
-        # 间接字段: PipelineV2Config 无直接字段, 使用 _l3_* 前缀属性 (spec §6.4)
-        if ablation_config.ewma_halflife is not None:
-            modified_config._l3_ewma_halflife = ablation_config.ewma_halflife
-        if ablation_config.ewma_alpha is not None:
-            modified_config._l3_ewma_alpha = ablation_config.ewma_alpha
-        if ablation_config.routing_threshold_scale is not None:
-            modified_config._l3_routing_threshold_scale = (
-                ablation_config.routing_threshold_scale
-            )
-        if ablation_config.winsorize_ratio is not None:
-            modified_config._l3_winsorize_ratio = ablation_config.winsorize_ratio
-        if ablation_config.correction_method is not None:
-            modified_config._l3_correction_method = ablation_config.correction_method
+    # v3.4.7: L4 outlier 臂名 → (method, percentile_lower, percentile_upper)
+    L4_OUTLIER_MAP = {
+        '3sigma': ('z_score', None, None),
+        'mad': ('mad', None, None),
+        'winsorize_1pct': ('percentile', 1.0, 99.0),
+        'winsorize_5pct': ('percentile', 5.0, 95.0),
+    }
 
     def _apply_l4_overrides(
         self,
         modified_config: Any,
         ablation_config: AblationConfig,
     ) -> None:
-        """P0-4: L4 OAT 参数覆盖, 注入 modified_config (spec §5.4).
+        """P0-4: L4 OAT 参数覆盖, 注入 modified_config.
 
-        在实例化 pipeline 前调用.
+        v3.4.7 接线审计后字段映射:
+            - outlier_method  → static_outlier_method (+ percentile 分位点)
+            - missing_method  → 'drop' 关闭 imputer (其余值不再支持)
+            - neutralization  → 'none' 关闭 neutralizer; 其他值由 runner 控制市值传递
 
-        字段映射 (PipelineV2Config 实际字段):
-            间接字段 (PipelineV2Config 无直接字段):
-              - outlier_method → modified_config._l4_outlier_method
-              - scaler_method → modified_config._l4_scaler_method
-              - missing_method:
-                  'drop' → module_enabled['imputer']=False (关闭 imputer, 保留 NaN)
-                  'median'/'knn' → modified_config._l4_imputer_strategy
-              - neutralization:
-                  'none' → module_enabled['neutralizer']=False (关闭中性化)
-                  其他 → modified_config._l4_neutralization
-              - time_align → modified_config._l4_time_align
-              - data_window → modified_config._l4_data_window
-
+        scaler_method / time_align / data_window 已从臂集合移除, 不再注入.
         None 值跳过 (不覆盖).
         """
         if ablation_config.outlier_method is not None:
-            modified_config._l4_outlier_method = ablation_config.outlier_method
-        if ablation_config.scaler_method is not None:
-            modified_config._l4_scaler_method = ablation_config.scaler_method
+            try:
+                method, lower, upper = self.L4_OUTLIER_MAP[
+                    ablation_config.outlier_method]
+            except KeyError:
+                raise ValueError(
+                    "未知的 L4 outlier_method: "
+                    f"{ablation_config.outlier_method!r}; "
+                    f"合法值: {sorted(self.L4_OUTLIER_MAP)}"
+                ) from None
+            modified_config.static_outlier_method = method
+            if lower is not None:
+                modified_config.static_outlier_percentile_lower = lower
+                modified_config.static_outlier_percentile_upper = upper
 
         if ablation_config.missing_method is not None:
             if ablation_config.missing_method == 'drop':
-                # spec §5.4: 'drop' → 关闭 imputer (保留 NaN, IC 计算时 dropna)
+                # 'drop' → 关闭 imputer (保留 NaN, IC 计算时 dropna)
                 if modified_config.module_enabled is None:
                     modified_config.module_enabled = {}
                 modified_config.module_enabled['imputer'] = False
             else:
-                # 'median' / 'knn' → 设置 imputer 策略
-                modified_config._l4_imputer_strategy = (
-                    ablation_config.missing_method
+                raise ValueError(
+                    "L4 missing_method 仅支持 'drop', 实际: "
+                    f"{ablation_config.missing_method!r}"
                 )
 
         if ablation_config.neutralization is not None:
             if ablation_config.neutralization == 'none':
-                # spec §5.4: 'none' → 关闭 neutralizer
+                # 'none' → 关闭 neutralizer
                 if modified_config.module_enabled is None:
                     modified_config.module_enabled = {}
                 modified_config.module_enabled['neutralizer'] = False
-            else:
-                modified_config._l4_neutralization = ablation_config.neutralization
-
-        if ablation_config.time_align is not None:
-            modified_config._l4_time_align = ablation_config.time_align
-        if ablation_config.data_window is not None:
-            modified_config._l4_data_window = ablation_config.data_window
+            # else ('industry' / 'industry+mktcap'): 无需改 config —
+            # 口径完全由 runner 层的 market_cap_data 转发控制
+            # (v3.4.7 异构复审收口: 原 _l4_neutralization 死注入已删除)
 
     def _collect_rho_steps(
         self,
@@ -1090,10 +1077,17 @@ class AblationRunner:
         market_cap_data: Optional[pd.DataFrame] = None,
         b3_full_result: Optional[AblationResult] = None,
     ) -> List[AblationResult]:
-        """L4 前置处理 OAT 单维消融: 6 自由度
+        """L4 前置处理 OAT 单维消融: 3 自由度
 
         每个自由度单独消融, 其余固定为默认.
-        返回 ≥20 个 AblationResult (6 DOF × 3-4 选项 + 1 baseline)
+        返回 9 个 AblationResult (B3 + 8 臂)
+
+        v3.4.7 接线审计: 只保留真实可控的自由度
+          - outlier_method (4): 真实接线到 static_outlier_method / 分位点
+          - missing_method (1): 'drop' 关闭 imputer
+          - neutralization (3): none / industry / industry+mktcap
+        删除 scaler_method / time_align / data_window 与 missing median/knn
+        (不可接线或会改写历史数值).
 
         v3.4.6: 支持市值口径 (与 L1/L2/B3 对齐); `neutralization='industry'`
         臂不注入市值 — 管线收到市值会自动切 `industry_marketcap`
@@ -1115,47 +1109,32 @@ class AblationRunner:
                 b3_config, factor_data, fwd_returns, industry_data,
                 **extra_kwargs))
 
-        # 6 个自由度的 OAT 选项
+        # 3 个自由度的 OAT 选项 (v3.4.7 接线审计)
         oat_specs = [
             ('outlier_method', [
                 '3sigma', 'mad', 'winsorize_1pct', 'winsorize_5pct',
             ]),
-            ('scaler_method', [
-                'zscore', 'rank', 'minmax',
-            ]),
             ('missing_method', [
-                'drop', 'median', 'knn',
+                'drop',
             ]),
             ('neutralization', [
                 'none', 'industry', 'industry+mktcap',
             ]),
-            ('time_align', [
-                't+1', 't+5', 'week_ahead',
-            ]),
-            ('data_window', [
-                ('2010-01-01', '2015-12-31'),
-                ('2015-01-01', '2020-12-31'),
-                ('2010-01-01', '2020-12-31'),
-            ]),
         ]
 
         # M5 修正: 各自由度的默认选项 (与 baseline 相同, 标记为 trivial)
-        # spec §5.2: 默认选项构成平凡比较, 不参与 BH-FDR 校正
-        # v3.4.6: 默认口径随数据可用性切换 — 传市值时 B3 走 industry_marketcap,
-        # 因此默认选项也必须是 industry+mktcap, 平凡比较才成立.
+        # v3.4.7: 按实跑口径 —
+        #   outlier 默认 percentile 1/99, 故 winsorize_1pct 为 trivial;
+        #   neutralization 默认随市值可用性切换.
         defaults = {
-            'outlier_method': 'mad',
-            'scaler_method': 'zscore',
-            'missing_method': 'median',
+            'outlier_method': 'winsorize_1pct',
             'neutralization': (
                 'industry+mktcap' if market_cap_data is not None else 'industry'),
-            'time_align': 't+1',
-            'data_window': ('2010-01-01', '2020-12-31'),
         }
 
         for param_name, options in oat_specs:
             for option in options:
-                is_trivial = (option == defaults[param_name])
+                is_trivial = (option == defaults.get(param_name))
                 config = AblationConfig(
                     name=f'L4_{param_name}_{option}',
                     layer='L4',
@@ -1184,13 +1163,18 @@ class AblationRunner:
     ) -> List[AblationResult]:
         """L3 参数消融 (依赖 T3 CUSUM 已完成)
 
-        参数组 (spec §6.2):
-        - CUSUM k/h (OAT: 3 k + 3 h = 6 配置, P1-4 修正)
-        - EWMA halflife (3) + alpha 5 分叉 (5)
-        - 5 叉阈值缩放 (3)
-        - winsorize 比例 (3) + MAD 3σ (1) = 4 配置 (P1-5 修正)
-        - correction_method (3: bh/bonferroni/none, P1-3 修正)
-        返回 ~25 个 AblationResult (1 baseline + 24 消融)
+        v3.4.7 接线审计: 只保留 CUSUM 诊断维度
+        - CUSUM k/h (OAT: 3 k + 3 h = 6 配置)
+        返回 7 个 AblationResult (1 baseline + 6 诊断臂)
+
+        删除 (不可接线/重复覆盖):
+        - EWMA halflife/alpha: 属度量层口径, 接入会破坏消融序列比较
+        - 5 叉阈值缩放: ADR-042 已删除路由, 无语义
+        - winsorize/MAD: 归口到 L4 outlier_method
+        - correction_method: 属 compare 层, 不改变臂 IC 序列
+
+        全部 CUSUM 臂只改诊断输出 (cusum_monitors/drift_alerts), ΔIC/ΔSharpe
+        恒为 0 — 标记 `_is_trivial=True` 且 `_wiring_status='diagnostic'`.
 
         v3.4.6: 支持市值口径 (与 L1/L2/B3 对齐); 全部臂统一注入,
         因 L3 不消融中性化方式, 只消融处理参数 — 口径应与 B3 参照一致.
@@ -1218,6 +1202,7 @@ class AblationRunner:
             config = AblationConfig(
                 name=f'L3_cusum_oat_k{k}',
                 layer='L3', baseline_level='B3', cusum_k=k, cusum_h=5.5,
+                _is_trivial=True, _wiring_status='diagnostic',
             )
             results.append(self.run_single(
                 config, factor_data, fwd_returns, industry_data,
@@ -1230,66 +1215,7 @@ class AblationRunner:
             config = AblationConfig(
                 name=f'L3_cusum_oat_h{h}',
                 layer='L3', baseline_level='B3', cusum_k=0.5, cusum_h=h,
-            )
-            results.append(self.run_single(
-                config, factor_data, fwd_returns, industry_data,
-                **extra_kwargs))
-
-        # EWMA halflife (M4 修正)
-        for hl in [6, 12, 24]:
-            config = AblationConfig(
-                name=f'L3_ewma_halflife_{hl}',
-                layer='L3', baseline_level='B3', ewma_halflife=hl,
-            )
-            results.append(self.run_single(
-                config, factor_data, fwd_returns, industry_data,
-                **extra_kwargs))
-
-        # EWMA alpha (5 分叉, M4 修正)
-        for alpha in [0.1, 0.3, 0.5, 0.7, 0.9]:
-            config = AblationConfig(
-                name=f'L3_ewma_alpha_{alpha}',
-                layer='L3', baseline_level='B3', ewma_alpha=alpha,
-            )
-            results.append(self.run_single(
-                config, factor_data, fwd_returns, industry_data,
-                **extra_kwargs))
-
-        # 5 叉阈值缩放 (M4 修正)
-        for scale in [1.0, 1.2, 1.5]:
-            config = AblationConfig(
-                name=f'L3_threshold_scale_{scale}',
-                layer='L3', baseline_level='B3', routing_threshold_scale=scale,
-            )
-            results.append(self.run_single(
-                config, factor_data, fwd_returns, industry_data,
-                **extra_kwargs))
-
-        # winsorize 比例 (P1-5: 含 MAD 3σ, 共 4 选项)
-        # spec §6.2: 1% / 3% / 5% / MAD 3σ
-        for ratio in [0.01, 0.03, 0.05]:
-            config = AblationConfig(
-                name=f'L3_winsorize_{ratio}',
-                layer='L3', baseline_level='B3', winsorize_ratio=ratio,
-            )
-            results.append(self.run_single(
-                config, factor_data, fwd_returns, industry_data,
-                **extra_kwargs))
-        # MAD 3σ: winsorize_ratio 为 float 无法表示 MAD, 用 outlier_method='mad' (P1-5 修正)
-        mad_config = AblationConfig(
-            name='L3_winsorize_mad',
-            layer='L3', baseline_level='B3', outlier_method='mad',
-        )
-        results.append(self.run_single(
-            mad_config, factor_data, fwd_returns, industry_data,
-            **extra_kwargs))
-
-        # 多重比较校正方法 (P1-3 修正: 原缺失, 补充 3 配置)
-        # spec §6.2: correction_method ∈ {benjamini_hochberg, bonferroni, none}
-        for method in ['benjamini_hochberg', 'bonferroni', 'none']:
-            config = AblationConfig(
-                name=f'L3_correction_{method}',
-                layer='L3', baseline_level='B3', correction_method=method,
+                _is_trivial=True, _wiring_status='diagnostic',
             )
             results.append(self.run_single(
                 config, factor_data, fwd_returns, industry_data,
@@ -1563,11 +1489,11 @@ class AblationRunner:
             lines.append("")
             lines.append(
                 "| Name | IC Mean | ICIR | Sharpe | "
-                "ΔIC | ΔSharpe | p_HAC | p_Boot | Sig |"
+                "ΔIC | ΔSharpe | p_HAC | p_Boot | Sig | Wiring |"
             )
             lines.append(
                 "|------|---------|------|--------|"
-                "-----|---------|-------|--------|-----|"
+                "-----|---------|-------|--------|-----|--------|"
             )
             for r in layer_results:
                 m = r.metrics
@@ -1579,7 +1505,8 @@ class AblationRunner:
                     f"{_fmt(c.delta_sharpe) if c else 'N/A'} | "
                     f"{_fmt(c.p_value_hac) if c else 'N/A'} | "
                     f"{_fmt(c.p_value_bootstrap) if c else 'N/A'} | "
-                    f"{_sig_mark(c)} |"
+                    f"{_sig_mark(c)} | "
+                    f"{getattr(r.config, '_wiring_status', 'wired')} |"
                 )
             lines.append("")
 

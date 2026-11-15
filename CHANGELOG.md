@@ -1,5 +1,65 @@
 # 开发日志 (Changelog)
 
+## v3.4.7 — L3/L4 旋钮接线审计 (已实施, 2026-11-15)
+
+### 概览
+
+对 AblationRunner 的 L3/L4 自由度做接线审计后发现: 43 个非 B3 臂中只有 3 个真正改变
+处理结果, 6 个只改诊断输出, 24 个注入的属性 (`_l3_*` / `_l4_*`) 在管线中**完全无消费者**。
+报表因此出现大量 Δ≈0 的臂, 无法区分「无效应」与「未接线」。
+
+本版做两件事:
+- **最小接线**: 把唯一高价值且默认值可与现状逐位对齐的自由度 —— Static 管道去极值方法 ——
+  参数化 (`static_outlier_method` / 分位点), 默认值仍为 `percentile 1/99`, 零行为变更;
+- **臂集合重建**: L4 20→9 结果, L3 25→7 结果, 删除项均为「不可接线 / 重复覆盖」,
+  并新增 `_wiring_status` (`wired` / `diagnostic`) 标注诊断型空转臂。
+
+### 核心产出
+
+- `PipelineV2Config`: 新增 `static_outlier_method='percentile'`,
+  `static_outlier_percentile_lower=1.0`, `static_outlier_percentile_upper=99.0`
+- `StaticFactorPipeline`: 新增同名构造参数; 仅 `percentile`/`quantile` 传分位点
+- `AblationConfig`: 新增 `_wiring_status`; 无消费者的 L3/L4 字段保留但标注
+- `run_l4_oat`: 3 自由度 8 臂 (outlier 4 / missing drop 1 / neutralization 3) + B3 = 9
+- `run_l3`: 6 个 CUSUM 诊断臂 + B3 = 7; 全部 `_is_trivial=True` 且 `_wiring_status='diagnostic'`
+- `_apply_l4_overrides`: outlier 臂真实映射到 `static_outlier_*`; 未知臂名抛 `ValueError`
+- 报告 L1-L4 表新增 `Wiring` 列
+- 项目版本 **3.4.7** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+- 新增 12 例测试 (E1-E12)
+
+### 测线口径 (trivial)
+
+- L4: `winsorize_1pct` (= 默认 percentile 1/99) 与中性化默认臂 (传市值时
+  `industry+mktcap`, 否则 `industry`) 为 trivial → 2 trivial + 6 非平凡;
+- L3: CUSUM 只写 `cusum_monitors` / `drift_alerts`, 不侵入 fit/transform, ΔIC/ΔSharpe
+  恒为 0 → 6 臂全部 trivial, 不进入 BH-FDR 分母。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `pipelines_v2.py` | `PipelineV2Config` +3 字段; `StaticFactorPipeline` +3 参数; `_create_pipeline('static')` 注入 |
+| `backtest/ablation_runner.py` | `_wiring_status` / `L4_OUTLIER_MAP` / 注入重写 / 臂集合重建 / 报告 Wiring 列 |
+| `tests/test_backtest/test_ablation_knob_wiring.py` | **新增** E1-E12 |
+| `tests/test_backtest/test_ablation_runner.py` | L3/L4 臂数、trivial、注入断言更新 |
+| `tests/test_backtest/test_ablation_mktcap_alignment.py` | 臂数 25→7 / 20→9 |
+| `docs/research/RESEARCH_ABLATION_KNOB_WIRING.md` | 调研 (F1-F20 / O1-O5) |
+| `docs/EXECUTION_V3.4.7_ABLATION_KNOB_WIRING.md` | 实施文档 |
+| `docs/audit/2026-11-15-ablation-knob-wiring-audit.md` | 审计报告 |
+| `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` | 3.4.6 → 3.4.7 |
+| `tests/test_fix3_version_unification.py` / `tests/test_backtest/verify_fix3_manual.py` | `EXPECTED_VERSION` → `3.4.7` |
+
+### 兼容性
+
+- **行为**: 默认配置下 Static 管道去极值参数与 v3.4.6 完全一致 (percentile 1/99),
+  生产路径零变更;
+- **破坏性 (消融 API)**: `run_l3` 返回 25→7, `run_l4_oat` 返回 20→9;
+  依赖旧臂名 (`L3_ewma_*` / `L3_threshold_scale_*` / `L3_winsorize_*` /
+  `L4_scaler_method_*` / `L4_time_align_*` / `L4_data_window_*`) 的调用方需同步;
+- `AblationConfig` 对应字段保留 (可继续构造), 但不再注入管线。
+
+---
+
 ## v3.4.6 — `run_l3` / `run_l4_oat` 市值口径对齐 (已实施, 2026-11-13)
 
 ### 概览
