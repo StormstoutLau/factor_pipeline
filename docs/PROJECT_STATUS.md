@@ -51,14 +51,15 @@ v3.4.8 (2026-11-15) 消融 trivial 判定按实跑口径 (退化臂排除 BH 分
 v3.4.9 (2026-11-16) L1/L2 trivial 口径清扫 (ortho / unified 臂退出 BH 分母)     [x]
 v3.4.10 (2026-11-16) HAC 检验 NaN 过滤 (成对 complete-case)                     [x]
 v3.4.11 (2026-11-16) 技术债小包 (alpha 清理 + mean_diff 缺失 + MAD 参数化)        [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.11
+v3.4.12 (2026-11-16) 面板 HAC / Premium 标准误 (estimate_with_errors)            [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.12
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
-v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
+v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持                            [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.4.11 完成后)
+## §2. 当前待办 (v3.4.12 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -66,10 +67,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 (v3.4.0 – v3.4.11)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 (v3.4.0 – v3.4.12)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.12 | 面板 HAC / Premium 标准误 | `PremiumEstimator.estimate_with_errors` 新增 14 键输出: 逐期 OLS SE、λ̂(t) 局部 HAC SE、溢价均值 HAC SE + 正态 CI; 抽出 `_smooth_betas` / `_hac_long_run_variance`; 独立复审修正 F1 (SE 权重归一化) / F2 (σ̂² 守卫) + Stata 18 对拍验证 (引擎逐位一致, 唯一约定差 = Stata df 修正); `estimate` / `diagnose` 零变更 | — (方法学见 DESIGN_DISCUSSION_V3.3.0 §2 + RESEARCH_PREMIUM_HAC_SE) | 新增 9 passed (E1-E9); Layer 3 18 passed; `tests/test_backtest` 599 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1755 passed / 15 skipped / 0 failed |
 | v3.4.11 | 技术债小包 | 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 成对 complete-case; `PipelineV2Config` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传到 detector; 非生产解耦器明确不修复 | — | 新增 5 passed; 定向 123 + 46 passed; `tests/test_backtest` 599 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1746 passed / 15 skipped / 0 failed |
 | v3.4.10 | HAC 检验 NaN 过滤 | `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case); 带宽/归一化用清洗后 n; `n<3` → `(0.0,1.0)`; debug 日志; docstring 声明 Equal Spacing 口径; `compare`/bootstrap 零改动 | — (ADR-036 评估链实现修复) | 新增 6 passed (E1-E6); `test_ablation_runner.py` 89 passed; `tests/test_backtest` 594 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1741 passed / 15 skipped / 0 failed |
 | v3.4.9 | L1/L2 trivial 口径清扫 | `run_l2`: `L2_unified` 与 B3 同为 unified → 标 trivial; `run_l1`: 模块臂从整体替换改为合并覆盖 + 按 base 正交化状态判定 `L1_orthogonalizer_off`; 退化告警 1 条 + 外部 B3 提示 2 条; 臂数/臂名/生产管线零改动 | ADR-036 消融归因前提 | 新增 7 passed (E1-E7); `tests/test_backtest` 588 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1735 passed / 15 skipped / 0 failed |
@@ -126,7 +128,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 | — | HAC 检验 NaN 过滤 (`ledoit_wolf_hac_test` 未 drop NaN → `compare` 的 HAC 静默返回 NaN) | ✅ v3.4.10 | [MAD 实验 §6 O1](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) |
 | — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.1 |
 | — | 多断点支持 (Bai-Perron LWZ) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.2 |
-| — | 面板 HAC 稳健估计 (Newey-West) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.3 |
+| — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
 | — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
 | — | Anderson-Rubin 后验检验 (中性化质量监控) | [ ] | v3.2.0 Step 8 |
 

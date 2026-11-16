@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.4.11 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包)
+> **版本**: v3.4.12 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -1334,6 +1334,22 @@ lambda_hat = estimator.estimate(factor, forward_returns)
 - Step 2: Epanechnikov 核平滑 `λ̂_t = Σ K_h(t-s) × β_s / Σ K_h(t-s)`
 - bandwidth=24 (≈2年月度)，min_stocks=30
 
+**`estimate_with_errors`** — v3.4.12 新增: 点估计 + HAC 标准误
+
+```python
+res = estimator.estimate_with_errors(factor, forward_returns, alpha=0.05, max_lag=None)
+# 数组: lambda_hat / lambda_se / lambda_ci_low / lambda_ci_high / beta_t / beta_se
+# 标量: premium_mean / premium_mean_se / premium_mean_ci_low / premium_mean_ci_high
+# 元信息: n_periods / n_valid / hac_lag / alpha
+```
+
+- 逐期 OLS SE: `sqrt(σ̂²_ε/Σ(f−f̄)²)`
+- λ̂(t) HAC SE: `sqrt(Ω_t·Σw²)`, `Ω_t` 为窗口内残差 `β_s−λ̂_s` 的 Newey-West 长期方差 (Bartlett 核)
+- 溢价均值 SE: `sqrt(Ω_β/T_valid)`; CI 用正态近似 `z = norm.ppf(1−α/2)`
+- 有效点 `<3` 或 `Ω<0` → 对应 `SE=NaN`; `estimate()` / `diagnose()` 零变更
+- 复审修正: SE 权重再归一化 (sum=1, 缺失窗口低估修复); `beta_se` 分母 `max(n−2,1)` 守卫;
+  HAC 引擎经 Stata 18 `newey` 对拍逐位一致 (唯一约定差 = Stata 的 n/(n−k) df 修正)
+
 **`BreakpointDetector`** — 网格搜索 Chow F-test 断点检测
 
 ```python
@@ -2580,5 +2596,6 @@ class ThresholdDriftMonitor:
 | v3.4.9 | 2026-11-16 | L1/L2 trivial 口径清扫: `run_l2` 的 `L2_unified` (与 B3 同为 unified) 标 trivial; `run_l1` 模块臂改合并覆盖 + 按 base 正交化启用状态判定 `L1_orthogonalizer_off`; 退化告警 1 条 + 外部 B3 提示 2 条; 新增 7 例 |
 | v3.4.10 | 2026-11-16 | HAC 检验 NaN 过滤: `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case, Equal Spacing), 带宽/归一化用清洗后 n; `n<3` 返回 `(0.0, 1.0)`; `compare`/bootstrap 零改动; 新增 6 例 |
 | v3.4.11 | 2026-11-16 | 技术债小包: 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 成对 complete-case; `PipelineV2Config` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传 detector; 非生产解耦器标注不修复 (ADR-043); 新增 5 例 |
+| v3.4.12 | 2026-11-16 | 面板 HAC / Premium 标准误: `PremiumEstimator.estimate_with_errors` (逐期 OLS SE + λ̂(t) 局部 HAC SE + 均值 HAC SE/CI, 14 键); 抽出 `_smooth_betas` / `_hac_long_run_variance`; 复审修正 (SE 权重归一化 + σ̂² 守卫) + Stata 18 对拍验证; `estimate` / `diagnose` 零变更; 新增 9 例 |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

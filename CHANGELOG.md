@@ -1,5 +1,62 @@
 # 开发日志 (Changelog)
 
+## v3.4.12 — 面板 HAC / Premium 标准误 (已实施, 2026-11-16)
+
+### 概览
+
+为 Layer 3 `PremiumEstimator` 的点估计补上标准误: 新增 `estimate_with_errors()`,
+对逐期 β_t 与核平滑 λ̂(t) 分别给出 Newey-West HAC 标准误与正态近似 CI。
+纯增量 API — `estimate()` / `diagnose()` / `BreakpointDetector` 数值与标签零变更。
+
+### 核心产出
+
+- `PremiumEstimator.estimate_with_errors(factor, forward_returns, alpha=0.05, max_lag=None)` → 14 键 dict
+- 逐期横截面 OLS SE: `sqrt(σ̂²_ε / Σ(f−f̄)²)`, `σ̂²_ε = Σε̂²/(n−2)`
+- λ̂(t) 的 HAC SE: `sqrt(Ω_t · Σw²)` — 局部 Newey-West 长期方差 (Bartlett 核),
+  `Ω_t` 取窗口内残差 `u_s = β_s − λ̂_s`
+- 溢价均值: `mean(β_t)` ± `z·sqrt(Ω_β/T_valid)`
+- 退化口径: 窗口或全序列有效点 `<3` → 对应 `SE=NaN`; `Ω<0` → `NaN`; `Ω=0` → `SE=0`
+- 抽出 `_smooth_betas` (核平滑循环原样迁移) 与 `_hac_long_run_variance`;
+  `_cross_sectional_betas` 改为薄包装 → `estimate()` 输出逐位不变
+- **独立复审修正 (提交前)**: F1 — λ̂ SE 的 Σw² 改用与 `np.average` 一致的归一化权重
+  (旧实现在窗口含 NaN β 时把 SE 低估 ×W_v, 演示值 44%); F2 — `sigma2` 分母
+  `max(n_valid−2, 1)` 守卫极小横截面; 新增 E8/E9
+- **Stata 18 对拍** ([scripts/verify_hac_stata.py](scripts/verify_hac_stata.py)):
+  premium_mean / beta_se / Ω_t 与 `newey` 逐位一致, 唯一系统差 = Stata 默认
+  n/(n−k) 自由度修正 (本实现保持 NW(1987) 渐近形式); L4 Monte Carlo:
+  premium SE/sd=0.94, λ̂ SE/sd=0.83 (≈90% 覆盖 @95% 名义, 已声明近似限制)
+- 项目版本 **3.4.12** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_health/__init__.py` | 新增 `estimate_with_errors` / `_smooth_betas` / `_cross_sectional_betas_and_se` / `_hac_long_run_variance`; 复审修正 F1/F2 |
+| `tests/unit/test_layer3_factor_health.py` | 新增 `TestPremiumEstimatorErrors` (E1-E9) |
+| `scripts/verify_hac_stata.py` | 新增 Stata 18 三层对拍 + Monte Carlo 验证工具 |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `docs/` | RESEARCH / EXECUTION / CHECKLIST / CONSISTENCY_REVIEW / audit / PROJECT_STATUS / DEV_PROGRESS |
+| `CODE_WIKI.md` | 头部版本 + §4.13 接口 + 版本历史 |
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | E1-E9 (`TestPremiumEstimatorErrors`) | 新增 **9 passed** (E1-E7: Red **7 failed** → Green; E8/E9 为复审修正固化) |
+| 定向回归 | `tests/unit/test_layer3_factor_health.py` | **18 passed** |
+| 定向回归 | `tests/test_backtest` | **599 passed / 8 skipped** (基线不变) |
+| 全量回归 | `tests/` | **1755 passed / 15 skipped / 0 failed** (基线 1746 → +9) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **6/6** |
+
+### 兼容性
+
+- `estimate()` 签名与数值逐位不变 (共享 `_smooth_betas`, 核平滑循环原样迁移);
+- `diagnose()` 不调用新方法 → 标签逻辑零变更;
+- 无新增依赖 (`numpy` / `scipy.stats.norm` 已在模块);
+- 方法学依据: Fama & MacBeth (1973) DOI 10.1086/260061;
+  Newey & West (1987) DOI 10.2307/1913610; Newey & West (1994) DOI 10.2307/2297912;
+- 缓存不失效。
+
 ## v3.4.11 — 技术债小包 (已实施, 2026-11-16)
 
 ### 概览

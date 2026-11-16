@@ -60,7 +60,105 @@ class PremiumEstimator:
 
         beta_t = self._cross_sectional_betas(F, R)
         self._beta_raw = beta_t.copy()
+        return self._smooth_betas(beta_t)
 
+    def estimate_with_errors(
+        self, factor: pd.DataFrame, forward_returns: pd.DataFrame,
+        alpha: float = 0.05, max_lag: Optional[int] = None,
+    ) -> Dict:
+        """Estimate λ̂(t) with Newey-West HAC standard errors.
+
+        逐期: SE(λ̂_t) ≈ sqrt(Ω_t · Σ_s w_s²), Ω_t 为窗口内残差
+        u_s = β_s − λ̂_s 的 HAC 长期方差 (局部常数核近似).
+        均值: SE(λ̄) = sqrt(Ω_β / T_valid).
+        有效点 <3 或 Ω<0 → 对应 SE=NaN; 零方差序列 SE=0.
+
+        Returns
+        -------
+        dict with keys:
+            lambda_hat / lambda_se / lambda_ci_low / lambda_ci_high : ndarray (T,)
+            beta_t / beta_se : ndarray (T,)
+            premium_mean / premium_mean_se / premium_mean_ci_low /
+            premium_mean_ci_high : float
+            n_periods / n_valid / hac_lag : int (hac_lag 为全局/均值带宽)
+            alpha : float
+        """
+        common_idx = factor.index.intersection(forward_returns.index)
+        common_cols = factor.columns.intersection(forward_returns.columns)
+        F = factor.loc[common_idx, common_cols].values
+        R = forward_returns.loc[common_idx, common_cols].values
+
+        beta_t, beta_se = self._cross_sectional_betas_and_se(F, R)
+        self._beta_raw = beta_t.copy()
+        lambda_hat = self._smooth_betas(beta_t)
+
+        T = len(beta_t)
+        z = float(norm.ppf(1.0 - alpha / 2.0))
+
+        valid_beta = np.isfinite(beta_t)
+        n_valid = int(valid_beta.sum())
+        if max_lag is not None:
+            q_global = max(1, int(max_lag))
+        else:
+            q_global = max(1, int(4 * (n_valid / 100) ** (2 / 9)))
+
+        lambda_se = np.full(T, np.nan)
+        h = self.bandwidth
+        for t in range(T):
+            if not np.isfinite(lambda_hat[t]):
+                continue
+            lo = max(0, t - h)
+            hi = min(T, t + h + 1)
+            beta_win = beta_t[lo:hi]
+            lam_win = lambda_hat[lo:hi]
+            valid = np.isfinite(beta_win) & np.isfinite(lam_win)
+            n_win = int(valid.sum())
+            if n_win < 3:
+                continue
+            dist = np.abs(np.arange(lo, hi) - t) / h
+            weights = self._epanechnikov(dist)[valid]
+            # v3.4.12 复审修正 F1: 与 np.average 的实际归一化一致 (设计口径 sum=1).
+            # 窗口含 NaN β 时, 未再归一化的 Σw² 会把 SE 低估 ×W_v.
+            weights = weights / weights.sum()
+            resid = beta_win[valid] - lam_win[valid]
+            q_local = q_global if max_lag is not None else max(
+                1, int(4 * (n_win / 100) ** (2 / 9))
+            )
+            omega = self._hac_long_run_variance(resid, q_local)
+            if np.isfinite(omega) and omega >= 0:
+                lambda_se[t] = np.sqrt(omega * float(np.sum(weights ** 2)))
+
+        if n_valid >= 3:
+            beta_valid = beta_t[valid_beta]
+            premium_mean = float(np.mean(beta_valid))
+            omega_beta = self._hac_long_run_variance(beta_valid, q_global)
+            premium_mean_se = (
+                float(np.sqrt(omega_beta / n_valid))
+                if np.isfinite(omega_beta) and omega_beta >= 0 else np.nan
+            )
+        else:
+            premium_mean = np.nan
+            premium_mean_se = np.nan
+
+        return {
+            'lambda_hat': lambda_hat,
+            'lambda_se': lambda_se,
+            'lambda_ci_low': lambda_hat - z * lambda_se,
+            'lambda_ci_high': lambda_hat + z * lambda_se,
+            'beta_t': beta_t,
+            'beta_se': beta_se,
+            'premium_mean': premium_mean,
+            'premium_mean_se': premium_mean_se,
+            'premium_mean_ci_low': premium_mean - z * premium_mean_se,
+            'premium_mean_ci_high': premium_mean + z * premium_mean_se,
+            'n_periods': T,
+            'n_valid': n_valid,
+            'hac_lag': int(q_global),
+            'alpha': float(alpha),
+        }
+
+    def _smooth_betas(self, beta_t: np.ndarray) -> np.ndarray:
+        """Epanechnikov kernel smoothing of β_t → λ̂(t)."""
         T = len(beta_t)
         lambda_hat = np.full(T, np.nan)
         h = self.bandwidth
@@ -78,6 +176,12 @@ class PremiumEstimator:
         return lambda_hat
 
     def _cross_sectional_betas(self, F: np.ndarray, R: np.ndarray) -> np.ndarray:
+        """Vectorized cross-sectional regression per period (slope only)."""
+        return self._cross_sectional_betas_and_se(F, R)[0]
+
+    def _cross_sectional_betas_and_se(
+        self, F: np.ndarray, R: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Vectorized cross-sectional regression per period.
         
         Model: r_t = α + β_t × f_{t-1} + ε
@@ -85,6 +189,7 @@ class PremiumEstimator:
         """
         T, N = F.shape
         beta_t = np.full(T, np.nan)
+        beta_se = np.full(T, np.nan)
 
         for t in range(T):
             f = F[t]   # (N,) factor values
@@ -103,9 +208,38 @@ class PremiumEstimator:
             if var_f < 1e-12:
                 continue
 
-            beta_t[t] = np.dot(f_demean, r_demean) / var_f
+            beta = np.dot(f_demean, r_demean) / var_f
+            resid = r_demean - beta * f_demean
+            # v3.4.12 复审修正 F2: max(...,1) 守卫 min_stocks<=2 的配置 (精确拟合 → SE=0)
+            sigma2 = np.dot(resid, resid) / max(n_valid - 2, 1)
 
-        return beta_t
+            beta_t[t] = beta
+            beta_se[t] = np.sqrt(max(sigma2, 0.0) / var_f)
+
+        return beta_t, beta_se
+
+    @staticmethod
+    def _hac_long_run_variance(x: np.ndarray, max_lag: int) -> float:
+        """Newey & West (1987) long-run variance, Bartlett kernel.
+
+        Ω = γ0 + 2 Σ_{l=1}^{q} (1 − l/(q+1)) γ_l, γ_l = (1/n) Σ x̃_t x̃_{t−l}
+
+        注: 纯 NW(1987) 渐近形式, 不含 Stata `newey` 默认的 n/(n−k) 自由度修正
+        (差异 O(k/n); 已由 scripts/verify_hac_stata.py 对拍确认仅此一约定差).
+        """
+        x = np.asarray(x, dtype=float)
+        x = x[np.isfinite(x)]
+        n = len(x)
+        if n < 3:
+            return np.nan
+        q = max(0, min(int(max_lag), n - 1))
+        x_demean = x - np.mean(x)
+        omega = float(np.dot(x_demean, x_demean) / n)
+        for lag in range(1, q + 1):
+            weight = 1.0 - lag / (q + 1.0)
+            gamma_l = float(np.dot(x_demean[lag:], x_demean[:-lag]) / n)
+            omega += 2.0 * weight * gamma_l
+        return omega
 
     @staticmethod
     def _epanechnikov(u: np.ndarray) -> np.ndarray:
