@@ -62,7 +62,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 ---
 
-## §2. 当前待办 (v3.5.0 完成后)
+## §2. 当前待办 (v3.5.1 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -221,9 +221,9 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 ### 消融对照机制 v3.0.0 工程增强
 
 > **规格文档**: [docs/EXECUTION_ABLATION_V3.0.0.md](docs/EXECUTION_ABLATION_V3.0.0.md) (2211行)
-> **注意**: 源码和测试已完成，Tier 1+2 修复已完成，仅 Tier 3 收尾 (见 §2)。
+> **注意**: 源码和测试已完成，Tier 1+2+3 全部收尾 (Tier 3 见下)。
 
-- [ ] 消融 Tier 3 (5 项, 见 §2)
+- [x] 消融 Tier 3 (5 项) — 已于 `afb6fea` (2026-07-09) 收尾: P2-1 enabled 透传 + P2-2 Sharpe bootstrap CI + P2-3 公式 docstring + P3-1/P3-2 测试补强 (原清单见 §2 v3.1.0 消融实验)
 
 ---
 
@@ -253,18 +253,24 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 >
 > **v3.4.9 (2026-11-16) 同步**: CHANGELOG / 调研 v1.0 / 设计 v1.0 (private) / 实施 v1.0 / CHECKLIST / CONSISTENCY_REVIEW / 审计报告 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.9; DECISIONS 无新 ADR (沿用 ADR-036 归因前提)。
 >
-> **v3.4.13 (2026-11-16) 同步**: CHANGELOG / 实施 v1.0 (小任务裁剪, 调研+设计内联) / 审计报告 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.13; DECISIONS 无新 ADR (缺陷修复); README 版本摘要沿用近版惯例 (v3.4.5 后未逐版追加)。
+> **v3.4.13 (2026-11-16) 同步**: CHANGELOG / 实施 v1.0 (小任务裁剪, 调研+设计内联) / 审计报告 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.13; DECISIONS 无新 ADR (缺陷修复); README 当次未追加 (欠账见下)。
+>
+> **v3.5.0 (2026-11-16) 同步**: CHANGELOG / DECISIONS (ADR-046) / 调研 / 设计 / 实施 / CHECKLIST / 一致性 review / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.5.0; README 仍欠账。
+>
+> **v3.5.1 (2026-11-17) 同步**: CHANGELOG / DECISIONS (ADR-047) / 调研 / 设计 / 实施 / 审计 (含 Phase 8 异构复审) / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI / **README (含 v3.4.5–v3.5.1 追溯补齐)** / **README.en.md (版本块)** / **ARCHITECTURE (v1.1)** 已更新; 版本锚点 6 处统一 3.5.1; §3 消融 Tier 3 陈旧项已按 `afb6fea` 勾销。
 
 ---
 
 ## §5. 执行历史
 
-> **全量回归基线 (2026-11-13, v3.4.4)**: 全仓 `pytest` → **1705 passed / 15 skipped / 0 failed** (166 warnings, 1063.50s, exit 0)。
-> 较 v3.4.3 记录的 1682 新增 23 例 = v3.4.3 复审补测 12 (853806c, 当时未重跑全量) + 本版 decoupler 臂 11, 0 新增失败。
+> **全量回归基线 (2026-11-17, v3.5.1)**: 全仓 `pytest` → **1777 passed / 15 skipped / 0 failed** (1134.45s, exit 0, 异构复审修正后最终代码重跑)。
+> 基线演进: v3.4.13 = 1760 / v3.5.0 = 1768 (+8) / v3.5.1 = 1777 (+9), 均 0 新增失败。
 > 外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动运行脚本, 不参与收集。
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-11-17 | 35790e8 | feat(v3.5.1): 多断点接入 diagnose 标签路径 (ADR-047) + 异构复审修正; 全量 1777 passed |
+| 2026-11-16 | 23e0f33 | feat(v3.5.0): 多断点支持 Bai-Perron + Stata 46/46 对拍 (ADR-046); 全量 1768 passed |
 | 2026-11-16 | 7f3b3d4 | fix(v3.4.9): L1/L2 消融臂 trivial 口径清扫 (`L2_unified` / `L1_orthogonalizer_off` 退出 BH 分母 + module_enabled 合并覆盖) |
 | 2026-11-13 | 26fb5e4 | feat(v3.4.4): AblationRunner decoupler 消融臂 (dynamic_ab 内 AR 开/关) + 全量 1705 passed |
 | 2026-11-13 | 0e81ab0 | docs(wiki): 同步 v3.4.0-v3.4.3 架构与 API 变更 |

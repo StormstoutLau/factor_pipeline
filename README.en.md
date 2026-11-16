@@ -6,7 +6,7 @@
 
 ## Unified Factor Processing Pipeline
 
-**Factor Processing Pipeline** is a unified factor processing orchestration system for quantitative investment. The system has evolved from v1.0's "fixed pipeline" to v3.1.0's "audit-driven code quality remediation (31 fixes + 22 non-trivial tests)", and is advancing v3.0.0's **fingerprint dimension expansion and migration detection enhancement** (ADR-024 fingerprint 21-dim + ADR-002a KS BH-FDR). Core capabilities include **factor fingerprint diagnostic layer (21-dim, v3.0.0 T1)**, **semantic-statistical fusion classification**, **three differentiated processing pipelines**, **optional GARCH whitening**, **continuous migration monitoring**, **backtest engine integration**, **L2 disk cache layer**, **multi-factor cross-sectional orthogonalization (5 algorithms)**, and **dual-track drift fusion judgment**.
+**Factor Processing Pipeline** is a unified factor processing orchestration system for quantitative investment. The system has evolved from v1.0's "fixed pipeline" to v3.1.0's "audit-driven code quality remediation (31 fixes + 22 non-trivial tests)", and is advancing v3.0.0's **fingerprint dimension expansion and migration detection enhancement** (ADR-024 fingerprint 21-dim + ADR-002a KS BH-FDR). Core capabilities include **factor fingerprint diagnostic layer (21-dim, v3.0.0 T1)**, **semantic-statistical fusion classification**, **unified cross-sectional rank pipeline** (v3.4.0 ADR-042; the former three differentiated pipelines are retired, fingerprinting kept read-only for diagnostics), **optional GARCH whitening**, **continuous migration monitoring**, **backtest engine integration**, **L2 disk cache layer**, **multi-factor cross-sectional orthogonalization (5 algorithms)**, and **dual-track drift fusion judgment**.
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **Author**: Scott Peng Liu
@@ -19,7 +19,7 @@ This pipeline is not "yet another factor library." It is a **factor lie detector
 
 It stems from a simple observation: the quantitative industry is awash with "confident performances"—polished backtest curves, elaborate model jargon, seemingly rigorous statistical tests—yet few address the most fundamental question: **Is this factor real? Under what conditions will this model fail? To what extent should I trust it?**
 
-Most factor processing frameworks assume "the factor is valid; let's process it." This pipeline inverts the premise: **diagnose first, then process, then monitor continuously**. The 21-dimensional factor fingerprint is not decoration; it's a health check for every factor. The BH-FDR correction in KS migration detection is not showing off; it's an honest treatment of multiple-comparison false-positive risk. The three differentiated pipelines are not feature bloat; they acknowledge that "static, dynamic, and mixed factors require different processing logic."
+Most factor processing frameworks assume "the factor is valid; let's process it." This pipeline inverts the premise: **diagnose first, then process, then monitor continuously**. The 21-dimensional factor fingerprint is not decoration; it's a health check for every factor. The BH-FDR correction in KS migration detection is not showing off; it's an honest treatment of multiple-comparison false-positive risk. The three differentiated pipelines were not feature bloat; they acknowledged that "static, dynamic, and mixed factors require different processing logic" (retired in v3.4.0 in favor of the unified cross-sectional rank pipeline, ADR-042).
 
 In other words, this is not just code—it is an **epistemological stance**: distrust factors, distrust models, distrust your own judgment, then use statistical tools to precisely measure "to what extent can you believe."
 
@@ -472,6 +472,8 @@ Layer 1 (per-factor) → Layer 2 (cross-factor orthogonalization) → Layer 3 (t
 ---
 
 ## Three Differentiated Pipelines
+
+> **Since v3.4.0 (ADR-042)**: fingerprint routing is retired; the unified cross-sectional rank pipeline (imputer → 1%/99% winsorize → neutralize → rank→normal → z-score) is the default execution path, and fingerprint classification is read-only diagnostics. The pipelines below are kept as historical reference; Dynamic survives only as the `dynamic_ab` A/B arm.
 
 ### Pipeline 1: StaticFactorPipeline (Static Factors)
 
@@ -932,13 +934,15 @@ factor_pipeline/
 
 ## Version Information
 
-- **Pipeline Version**: v3.2.0 (academic-principled refactoring, implemented)
-- **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020) + **statistical_classifier** (NEW v3.2.0 ADR-027)
+- **Pipeline Version**: v3.5.1 (multi-breakpoint wired into `diagnose`, ADR-047; includes v3.5.0 Bai-Perron multi-breakpoint + Stata 46/46 cross-check, ADR-046; v3.4.x unified cross-sectional rank pipeline / deprecated non-production decouplers / break monitor scheduler / Dynamic component separability / ablation cleanup / short-sample breakpoint degradation, ADR-042–045)
+- **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028) + **statistical_classifier** (v3.2.0 ADR-027)
 - **External Data Boundary**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **Test Baseline**: 168/168 (v3.2.0 full regression)
+- **Test Baseline**: 1777 passed / 15 skipped / 0 failed (1134.45s, v3.5.1, final code after review fixes)
 - **CI Matrix**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **Build Date**: 2026.07.10
-- **Status**: STABLE (v3.2.0 academic principles-driven)
+- **Build Date**: 2026.11.17
+- **Status**: STABLE (v3.5.1)
+
+> Detailed per-version notes for v3.4.5–v3.5.1 live in the authoritative Chinese [README.md](README.md) (this English file is auto-translated).
 
 ### Version History
 
@@ -958,6 +962,11 @@ factor_pipeline/
 | v3.0.0 T1 | 2026.07.04 | Fingerprint dimension expansion to 21-dim (ADR-024, E1-E3 all completed), 974 passed + 6 skipped + 11 subtests |
 | v3.1.0 | 2026.07.09 | Audit-Driven Code Quality Remediation (ADR-026): P0+P1×16 + P2+×15 + spec alignment×11, subset regression 754 passed+1 skipped |
 | v3.2.0 | 2026.07.10 | Academic-Principled Pipeline Refactoring (ADR-027): all `auto` modes→fixed methods, SOFT→hard routing, Shapiro-Wilk/Variance Ratio/Anderson-Rubin formal tests, 9-step TDD (168/168 regression), principles ratio 68%→88% |
+| v3.3.x | 2026.10–11 | Full-chain causality fix chain (ADR-037–041): daily cross-sectional winsorization/transform/standardization, AR causal three-stage forecast, AR order selection on hold_back sample; cache generations v2.2.1–v2.2.5 |
+| v3.4.0–v3.4.4 | 2026.11 | Unified cross-sectional rank pipeline (ADR-042) + deprecated non-production decouplers (ADR-043) + break monitor scheduler (ADR-044) + Dynamic component separability (ADR-045) + decoupler ablation arm; cache generation v2.3.0 |
+| v3.4.5–v3.4.13 | 2026.11 | Ablation cleanup (market-cap forwarding/alignment, wiring audit, trivial rules) + HAC NaN filtering + panel HAC SE (`estimate_with_errors`) + short-sample breakpoint degradation (DEFECT-1 fix) |
+| v3.5.0 | 2026.11.16 | Multi-breakpoint support (ADR-046): `detect_multiple()` — DP global minimum SSR (Bai-Perron 1998) + BIC/LWZ selection, 13-key output; Stata 18.0 MP official `regress` cross-check 46/46 PASS |
+| v3.5.1 | 2026.11.17 | Multi-breakpoint wired into `diagnose` (ADR-047): opt-in `breakpoint_mode='multiple'`; sup-F confirms existence, BIC provides segmentation, materiality gate (≥1.0 within-sd) downgrades unconfirmed breaks to `suspect`; +10 output keys; default `'single'` unchanged |
 
 ---
 

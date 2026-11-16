@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.4.4 的"**因子路由统一化治理 + 非生产路径弃用 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂**"（ADR-042：统一横截面秩管道替代三路指纹路由；ADR-043：非生产解耦器保留导入 + 构造告警；ADR-044：断点监控日/周/月节拍器；ADR-045：中性化与 AR 解耦独立开关，v3.4.4 补齐 `run_l1_decoupler` 成对消融），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.5.1 的"**多断点支持 + 多断点接入诊断标签路径 + 因子路由统一化治理**"（ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -45,10 +45,45 @@
 
 ## 版本更新摘要
 
+### v3.5.1 多断点接入 diagnose 标签路径 (2026.11, 已实施)
+
+> **状态**: 已实施, 新增 9 passed (F1-F9); layer3 40 passed; 全量回归 1777 passed / 15 skipped / 0 failed
+> **文档**: [ADR-047](DECISIONS.md) / [调研](docs/research/RESEARCH_V3.5.1_DIAGNOSE_MULTIBP.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.5.1_DIAGNOSE_MULTIBP.md) / [审计](docs/audit/2026-11-17-v3.5.1-diagnose-multibp-audit.md)
+> **版本 / 缓存**: 3.5.1 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: v3.5.0 的 `detect_multiple` 仅只读; 直接以 BIC `n_breaks>0` 接入标签会把纯噪声假阳性 (39%/33%) 放大为 ES 误报。
+
+**决策**: `diagnose(..., breakpoint_mode='single'|'multiple', m_max=5)` 为 opt-in; 存在性由单断点 sup-F 判定 (`breakpoint_confirmed`), BIC 只提供分段; 未确认但材料 (`max|Δ段均值|/sd_within >= 1.0`) → `suspect`, 不升级 ES; 输出 +10 键; 默认 `'single'` 标签与旧键逐位不变。
+
+| 项 | 实测 |
+|---|---|
+| 默认路径等价 | 60/60 面板标签一致, 旧键逐位一致 |
+| 双断点面板 | T=240 → `ES`, `n_breaks=2`, `[80,160]` |
+| 纯噪声 ES 率 | 3-4% (= sup-F 名义 size); 材料性 `suspect` 4-24% (随 T) |
+| 真实 β_t | turnover_1m (T=72) 无告警, 与 v3.5.0 一致 |
+| 版本统一 | 7 passed + 手工 5/5 |
+
+### v3.5.0 多断点支持 — Bai-Perron 全局最小 SSR (2026.11, 已实施)
+
+> **状态**: 已实施, 新增 8 passed (E1-E8); layer3 31 passed; Stata 对拍 46/46 PASS; 全量回归 1768 passed / 15 skipped / 0 failed
+> **文档**: [ADR-046](DECISIONS.md) / [调研](docs/research/RESEARCH_V3.5.0_MULTIPLE_BREAKPOINTS.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.5.0_MULTIPLE_BREAKPOINTS.md) / [审计](docs/audit/2026-11-16-v3.5.0-multiple-breakpoints-audit.md)
+> **版本 / 缓存**: 3.5.0 / `v2.3.0-cache` (缓存代际未变)
+
+`BreakpointDetector.detect_multiple(lambda_hat, m_max=None)`: 动态规划全局最小 SSR (Bai-Perron 1998, O(m·T²)) + BIC (Yao 1988) 主 / LWZ (Liu-Wu-Zidek 1997) 对照选段数; 13 键输出 (`breakpoints` / `segment_means` / `segment_bounds` 等); 不硬编码 sup-F 临界值表; T<30 退化; `detect` / `diagnose` 零改动。断点结果经 Stata 18.0 MP 官方 `regress` 三级对拍 **46/46 PASS** (断点逐点相同, SSR rel ≤ 8.5e-9)。
+
+### v3.4.5–v3.4.13 工程收口 (2026.11, 已实施)
+
+- **v3.4.5–v3.4.6**: AblationRunner 市值转发断链修复 + L3/L4 市值口径对齐 (ADR-042 观察项收口)
+- **v3.4.7–v3.4.9**: L3/L4 旋钮接线审计 (臂集合 25→7 / 20→9) + trivial 判定按实跑口径 (退化臂退出 BH 分母)
+- **v3.4.10**: `ledoit_wolf_hac_test` 成对 complete-case (HAC 检验 NaN 过滤)
+- **v3.4.11**: 技术债小包 (alpha 清理 / `mean_diff` complete-case / 静态去极值参数化)
+- **v3.4.12**: `PremiumEstimator.estimate_with_errors` — 逐期 OLS SE + λ̂(t) HAC SE + 均值 HAC SE/CI (14 键), Stata 18 对拍逐位一致
+- **v3.4.13**: DEFECT-1 短样本断点退化 (T<30 → 6 键无断点结果), `diagnose` 不再抛 AttributeError
+
 ### v3.4.4 AblationRunner decoupler 消融臂 (2026.11, 已实施)
 
 > **状态**: 已实施, 新增 11 passed; 定向回归 121 passed; 全量回归 1705 passed / 15 skipped / 0 failed
-> **文档**: [ADR-045 实现补充](DECISIONS.md) / [调研](docs/research/RESEARCH_ABLATION_DECOUPLER_ARM.md) / [设计](docs/private/DESIGN_ABLATION_DECOUPLER_ARM.md) / [实施](docs/EXECUTION_V3.4.4_ABLATION_DECOUPLER_ARM.md)
+> **文档**: [ADR-045 实现补充](DECISIONS.md) / [调研](docs/research/RESEARCH_ABLATION_DECOUPLER_ARM.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.4.4_ABLATION_DECOUPLER_ARM.md)
 > **版本 / 缓存**: 3.4.4 / `v2.3.0-cache` (缓存代际未变)
 
 **治理动因**: v3.4.3 使 `decoupler` 可独立关闭, 但其仅在 `pipeline_mode='dynamic_ab'` 生效; `run_l1` 的全部臂走 unified Static 管道, `decoupler` 键不生效, AR 解耦贡献仍无法度量。
@@ -58,7 +93,7 @@
 ### v3.4.3 Dynamic 组件可分离性 (2026.11, 已实施)
 
 > **状态**: 已实施, 新增 15 passed; 定向回归 190 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1682 passed / 15 skipped / 0 failed
-> **文档**: [ADR-045](DECISIONS.md) / [设计](docs/private/DESIGN_DYNAMIC_COMPONENT_SEPARABILITY.md) / [调研](docs/research/RESEARCH_DYNAMIC_COMPONENT_SEPARABILITY.md) / [实施](docs/EXECUTION_V3.4.3_DYNAMIC_SEPARABILITY.md)
+> **文档**: [ADR-045](DECISIONS.md) / 设计 (private, 未提交) / [调研](docs/research/RESEARCH_DYNAMIC_COMPONENT_SEPARABILITY.md) / [实施](docs/EXECUTION_V3.4.3_DYNAMIC_SEPARABILITY.md)
 > **版本 / 缓存**: 3.4.3 / `v2.3.0-cache` (缓存代际未变)
 
 **治理动因**: `module_enabled={'neutralizer': False}` 会同时关闭 AR 解耦, 使 L1 消融无法单独度量中性化贡献, Dynamic 退化为 `imputer + z-score` (v3.4.0 调研代码事实 A8 / 设计 §9 O2)。
@@ -469,8 +504,8 @@ price_data = loader.get_price_matrix(field="close", start_date, end_date)
 
 | 新增特性 | 说明 | 影响 |
 |---------|------|------|
-| **因子指纹诊断层** | 13维统计指标自动诊断因子时序/截面特征 | 替代人工判断，客观分类 |
-| **自适应因子分类** | 静态 / 动态 / 混合 三类自动分流 | 不同类型走不同处理流程 |
+| **因子指纹诊断层** | 21 维统计指标自动诊断因子时序/截面特征 (v3.0.0 T1 扩展) | 替代人工判断，客观分类 |
+| **自适应因子分类** | 静态 / 动态 / 混合 三类自动分流 (v3.4.0 起降级为只读诊断, 不选执行路径) | 不同类型走不同处理流程 |
 | **语义-统计融合** | 自然语言构造规则 + 统计指纹的贝叶斯融合 | 先验知识降低数据依赖 |
 | **三重中性化** | 原始值中性化 → AR建模 → 残差中性化 | 解决传统方法内生性缺陷 |
 | **GARCH 白化（可选）** | 对高自相关静态因子消除波动率聚集 | 默认关闭，显式启用 |
@@ -603,7 +638,7 @@ v3.0.0 T1: 指纹维度扩展至 21 维 (已实施)
 |------|------|---------|
 | **PipelineOrderValidator** | 校验处理步骤顺序 | 开源社区完全空白领域 |
 | **Adapter Layer** | 统一模块接口 | sklearn-style 封装 |
-| **FactorFingerprint** | 13维因子诊断 | 从经验判断到数据驱动 |
+| **FactorFingerprint** | 21维因子诊断 | 从经验判断到数据驱动 |
 | **SemanticStatisticalFusion** | 语义+统计融合分类 | 先验引导，后验校准 |
 
 ---
@@ -644,7 +679,7 @@ v3.0.0 T1: 指纹维度扩展至 21 维 (已实施)
 | 属性 | 详情 |
 |------|------|
 | **核心类** | `FactorFingerprinter` / `AdaptiveFactorClassifier` / `SemanticStatisticalFusion` |
-| **指纹维度** | 13维：AR(1)、秩自相关、半衰期、波动率聚集、偏度、峰度等 |
+| **指纹维度** | 21 维 (v3.0.0 T1 扩展: 原 13 维 + 尾部依赖/体制转换 8 维) |
 | **分类方法** | AR(1)阈值法 + 贝叶斯融合（支持语义先验） |
 | **监测功能** | 类型迁移检测、风格漂移告警 |
 
@@ -657,9 +692,21 @@ v3.0.0 T1: 指纹维度扩展至 21 维 (已实施)
 | **双重中性化** | 原始值中性化 → AR建模 → 残差中性化 |
 | **学术依据** | Hausman (1978) 内生性理论 |
 
+### 新增子模块 6: Factor_Health (Layer 3)
+
+| 属性 | 详情 |
+|------|------|
+| **核心类** | `PremiumEstimator` / `BreakpointDetector` / `FactorHealthDiagnoser` |
+| **溢价估计** | Fama-MacBeth 逐期截面 β_t + Epanechnikov 核平滑 λ̂(t); 可选 Newey-West HAC 标准误 |
+| **断点检测** | 单断点 sup-F (Andrews 1993) 默认; 多断点 `detect_multiple` (Bai-Perron 1998 DP + BIC/LWZ) opt-in |
+| **诊断标签** | ES / TD / ES+TD / stable / suspect → pricing / recalibrate / monitor / review / suspect |
+| **学术依据** | Fama-MacBeth (1973) / Andrews (1993) / Bai-Perron (1998, 2003) / Yao (1988) |
+
 ---
 
 ## 三条差异化管道
+
+> **v3.4.0 起 (ADR-042)**: 三路指纹路由已退役, 统一横截面秩管道 (imputer → 1%/99% 缩尾 → 中性化 → rank→normal → z-score) 为默认执行路径; 指纹分类降级为只读诊断。以下管道形态为历史记录, 其中 Dynamic 仅作为 `dynamic_ab` 实验臂保留。
 
 ### 管道 1: StaticFactorPipeline（静态因子）
 
@@ -816,7 +863,7 @@ DEPENDENCIES = {
 | 分布变换 | ✅ 自适应Box-Cox/YJ | ❌ 无 | ❌ 无 |
 | 标准化 | ✅ 统计量投票选择 | ✅ Z-score/Rank | ❌ 无 |
 | 中性化 | ✅ 行业/市值/指数 | ❌ 无 | ❌ 无 |
-| **因子指纹分类** | ✅ **13维诊断+自适应分类** | ❌ 无 | ❌ 无 |
+| **因子指纹分类** | ✅ **21维诊断+自适应分类** | ❌ 无 | ❌ 无 |
 | **语义-统计融合** | ✅ **先验引导+后验校准** | ❌ 无 | ❌ 无 |
 | **三重中性化** | ✅ **原始值→残差双重** | ❌ 无 | ❌ 无 |
 | **GARCH白化** | ✅ **可选预白化** | ❌ 无 | ❌ 无 |
@@ -1026,6 +1073,21 @@ class PipelineV2Config:
 | `fit_transform(X)` | 拟合并变换 |
 | `get_decoupling_summary()` | 获取解耦摘要（含AR模型信息） |
 
+### BreakpointDetector
+
+| 方法 | 说明 |
+|------|------|
+| `detect(lambda_hat)` | 单断点网格 sup-F (Andrews 1993); 返回 `has_breakpoint` / `breakpoint_idx` / `chow_max_stat` / `critical` 等 |
+| `detect_multiple(lambda_hat, m_max=5)` | Bai-Perron 多断点: DP 全局最小 SSR + BIC 主 / LWZ 对照选段数; 13 键输出 (`breakpoints` / `segment_means` / `segment_bounds` 等); T<30 退化 |
+
+### FactorHealthDiagnoser
+
+| 参数 / 方法 | 说明 | 默认 |
+|------|------|------|
+| `diagnose(factor, forward_returns, return_type, breakpoint_mode, m_max)` | 完整诊断: 溢价估计 → 断点 → 衰减 → 综合标签 | `breakpoint_mode='single'`, `m_max=5` |
+| `breakpoint_mode='multiple'` | opt-in 多断点分段; 存在性仍由 sup-F 确认 (`breakpoint_confirmed`), 未确认但材料 → `suspect` | — |
+| `multi_break_shift_threshold` | 未确认多断点的材料性阈值 (`max|Δ段均值| / sd_within`) | 1.0 |
+
 ### GarchWhiteningAdapter
 
 | 参数 | 说明 | 默认值 |
@@ -1051,7 +1113,7 @@ factor_pipeline/
 │   ├── NeutralizerAdapter      # 中性化适配器 (REQUIRED, ADR-018 fit/transform 语义一致)
 │   └── GarchWhiteningAdapter   # GARCH 白化适配器 (OPTIONAL, arch 依赖)
 ├── pipeline.py                 # v1.0 核心流水线 + 顺序校验器
-├── pipelines_v2.py             # v2.0 智能流水线 (指纹+分类+三条管道+软路由)
+├── pipelines_v2.py             # v2.0 智能流水线 (v3.4.0 起: 统一横截面秩管道 + 指纹只读诊断)
 ├── optimizer.py                # v2.2.1 优化器 (Pipeline-in-the-loop + CV)
 ├── dag.py                      # 有向无环图依赖管理
 ├── cache.py                    # 中间结果缓存
@@ -1084,7 +1146,7 @@ factor_pipeline/
 │   ├── parallel_runner.py      # 多因子进程并行 (按日期分组)
 │   └── __init__.py             # 26 个公开 API 导出
 ├── modules/                    # 内化处理模块 (v2.4.0, ADR-019)
-│   ├── factor_fingerprint/     # 因子指纹 (13维统计指标)
+│   ├── factor_fingerprint/     # 因子指纹 (21维统计指标)
 │   ├── factor_decoupler/       # 时序解耦 (AR 建模 + 残差中性化)
 │   ├── factor_adaptive_winsor/ # 自适应缩尾 (仅 core/ 最小子包化)
 │   ├── factor_imputer/         # 因子插补 (无前瞻偏差)
@@ -1120,13 +1182,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.4.4 (AblationRunner decoupler 消融臂; 含 v3.4.3 Dynamic 组件可分离性, ADR-045; v3.4.2 断点监控调度, ADR-044; v3.4.1 非生产路径弃用, ADR-043; v3.4.0 统一横截面秩管道, ADR-042)
-- **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer (v2.4.0 ADR-019 + v2.5.0 ADR-020)
+- **Pipeline 版本**: v3.5.1 (多断点接入 `diagnose` 标签路径, ADR-047; 含 v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
+- **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: **全量回归 1705 passed / 15 skipped / 0 failed** (166 warnings, 1063.50s, 2026-11-13, v3.4.4; 较 v3.4.3 记录的 1682 新增 23 例 = v3.4.3 复审补测 12 + 本版 11); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 步骤 9 落库 **273 passed / 1 语义 skip / 0 failed** (16 文件); 步骤 10 审计后合并靶向 **250 passed / 1 skipped / 0 failed** (15 文件, 430.8s, 含审计新增 6 例); 版本统一 7 passed; v3.4.1 弃用契约 4 passed + 定向回归 27 passed / 51 passed; v3.4.2 调度器 22 passed + 组合回归 57 passed; v3.4.3 组件开关 15 passed + 定向回归 190 passed; 性能门禁 ratio 1.0092 ≤ 1.05 (min-of-5 同机基线 12.246s vs 实施 12.359s)
+- **测试基线**: **全量回归 1777 passed / 15 skipped / 0 failed** (1134.45s, 2026-11-17, v3.5.1, 复审修正后最终代码; = v3.4.13 基线 1760 + v3.5.0 新增 8 + v3.5.1 新增 9); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 5/5; 性能门禁 ratio 1.0092 ≤ 1.05 (v3.4.4 实测, 本版未重测)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.13 (v3.4.4 decoupler 消融臂)
-- **状态**: STABLE (v3.4.4, 10 步 spec 工作流 §13.8 中任务裁剪)
+- **构建日期**: 2026.11.17 (v3.5.1 多断点接入 diagnose)
+- **状态**: STABLE (v3.5.1, 10 步 spec 工作流 §13.8 中任务裁剪)
 
 ### 版本历史
 
@@ -1157,6 +1219,14 @@ factor_pipeline/
 | v3.4.2 | 2026.11.12 | 断点监控调度 (ADR-044): `BreakMonitorScheduler` daily/weekly/monthly 节拍 + 周期键幂等 + 失败不推进 + 数值/tz-aware 输入拒绝; 监控统计零改动; 调度器 22 passed |
 | v3.4.3 | 2026.11.12 | Dynamic 组件可分离性 (ADR-045, O2): `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar` 独立开关; `module_enabled['decoupler']`; `neutralizer=False` 不再连带关闭 AR; 默认路径逐位不变; 新增 15 例 |
 | v3.4.4 | 2026.11.13 | AblationRunner `decoupler` 消融臂: `run_l1_decoupler` 在 `dynamic_ab` 内运行 AR 开/关两臂 (参照可复用); `rho_step` 条件采集 + 报告条件列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 新增 11 例 |
+| v3.4.5–v3.4.6 | 2026.11.13 | 市值转发断链修复 (`run_l2` / `run_baselines`) + L3/L4 市值口径对齐 (L3 24 臂 / L4 18 臂; 口径随数据可用性切换) |
+| v3.4.7–v3.4.9 | 2026.11.15–16 | L3/L4 旋钮接线审计 (臂集合 25→7 / 20→9) + trivial 判定按实跑口径 (退化臂退出 BH-FDR 分母) + L1/L2 trivial 口径清扫 |
+| v3.4.10 | 2026.11.16 | HAC 检验 NaN 过滤: `ledoit_wolf_hac_test` 成对联合 `isfinite` (complete-case), 带宽/归一化用清洗后 n |
+| v3.4.11 | 2026.11.16 | 技术债小包: `alpha` 清理 + `mean_diff` complete-case + 静态去极值参数化 (`static_outlier_adaptive_threshold` / `max_outlier_frac`) |
+| v3.4.12 | 2026.11.16 | `PremiumEstimator.estimate_with_errors` (14 键: 逐期 OLS SE + λ̂(t) HAC SE + 均值 HAC SE/CI); 独立复审 + Stata 18 对拍逐位一致 |
+| v3.4.13 | 2026.11.16 | DEFECT-1 短样本断点退化: `_no_breakpoint_result(T)` 补齐 (T<30 → 6 键无断点结果), `diagnose` 不再 AttributeError; 新增 5 例 |
+| v3.5.0 | 2026.11.16 | 多断点支持 (ADR-046): `BreakpointDetector.detect_multiple()` — 动态规划全局最小 SSR (Bai-Perron 1998) + BIC/LWZ 选段数, 13 键输出; 不硬编码临界值表; T<30 退化; Stata 18.0 MP 官方 `regress` 对拍 46/46 PASS |
+| v3.5.1 | 2026.11.17 | 多断点接入 `diagnose` (ADR-047): opt-in `breakpoint_mode='multiple'`; sup-F 确认存在性 + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 `'single'` 零变更; 新增 9 例 |
 
 ---
 
