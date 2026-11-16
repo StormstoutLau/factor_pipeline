@@ -98,7 +98,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
-| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023 已做; 多年多因子待扩) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) |
+| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023; v3.4.12 真实数据 Layer 3 HAC 验证 4 因子/2020-2026; 多年多因子全量对比待扩) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) |
 | 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | ✅ 实验完成 — 结论**不切换默认**, MAD 保留为可选项 | [实验报告](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) (ADR-042 已知遗留; O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
