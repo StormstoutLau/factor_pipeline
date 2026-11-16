@@ -39,7 +39,8 @@ v3.4.5 (2026-11-13) run_l2 / run_baselines 市值转发断链修复, 缓存代�
 v3.4.6 (2026-11-13) run_l3 / run_l4_oat 市值口径对齐, 缓存代际不变
 v3.4.7 (2026-11-15) L3/L4 旋钮接线审计 (去极值参数化 + 臂集合收敛), 缓存代际不变
 v3.4.8 (2026-11-15) 消融 trivial 判定按实跑口径 (无市值退化臂排除 BH 分母), 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.8
+v3.4.9 (2026-11-16) L1/L2 trivial 口径清扫 (ortho / unified 臂退出 BH 分母), 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.9
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -59,6 +60,8 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > v3.4.7 模块影响: `pipelines_v2.py` Static 管道去极值参数化 (`static_outlier_method` / 分位点, 默认 percentile 1/99 零行为变更); `backtest/ablation_runner.py` 臂集合重建 (L3 25→7, L4 20→9), outlier 4 臂真实接线, 新增 `_wiring_status` 与报告 `Wiring` 列; L3 CUSUM 6 臂全部 trivial。
 
 > v3.4.8 模块影响: `backtest/ablation_runner.py` `run_l4_oat` 的 trivial 判定改为按实跑口径 — 无市值时 `industry+mktcap` 臂退化为仅行业中性化, 标记 `_is_trivial=True` 并输出一次 WARNING, 不再计入 BH-FDR 分母 (无市值场景 3 trivial / 5 非平凡); 传入外部 `b3_full_result` 且无市值时追加「外部 B3 口径未校验」提示; 生产管线与臂集合零变更。
+
+> v3.4.9 模块影响: `backtest/ablation_runner.py` `run_l2` 的 `L2_unified` 与 B3 同为 unified 口径 → 标 `_is_trivial=True`; `run_l1` 模块臂由 `{module: False}` 整体替换改为 `{**base, module: False}` 合并覆盖, 并按 `base_config.module_enabled` / `orthogonalization.enabled` 实跑口径判定 trivial (默认 base 下仅 `L1_orthogonalizer_off` trivial); 退化臂一次告警 + 外部 B3 提示各 1 条; 生产管线与臂集合零变更。
 
 ### §2.1 核心编排层
 

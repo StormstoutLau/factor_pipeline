@@ -239,6 +239,169 @@ class TestL4TrivialCaliber:
 
 
 # =============================================================================
+# v3.4.9: L1/L2 trivial 口径
+# =============================================================================
+
+def _runner_with(base_config):
+    """构造指定 base_config 的 runner (v3.4.9)."""
+    return AblationRunner(base_config)
+
+
+class TestL1L2TrivialCaliber:
+    """v3.4.9: L1/L2 trivial 按 base_config 实跑口径判定."""
+
+    _TRIVIAL_L1 = {'L1_orthogonalizer_off'}
+    _TRIVIAL_L2 = {'L2_unified'}
+
+    def test_run_l1_marks_ortho_arm_trivial(self, monkeypatch):
+        """E1: 默认 base 未启用正交化 → 仅 ortho 臂 trivial (6 结果 / 4 非平凡)."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = _runner_with(PipelineV2Config())
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+
+        results = runner.run_l1(factor_data, fwd_returns, industry)
+
+        configs = [c['config'] for c in captured]
+        l1 = [c for c in configs if c.layer == 'L1']
+        trivial = {c.name for c in l1 if c._is_trivial}
+        assert len(results) == 6
+        assert len(l1) == 5
+        assert trivial == self._TRIVIAL_L1
+        assert len(l1) - len(trivial) == 4
+
+    def test_run_l2_marks_unified_arm_trivial(self, monkeypatch):
+        """E2: L2_unified 与 B3 同为 unified → trivial (2 结果 / 1 非平凡)."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = _runner_with(PipelineV2Config())
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+
+        results = runner.run_l2(factor_data, fwd_returns, industry)
+
+        configs = [c['config'] for c in captured]
+        trivial = {c.name for c in configs if c._is_trivial}
+        assert len(results) == 2
+        assert trivial == self._TRIVIAL_L2
+
+    def test_run_l1_emits_degradation_warning(self, monkeypatch, caplog):
+        """E3: 默认 base → 恰 1 条「与 B3 同口径」告警, 且点名 ortho 臂."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = _runner_with(PipelineV2Config())
+        factor_data, fwd_returns, industry = _data()
+        _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+
+        runner.run_l1(factor_data, fwd_returns, industry)
+
+        hits = [r for r in caplog.records if '与 B3 同口径' in r.getMessage()]
+        assert len(hits) == 1
+        assert 'L1_orthogonalizer_off' in hits[0].getMessage()
+
+    def test_run_l1_with_active_ortho_keeps_arm_non_trivial(self, monkeypatch,
+                                                            caplog):
+        """E4: base 启用正交化 → ortho 臂非平凡且无退化告警."""
+        from factor_pipeline.config_v2 import OrthogonalizationConfig
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        base = PipelineV2Config(
+            orthogonalization=OrthogonalizationConfig(enabled=True))
+        runner = _runner_with(base)
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+
+        runner.run_l1(factor_data, fwd_returns, industry)
+
+        by_name = {c['config'].name: c['config'] for c in captured}
+        assert by_name['L1_orthogonalizer_off']._is_trivial is False
+        assert not [r for r in caplog.records
+                    if '与 B3 同口径' in r.getMessage()]
+
+    def test_run_l1_merges_base_module_switches(self, monkeypatch, caplog):
+        """E5: base 已关 imputer → 该臂 trivial; scaler 臂保留 base 开关."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        base = PipelineV2Config(module_enabled={'imputer': False})
+        runner = _runner_with(base)
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+
+        runner.run_l1(factor_data, fwd_returns, industry)
+
+        by_name = {c['config'].name: c['config'] for c in captured}
+        assert by_name['L1_imputer_off']._is_trivial is True
+        assert by_name['L1_imputer_off'].module_enabled == {'imputer': False}
+        assert by_name['L1_scaler_off']._is_trivial is False
+        assert by_name['L1_scaler_off'].module_enabled == {
+            'imputer': False, 'scaler': False}
+        hits = [r for r in caplog.records if '与 B3 同口径' in r.getMessage()]
+        assert len(hits) == 1
+        assert 'L1_imputer_off' in hits[0].getMessage()
+
+    def test_external_b3_emits_caliber_hint(self, monkeypatch, caplog):
+        """E6: 外部 B3 → run_l1 / run_l2 各 1 条「未校验」, trivial 不变."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = _runner_with(PipelineV2Config())
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+        external_b3 = AblationResult(
+            config=AblationConfig(
+                name='B3_full', layer='baseline', baseline_level='B3'),
+            metrics={}, ic_series=np.array([]), ls_return_series=np.array([]),
+            rho_step={}, ortho_diagnostics={},
+            n_factors=1, n_periods=12, runtime_sec=0.0,
+        )
+
+        results_l1 = runner.run_l1(factor_data, fwd_returns, industry,
+                                   b3_full_result=external_b3)
+
+        assert results_l1[0] is external_b3
+        assert len([r for r in caplog.records
+                    if '未校验' in r.getMessage()]) == 1
+        assert {c['config'].name for c in captured
+                if c['config']._is_trivial} == self._TRIVIAL_L1
+
+        caplog.clear()
+        captured.clear()
+        results_l2 = runner.run_l2(factor_data, fwd_returns, industry,
+                                   b3_full_result=external_b3)
+
+        assert results_l2[-1] is external_b3
+        assert len([r for r in caplog.records
+                    if '未校验' in r.getMessage()]) == 1
+        assert {c['config'].name for c in captured
+                if c['config']._is_trivial} == self._TRIVIAL_L2
+
+    def test_trivial_flags_match_arm_fields(self, monkeypatch):
+        """E7: trivial 标记与臂字段一致, 防止判定错位."""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = _runner_with(PipelineV2Config())
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+
+        runner.run_l1(factor_data, fwd_returns, industry)
+        runner.run_l2(factor_data, fwd_returns, industry)
+
+        by_name = {c['config'].name: c['config'] for c in captured}
+        assert by_name['L1_orthogonalizer_off'].ortho_enabled is False
+        assert by_name['L1_orthogonalizer_off']._is_trivial is True
+        assert by_name['L2_dynamic'].routing_mode == 'dynamic'
+        assert by_name['L2_dynamic']._is_trivial is False
+
+
+# =============================================================================
 # E3-E5: 注入语义
 # =============================================================================
 

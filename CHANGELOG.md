@@ -1,5 +1,83 @@
 # 开发日志 (Changelog)
 
+## v3.4.9 — L1/L2 消融臂 trivial 判定口径 (已实施, 2026-11-16)
+
+### 概览
+
+v3.4.8 只修了 `run_l4_oat` 的 trivial 口径, 但同族问题在 L1/L2 仍有两处:
+
+- `run_l2` 的 `L2_unified`: B3 (`routing_mode='full'`) 与 `'unified'` 在
+  `_run_pipeline` 中**都注入** `pipeline_mode='unified'`, 两臂实跑逐位相同,
+  却计入 BH-FDR 分母 (分母 2, 实际只有 `L2_dynamic` 一个真实比较);
+- `run_l1` 的 `L1_orthogonalizer_off`: 关闭正交化的前提是
+  `base_config.orthogonalization is not None`; 默认构造下为 `None` (无 hook),
+  该臂是 B3 的复制, 却计入分母 (分母 5, 实际 4)。
+
+另修复一个归因污染: `run_l1` 的模块臂原以 `{module: False}` **整体替换**
+`base_config.module_enabled`, 会把 base 已关闭的其他模块重新打开。
+
+### 核心产出
+
+- 新增 `_base_module_switches` / `_base_ortho_active` (只读 base_config, 无副作用)
+- `run_l1`: 模块臂改为 `{**base_modules, module: False}` 合并覆盖;
+  `_is_trivial = not base_modules.get(module, True)`
+- `run_l1`: `L1_orthogonalizer_off` 的 `_is_trivial = not base_ortho`
+- `run_l1`: 退化臂在循环外**一次**告警, 文案含「与 B3 同口径」并点名臂
+- `run_l1` / `run_l2`: 外部 `b3_full_result` 传入时追加「口径未校验」提示
+- `run_l2`: `L2_unified` 标 `_is_trivial=True`, `L2_dynamic` 为 `False`
+- `run_l1_decoupler`: off 臂同步改为合并覆盖 (R-1, 独立复审发现) —
+  与参照臂除 decoupler 外口径一致
+- 臂数 / 臂名 / `AblationConfig` 字段 / `compare_all` / 生产管线 全部不变
+- 项目版本 **3.4.9** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+- 测试: 新增 7 例 (E1-E7), 既有测试零修改
+
+### 口径 (trivial) 变化
+
+| 场景 | v3.4.8 | v3.4.9 |
+|------|--------|--------|
+| `run_l1` 默认 base | 0 trivial + 5 非平凡 | **1 trivial (`orthogonalizer`)** + 4 非平凡 |
+| `run_l1` base 启用正交化 | 0 trivial + 5 非平凡 | 不变 (仍 5 非平凡) |
+| `run_l2` | 0 trivial + 2 非平凡 | **1 trivial (`unified`)** + 1 非平凡 |
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | L1/L2 实跑口径判定 + 合并覆盖 + 两条告警/提示 |
+| `tests/test_backtest/test_ablation_knob_wiring.py` | 新增 `TestL1L2TrivialCaliber` (E1-E7) + `_runner_with` |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `docs/` | RESEARCH / EXECUTION / CHECKLIST / CONSISTENCY_REVIEW / audit / PROJECT_STATUS / DEV_PROGRESS |
+| `CODE_WIKI.md` | 头部版本 + `run_l1` / `run_l2` 描述 |
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | E1-E7 (trivial 集合 / 告警 / 合并语义 / 外部提示) | **7 passed** (Red: 6 failed / 1 passed → Green: 7 passed) |
+| 定向回归 | 4 个消融测试文件 | **133 passed** (11.57s) |
+| 定向回归 | `tests/test_backtest` | **588 passed / 8 skipped** (837.23s) |
+| 复审后复跑 | 4 个消融文件 + 版本统一 | **140 passed** (13.47s) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **6/6** |
+| 全量回归 | `pytest` | **1735 passed / 15 skipped / 0 failed** (1559.39s) |
+
+### 兼容性
+
+- **默认 `base_config`**: 处理输出逐位不变; 仅 `_is_trivial` 标记与 BH 分母变化
+  (L1 5→4, L2 2→1) — 属口径修正, 非回归;
+- **非默认 `module_enabled`**: 臂开关由「整体替换」改为「合并覆盖」(`run_l1` 模块臂
+  与 `run_l1_decoupler` off 臂), 输出可能变化 — 归因修正 (不再把 base 已关闭的模块
+  重新打开), 已在 docstring 注明;
+- 公共接口、臂名、`AblationConfig` 字段、报告列均不变。
+
+### 说明
+
+- `run_l1_decoupler` 不改: 其参照是 `L1_dynamic_ref` (dynamic 口径) 而非 B3,
+  不属本问题族;
+- 外部 `b3_full_result` 的开关 / `pipeline_mode` 仍由调用方负责 (v3.4.6 O3),
+  runner 只提示不校验 — 与 v3.4.8 T4 同一责任划分。
+
+---
+
 ## v3.4.8 — 消融臂 trivial 判定按实跑口径 (已实施, 2026-11-15)
 
 ### 概览

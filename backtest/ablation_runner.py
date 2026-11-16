@@ -394,6 +394,21 @@ class AblationComparison:
 
 
 # =============================================================================
+# v3.4.9: L1/L2 trivial 口径判定辅助 (只读 base_config, 无副作用)
+# =============================================================================
+
+def _base_module_switches(base_config: Any) -> Dict[str, bool]:
+    """读取 base_config 的模块开关 (None = 全启用)."""
+    return dict(getattr(base_config, 'module_enabled', None) or {})
+
+
+def _base_ortho_active(base_config: Any) -> bool:
+    """base_config 是否真正启用正交化 (有配置且 enabled=True)."""
+    ortho = getattr(base_config, 'orthogonalization', None)
+    return bool(ortho is not None and getattr(ortho, 'enabled', False))
+
+
+# =============================================================================
 # E2-T5 ~ E2-T8: AblationRunner 核心引擎
 # =============================================================================
 
@@ -894,6 +909,9 @@ class AblationRunner:
         - L1_scaler_off
         - L1_neutralizer_off
         - L1_orthogonalizer_off (M3 修正: 走 ortho_enabled, 不走 module_enabled)
+
+        v3.4.9: trivial 按 base_config 实跑口径判定; 外部 b3_full_result
+        的开关口径由调用方负责, runner 只提示不校验.
         """
         results = []
 
@@ -902,6 +920,28 @@ class AblationRunner:
         extra_kwargs = {}
         if market_cap_data is not None:
             extra_kwargs['market_cap_data'] = market_cap_data
+
+        # v3.4.9: trivial 按 base_config 实跑口径判定 —
+        # base 已关闭的模块 / 未启用正交化时, 对应臂与 B3 同口径,
+        # 必须退出 BH-FDR 分母.
+        base_modules = _base_module_switches(self.base_config)
+        base_ortho = _base_ortho_active(self.base_config)
+        degraded_arms = [
+            f'L1_{module}_off'
+            for module in ('imputer', 'winsorizer', 'scaler', 'neutralizer')
+            if not base_modules.get(module, True)
+        ]
+        if not base_ortho:
+            degraded_arms.append('L1_orthogonalizer_off')
+        if degraded_arms:
+            logger.warning(
+                "run_l1: 以下臂与 B3 同口径 (base_config 未启用正交化或已关闭"
+                "对应模块), 已标记为 trivial: %s", ", ".join(degraded_arms))
+        if b3_full_result is not None:
+            logger.warning(
+                "run_l1: 传入外部 b3_full_result — 其 module_enabled / "
+                "orthogonalization 未校验 (由调用方负责); 若与 base_config "
+                "口径不同, trivial 标记可能反转")
 
         # B3_full 参照
         if b3_full_result is not None:
@@ -918,8 +958,11 @@ class AblationRunner:
             config = AblationConfig(
                 name=f'L1_{module}_off',
                 layer='L1',
-                module_enabled={module: False},
+                # v3.4.9: 在 base 之上合并覆盖, 不再整体替换 —
+                # 避免把 base 已关闭的其他模块重新打开 (归因污染).
+                module_enabled={**base_modules, module: False},
                 baseline_level='B3',  # 基于 B3 管线
+                _is_trivial=not base_modules.get(module, True),
             )
             results.append(self.run_single(
                 config, factor_data, fwd_returns, industry_data,
@@ -928,11 +971,13 @@ class AblationRunner:
         # ortho 关闭: M3 修正 — OrthogonalizerAdapter 读 OrthogonalizationConfig.enabled,
         # 不走 module_enabled['orthogonalizer'] (adapters.py:796, ADR-020).
         # 通过 ortho_enabled=False 在 run_single/_run_pipeline 中关闭正交化.
+        # v3.4.9: base 未启用正交化时该臂与 B3 同口径 → trivial.
         ortho_config = AblationConfig(
             name='L1_orthogonalizer_off',
             layer='L1',
             ortho_enabled=False,
             baseline_level='B3',
+            _is_trivial=not base_ortho,
         )
         results.append(self.run_single(
             ortho_config, factor_data, fwd_returns, industry_data,
@@ -956,9 +1001,13 @@ class AblationRunner:
 
         返回 2 个 AblationResult:
         - L1_dynamic_ref:   dynamic_ab, 中性化 + AR 全开 (参照)
-        - L1_decoupler_off: dynamic_ab, module_enabled={'decoupler': False}
+        - L1_decoupler_off: dynamic_ab, module_enabled=base 开关合并 'decoupler': False
 
         dynamic_ref_result 提供时按 identity 复用, 只运行实验臂.
+
+        v3.4.9 R-1: off 臂在 base 之上合并覆盖 (不再整体替换) —
+        与参照臂 (继承 base_config.module_enabled) 除 decoupler 外
+        口径一致, 避免把 base 已关闭的其他模块重新打开 (归因污染).
         """
         results: List[AblationResult] = []
 
@@ -984,7 +1033,9 @@ class AblationRunner:
             name='L1_decoupler_off',
             layer='L1',
             routing_mode='dynamic',
-            module_enabled={'decoupler': False},
+            # v3.4.9 R-1: 合并 base 开关 (与 run_l1 模块臂同语义)
+            module_enabled={
+                **_base_module_switches(self.base_config), 'decoupler': False},
             baseline_level='B3',
         )
         results.append(self.run_single(
@@ -1006,11 +1057,15 @@ class AblationRunner:
         返回 2 个 AblationResult (b3_full_result 提供时追加为第 3 个参照):
         - L2_unified (统一横截面秩管道, 默认)
         - L2_dynamic (整臂 A/B 动态管道)
+
+        v3.4.9: L2_unified 与 B3 同口径 (routing_mode='full' 与 'unified'
+        均注入 pipeline_mode='unified'), 标记 trivial 退出 BH-FDR 分母.
         """
         results = []
+        # v3.4.9: (臂名, routing_mode, trivial) — 默认口径臂不计入 BH 分母.
         routing_configs = [
-            ('L2_unified', 'unified'),
-            ('L2_dynamic', 'dynamic'),
+            ('L2_unified', 'unified', True),
+            ('L2_dynamic', 'dynamic', False),
         ]
 
         # v3.4.5: 转发市值数据 (此前参数被静默丢弃, 中性化只用行业);
@@ -1019,12 +1074,19 @@ class AblationRunner:
         if market_cap_data is not None:
             extra_kwargs['market_cap_data'] = market_cap_data
 
-        for name, mode in routing_configs:
+        if b3_full_result is not None:
+            logger.warning(
+                "run_l2: 传入外部 b3_full_result — 其 pipeline_mode 未校验 "
+                "(由调用方负责); 若不为 unified, L2_unified 与 L2_dynamic "
+                "的 trivial 标记均可能反转")
+
+        for name, mode, is_trivial in routing_configs:
             config = AblationConfig(
                 name=name,
                 layer='L2',
                 routing_mode=mode,
                 baseline_level='B3',
+                _is_trivial=is_trivial,
             )
             results.append(self.run_single(
                 config, factor_data, fwd_returns, industry_data,

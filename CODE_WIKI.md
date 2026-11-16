@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.4.8 | **构建日期**: 2026-11-15 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正)
+> **版本**: v3.4.9 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -1486,9 +1486,9 @@ Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
 
 | 方法 | 说明 |
 |------|------|
-| `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`); v3.4.4 起 `market_cap_data` 真正转发 |
+| `run_l1(...)` | L1 组件消融: B3 参照 + `imputer`/`winsorizer`/`scaler`/`neutralizer` 四臂 (走 `module_enabled`) + `orthogonalizer` 臂 (走 `ortho_enabled`); v3.4.4 起 `market_cap_data` 真正转发; v3.4.9 起臂的 `module_enabled` 在 base 开关之上**合并覆盖**, 并按 base 实跑口径判定 trivial (默认 base 下 `orthogonalizer` 臂 trivial + 一次退化告警); 外部 `b3_full_result` 传入时提示口径未校验 |
 | `run_l1_decoupler(...)` | **v3.4.4**: 仅 `dynamic_ab` 的 AR 解耦消融 — `L1_dynamic_ref` (AR 开) vs `L1_decoupler_off` (`module_enabled={'decoupler': False}`); 支持参照复用 |
-| `run_l2(...)` | L2 路由模式消融 (2 臂 + 可选 B3 参照); v3.4.5 起 `market_cap_data` 真正转发 |
+| `run_l2(...)` | L2 路由模式消融 (2 臂 + 可选 B3 参照); v3.4.5 起 `market_cap_data` 真正转发; v3.4.9 起 `L2_unified` 与 B3 同为 unified 口径 → 标 trivial 不占 BH-FDR 分母, 外部 B3 传入时提示口径未校验 |
 | `run_l3(...)` | L3 参数消融: v3.4.7 起仅 CUSUM k/h 诊断臂 (B3 + 6, 全部 `_is_trivial` / `_wiring_status='diagnostic'`); `market_cap_data` 统一转发 |
 | `run_l4_oat(...)` | L4 前置处理 OAT: v3.4.7 起 3 自由度 8 臂 (outlier 4 / missing `drop` 1 / neutralization 3) + B3; `outlier_method` 真实接线到 `static_outlier_*`; `neutralization='industry'` 臂**不转发**市值; v3.4.8 起 trivial 按**实跑口径**判定 — 无市值时 `industry+mktcap` 臂退化, 标记 trivial 并告警, 不占 BH-FDR 分母; 外部 `b3_full_result` + 无市值时追加口径未校验提示 |
 | `run_single(...)` | 单实验运行 (Baseline 阶梯 + 指标计算) |
@@ -2562,5 +2562,6 @@ class ThresholdDriftMonitor:
 | v3.4.2 | 2026-11-12 | 断点监控调度 (ADR-044): 新增 `BreakMonitorScheduler` (daily/weekly/monthly, 周期键幂等, 失败不推进, 数值/tz-aware 输入拒绝); `StructuralBreakMonitor` 统计逻辑零改动; 22 例 |
 | v3.4.3 | 2026-11-12 | Dynamic 组件可分离性 (ADR-045, O2): `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 不再连带关闭 AR; 默认路径逐位不变; 新增 15 例, 全量 1682 passed |
 | v3.4.4 | 2026-11-13 | AblationRunner `decoupler` 消融臂: 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂, 参照可复用); `_collect_rho_steps` 条件采集 decoupler; 报告按需追加列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 新增 11 例, 全量 1705 passed |
+| v3.4.9 | 2026-11-16 | L1/L2 trivial 口径清扫: `run_l2` 的 `L2_unified` (与 B3 同为 unified) 标 trivial; `run_l1` 模块臂改合并覆盖 + 按 base 正交化启用状态判定 `L1_orthogonalizer_off`; 退化告警 1 条 + 外部 B3 提示 2 条; 新增 7 例 |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

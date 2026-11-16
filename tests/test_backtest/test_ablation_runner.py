@@ -1144,6 +1144,8 @@ class TestL2Ablation:
             assert mock_cls.call_args[0][0].pipeline_mode == 'unified'
 
             # 'full' 为 v3.4.0 前默认口径 → 注入为 unified
+            # (v3.4.9: 本断言同时守护 run_l2 对 L2_unified 硬编码
+            #  _is_trivial=True 的前提 — full 与 unified 注入值必须相同)
             runner._run_pipeline(
                 AblationConfig(routing_mode='full'), factor_data, fwd_returns)
             assert mock_cls.call_args[0][0].pipeline_mode == 'unified'
