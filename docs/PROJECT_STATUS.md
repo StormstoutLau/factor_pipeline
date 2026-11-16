@@ -50,14 +50,15 @@ v3.4.7 (2026-11-15) L3/L4 旋钮接线审计 (去极值参数化 + 臂集合收�
 v3.4.8 (2026-11-15) 消融 trivial 判定按实跑口径 (退化臂排除 BH 分母)            [x]
 v3.4.9 (2026-11-16) L1/L2 trivial 口径清扫 (ortho / unified 臂退出 BH 分母)     [x]
 v3.4.10 (2026-11-16) HAC 检验 NaN 过滤 (成对 complete-case)                     [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.10
-v3.4.x (候选)     非生产路径解耦器数值修复 (可选, 当前仅告警)                  [ ]
+v3.4.11 (2026-11-16) 技术债小包 (alpha 清理 + mean_diff 缺失 + MAD 参数化)        [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.11
+v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.4.10 完成后)
+## §2. 当前待办 (v3.4.11 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -65,10 +66,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 (v3.4.0 – v3.4.10)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 (v3.4.0 – v3.4.11)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.11 | 技术债小包 | 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 成对 complete-case; `PipelineV2Config` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传到 detector; 非生产解耦器明确不修复 | — | 新增 5 passed; 定向 123 + 46 passed; `tests/test_backtest` 599 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1746 passed / 15 skipped / 0 failed |
 | v3.4.10 | HAC 检验 NaN 过滤 | `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case); 带宽/归一化用清洗后 n; `n<3` → `(0.0,1.0)`; debug 日志; docstring 声明 Equal Spacing 口径; `compare`/bootstrap 零改动 | — (ADR-036 评估链实现修复) | 新增 6 passed (E1-E6); `test_ablation_runner.py` 89 passed; `tests/test_backtest` 594 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1741 passed / 15 skipped / 0 failed |
 | v3.4.9 | L1/L2 trivial 口径清扫 | `run_l2`: `L2_unified` 与 B3 同为 unified → 标 trivial; `run_l1`: 模块臂从整体替换改为合并覆盖 + 按 base 正交化状态判定 `L1_orthogonalizer_off`; 退化告警 1 条 + 外部 B3 提示 2 条; 臂数/臂名/生产管线零改动 | ADR-036 消融归因前提 | 新增 7 passed (E1-E7); `tests/test_backtest` 588 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1735 passed / 15 skipped / 0 failed |
 | v3.4.8 | 消融 trivial 判定按实跑口径 | `run_l4_oat`: 无市值时 `industry+mktcap` 臂 `effective_option` 归一为 `industry` 后判定 trivial (退出 BH-FDR 分母 6→5) + 循环外一次退化告警 + 外部 `b3_full_result` 口径未校验提示; 臂数/臂名/生产管线零改动 | ADR-036 消融归因前提 | 新增 4 passed (T1-T4); 定向回归 113 passed; `tests/test_backtest` 580 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1728 passed / 15 skipped / 0 failed |

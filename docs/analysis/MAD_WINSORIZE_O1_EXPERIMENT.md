@@ -132,7 +132,7 @@ out       = smooth_clip(x, median − threshold·MAD, median + threshold·MAD)
 | # | 观察 | 影响 | 建议 |
 |---|------|------|------|
 | O1 | `ledoit_wolf_hac_test` 未过滤 NaN: LS/IC 序列各含 1 个 NaN → `compare` 的 HAC t/p 全为 NaN | 本实验的 HAC 判定失效, 已改用 NW 截距 t 补算; `compare_all` 会把 NaN p 值当 1.0, 不产生假阳性但丢失 HAC 结论 | ✅ **v3.4.10 已修复**: 入口成对 `isfinite` 掩码 (complete-case), 带宽/归一化用清洗后 n; 本实验的 NW 补算结论不受影响 |
-| O2 | MAD 阈值不可参数化: `ProcessingAdapter` 不传 `adaptive_threshold` / `max_outlier_frac`, 只能用默认自适应口径 | 无法做 3×MAD 与 2.5/3.5×MAD 的敏感性实验 | 如需敏感性, 在 `StaticFactorPipeline` 增加 `static_outlier_mad_threshold` |
+| O2 | MAD 阈值不可参数化: `ProcessingAdapter` 不传 `adaptive_threshold` / `max_outlier_frac`, 只能用默认自适应口径 | 无法做 3×MAD 与 2.5/3.5×MAD 的敏感性实验 | ✅ **v3.4.11 已参数化**: `PipelineV2Config.static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 透传到 detector (`adaptive_threshold=False` → 固定 3×MAD) |
 | O3 | 月频 11 期样本统计功效不足 | NW 与 bootstrap 结论冲突, 不可据此采纳 | 扩样本后再评估 |
 
 ---

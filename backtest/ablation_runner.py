@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 def ledoit_wolf_hac_test(
     returns_a: np.ndarray,
     returns_b: np.ndarray,
-    alpha: float = 0.05,
 ) -> Tuple[float, float]:
     """Ledoit-Wolf (2008) HAC 检验: H0: SR_a = SR_b
 
@@ -56,7 +55,6 @@ def ledoit_wolf_hac_test(
     Args:
         returns_a: 策略 a 的收益序列 (T,)
         returns_b: 策略 b 的收益序列 (T,)
-        alpha: 显著性水平
 
     Returns:
         (t_stat, p_value): HAC t 统计量 + 双侧 p 值
@@ -192,6 +190,15 @@ def mean_diff_hac_statsmodels(
     T = min(len(returns_a), len(returns_b))
     returns_a = returns_a[:T]
     returns_b = returns_b[:T]
+
+    # v3.4.11: 成对 complete-case, 与 ledoit_wolf_hac_test 同口径.
+    finite_mask = np.isfinite(returns_a) & np.isfinite(returns_b)
+    n_valid = int(finite_mask.sum())
+    if n_valid < 3:
+        return 0.0, 1.0
+    returns_a = returns_a[finite_mask]
+    returns_b = returns_b[finite_mask]
+    T = n_valid
 
     if maxlags is None:
         maxlags = max(1, int(4 * (T / 100) ** (2 / 9)))
@@ -1365,7 +1372,7 @@ class AblationRunner:
         exp_ls = experiment.ls_return_series
         ref_ls = reference.ls_return_series
         if len(exp_ls) > 0 and len(ref_ls) > 0:
-            t_stat_hac, p_value_hac = ledoit_wolf_hac_test(exp_ls, ref_ls, self.alpha)
+            t_stat_hac, p_value_hac = ledoit_wolf_hac_test(exp_ls, ref_ls)
         else:
             t_stat_hac, p_value_hac = 0.0, 1.0
 

@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.4.10 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤)
+> **版本**: v3.4.11 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -877,6 +877,13 @@ class PipelineV2Config:
     mixed_transformation_method: str = 'rank'
     mixed_target_distribution: str = 'normal'
 
+    # ── Static 去极值 (v3.4.7 参数化; v3.4.11 增补 detector 参数) ──
+    static_outlier_method: str = 'percentile'          # percentile/quantile/z_score/mad/iqr/...
+    static_outlier_percentile_lower: float = 1.0
+    static_outlier_percentile_upper: float = 99.0
+    static_outlier_adaptive_threshold: bool = True     # False → MAD/z_score 固定 3.0
+    static_outlier_max_outlier_frac: float = 0.05      # 自适应分位点 (仅 adaptive=True)
+
     # ── GARCH 白化 (Static, opt-in) ──
     static_enable_garch: bool = False
     static_garch_p: int = 1
@@ -1502,6 +1509,9 @@ Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
 > 掩码 (complete-case, 同时过滤 NaN/±Inf; 等价于 Datta & Du 2012 的
 > Equal Spacing 估计量), 带宽与归一化基于清洗后样本; 有效配对 < 3 返回
 > `(0.0, 1.0)`。`compare` / `compare_all` / bootstrap 零改动。
+
+> **v3.4.11 注**: `ledoit_wolf_hac_test` 移除未使用的 `alpha` 参数;
+> `mean_diff_hac_statsmodels` 采用与主检验相同的成对 complete-case 口径。
 
 ---
 
@@ -2569,5 +2579,6 @@ class ThresholdDriftMonitor:
 | v3.4.4 | 2026-11-13 | AblationRunner `decoupler` 消融臂: 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂, 参照可复用); `_collect_rho_steps` 条件采集 decoupler; 报告按需追加列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 新增 11 例, 全量 1705 passed |
 | v3.4.9 | 2026-11-16 | L1/L2 trivial 口径清扫: `run_l2` 的 `L2_unified` (与 B3 同为 unified) 标 trivial; `run_l1` 模块臂改合并覆盖 + 按 base 正交化启用状态判定 `L1_orthogonalizer_off`; 退化告警 1 条 + 外部 B3 提示 2 条; 新增 7 例 |
 | v3.4.10 | 2026-11-16 | HAC 检验 NaN 过滤: `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case, Equal Spacing), 带宽/归一化用清洗后 n; `n<3` 返回 `(0.0, 1.0)`; `compare`/bootstrap 零改动; 新增 6 例 |
+| v3.4.11 | 2026-11-16 | 技术债小包: 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 成对 complete-case; `PipelineV2Config` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传 detector; 非生产解耦器标注不修复 (ADR-043); 新增 5 例 |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

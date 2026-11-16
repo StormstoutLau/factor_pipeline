@@ -590,3 +590,55 @@ class TestPipelineOutlierWiring:
         pipe = pipeline._create_pipeline('static', neutralizer_params={})
         outlier_step = dict(pipe.steps)['outlier']
         assert outlier_step.method == 'mad'
+
+    # ── v3.4.11: MAD detector 参数透传 ──
+
+    def test_detector_params_default(self):
+        """v3.4.11 E3: 默认 adaptive_threshold=True / max_outlier_frac=0.05."""
+        from factor_pipeline.pipelines_v2 import (
+            PipelineV2Config, StaticFactorPipeline,
+        )
+
+        cfg = PipelineV2Config()
+        assert cfg.static_outlier_adaptive_threshold is True
+        assert cfg.static_outlier_max_outlier_frac == 0.05
+
+        pipe = StaticFactorPipeline(outlier_method='mad')
+        outlier_step = dict(pipe.steps)['outlier']
+        assert outlier_step._outlier_detector_kwargs == {
+            'adaptive_threshold': True,
+            'max_outlier_frac': 0.05,
+        }
+
+    def test_mad_adaptive_threshold_forwarded(self):
+        """v3.4.11 E4: adaptive_threshold=False + 自定义 frac 传到 adapter."""
+        from factor_pipeline.pipelines_v2 import StaticFactorPipeline
+
+        pipe = StaticFactorPipeline(
+            outlier_method='mad',
+            outlier_adaptive_threshold=False,
+            outlier_max_outlier_frac=0.02,
+        )
+        outlier_step = dict(pipe.steps)['outlier']
+        assert outlier_step._outlier_detector_kwargs == {
+            'adaptive_threshold': False,
+            'max_outlier_frac': 0.02,
+        }
+
+    def test_create_pipeline_injects_detector_params(self):
+        """v3.4.11 E5: _create_pipeline('static') 转发两个 detector 字段."""
+        from factor_pipeline.pipelines_v2 import (
+            PipelineV2Config, FactorProcessingPipelineV2,
+        )
+
+        cfg = PipelineV2Config()
+        cfg.static_outlier_method = 'mad'
+        cfg.static_outlier_adaptive_threshold = False
+        cfg.static_outlier_max_outlier_frac = 0.03
+        pipeline = FactorProcessingPipelineV2(cfg)
+        pipe = pipeline._create_pipeline('static', neutralizer_params={})
+        outlier_step = dict(pipe.steps)['outlier']
+        assert outlier_step._outlier_detector_kwargs == {
+            'adaptive_threshold': False,
+            'max_outlier_frac': 0.03,
+        }

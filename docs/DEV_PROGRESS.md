@@ -41,7 +41,8 @@ v3.4.7 (2026-11-15) L3/L4 旋钮接线审计 (去极值参数化 + 臂集合收�
 v3.4.8 (2026-11-15) 消融 trivial 判定按实跑口径 (无市值退化臂排除 BH 分母), 缓存代际不变
 v3.4.9 (2026-11-16) L1/L2 trivial 口径清扫 (ortho / unified 臂退出 BH 分母), 缓存代际不变
 v3.4.10 (2026-11-16) HAC 检验 NaN 过滤 (成对 complete-case), 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.10
+v3.4.11 (2026-11-16) 技术债小包 (alpha 清理 + mean_diff 缺失 + MAD 参数化), 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.11
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估计
 ```
 
@@ -65,6 +66,8 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点 + 面板稳健估
 > v3.4.9 模块影响: `backtest/ablation_runner.py` `run_l2` 的 `L2_unified` 与 B3 同为 unified 口径 → 标 `_is_trivial=True`; `run_l1` 模块臂由 `{module: False}` 整体替换改为 `{**base, module: False}` 合并覆盖, 并按 `base_config.module_enabled` / `orthogonalization.enabled` 实跑口径判定 trivial (默认 base 下仅 `L1_orthogonalizer_off` trivial); 退化臂一次告警 + 外部 B3 提示各 1 条; 生产管线与臂集合零变更。
 
 > v3.4.10 模块影响: `backtest/ablation_runner.py` `ledoit_wolf_hac_test` 入口新增成对联合 `isfinite` 掩码 (complete-case), 带宽与归一化改用清洗后样本; 有效配对 < 3 返回 `(0.0, 1.0)`; `compare` / `compare_all` / bootstrap 零改动; 生产管线与臂集合零变更。
+
+> v3.4.11 模块影响: `backtest/ablation_runner.py` 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 增加成对 complete-case; `pipelines_v2.py` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传到 `ProcessingAdapter` (默认 = detector 默认, 零行为变更); 非生产解耦器数值修复标注不修复 (ADR-043)。
 
 ### §2.1 核心编排层
 

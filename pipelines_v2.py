@@ -473,6 +473,9 @@ class PipelineV2Config:
     static_outlier_method: str = 'percentile'
     static_outlier_percentile_lower: float = 1.0
     static_outlier_percentile_upper: float = 99.0
+    # v3.4.11: MAD/自适应类 detector 参数 (默认 = SmartOutlierDetector 默认, 零行为变更)
+    static_outlier_adaptive_threshold: bool = True
+    static_outlier_max_outlier_frac: float = 0.05
     mixed_transformation_method: str = 'rank'
     mixed_target_distribution: str = 'normal'
     # 静态因子是否启用GARCH白化（默认关闭）
@@ -708,7 +711,9 @@ class StaticFactorPipeline(_BaseFactorPipeline):
                  module_enabled: Optional[Dict[str, bool]] = None,
                  outlier_method: str = 'percentile',
                  outlier_percentile_lower: float = 1.0,
-                 outlier_percentile_upper: float = 99.0):
+                 outlier_percentile_upper: float = 99.0,
+                 outlier_adaptive_threshold: bool = True,
+                 outlier_max_outlier_frac: float = 0.05):
         super().__init__()
         me = module_enabled or {}
         tp = transformation_params or {}
@@ -724,6 +729,12 @@ class StaticFactorPipeline(_BaseFactorPipeline):
             outlier_kwargs = {
                 'percentile_lower': outlier_percentile_lower,
                 'percentile_upper': outlier_percentile_upper,
+            }
+        else:
+            # v3.4.11: 非分位方法透传 detector 自适应参数 (默认值 = detector 默认)
+            outlier_kwargs = {
+                'adaptive_threshold': outlier_adaptive_threshold,
+                'max_outlier_frac': outlier_max_outlier_frac,
             }
         self.steps = [
             ('imputer', ImputerAdapter(strategy='ffill_ts', enabled=me.get('imputer', True))),
@@ -1346,6 +1357,8 @@ class FactorProcessingPipelineV2:
                 outlier_method=self.config.static_outlier_method,
                 outlier_percentile_lower=self.config.static_outlier_percentile_lower,
                 outlier_percentile_upper=self.config.static_outlier_percentile_upper,
+                outlier_adaptive_threshold=self.config.static_outlier_adaptive_threshold,
+                outlier_max_outlier_frac=self.config.static_outlier_max_outlier_frac,
             )
         elif pipe_type == 'dynamic':
             return DynamicFactorPipeline(

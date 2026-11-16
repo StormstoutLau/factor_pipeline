@@ -339,6 +339,39 @@ class TestLedoitWolfHAC:
         assert comp.p_value_hac == pytest.approx(p_ref, rel=1e-12)
 
 
+class TestMeanDiffHACMissing:
+    """v3.4.11: mean_diff_hac_statsmodels 缺失值口径 (与主检验同族)"""
+
+    def test_nan_pairwise(self):
+        """v3.4.11 E1: 不同位置 NaN → 联合掩码配对"""
+        np.random.seed(17)
+        n = 120
+        a = np.random.randn(n) * 0.01 + 0.001
+        b = np.random.randn(n) * 0.01 + 0.002
+        a[15] = np.nan
+        b[70] = np.nan
+
+        t_nan, p_nan = mean_diff_hac_statsmodels(a, b)
+
+        assert np.isfinite(t_nan)
+        assert np.isfinite(p_nan)
+
+        mask = np.isfinite(a) & np.isfinite(b)
+        t_ref, p_ref = mean_diff_hac_statsmodels(a[mask], b[mask])
+        assert t_nan == pytest.approx(t_ref, rel=1e-12)
+        assert p_nan == pytest.approx(p_ref, rel=1e-12)
+
+    def test_insufficient_pair_returns_no_evidence(self):
+        """v3.4.11 E2: 有效配对 <3 → (0.0, 1.0)"""
+        a = np.array([0.010, 0.020, np.nan, np.nan])
+        b = np.array([0.011, 0.019, np.nan, 0.030])
+
+        t_stat, p_value = mean_diff_hac_statsmodels(a, b)
+
+        assert t_stat == 0.0
+        assert p_value == 1.0
+
+
 # =============================================================================
 # E2-T2: Circular Block Bootstrap
 # =============================================================================

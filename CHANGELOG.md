@@ -1,5 +1,58 @@
 # 开发日志 (Changelog)
 
+## v3.4.11 — 技术债小包 (已实施, 2026-11-16)
+
+### 概览
+
+清理 v3.4.10 与 MAD 实验留下的三项独立技术债; 另有一项路演候选经核实后**明确不修复**。
+
+### 核心产出
+
+- **T1**: `ledoit_wolf_hac_test` 移除从未被读取的 `alpha` 参数;
+  `compare` 调用同步改为两参数 (显著性判定仍由 `compare` 的 `self.alpha` 完成)
+- **T2**: `mean_diff_hac_statsmodels` 增加成对联合 `isfinite` 掩码,
+  有效配对 `<3` 返回 `(0.0, 1.0)`, `maxlags` 基于清洗后样本 —
+  与 v3.4.10 主检验同口径 (该函数仅测试引用)
+- **T3**: MAD / 自适应类去极值参数化 —
+  `PipelineV2Config` 新增 `static_outlier_adaptive_threshold=True` /
+  `static_outlier_max_outlier_frac=0.05`, 经 `StaticFactorPipeline` 透传到
+  `ProcessingAdapter`; 默认值与 `SmartOutlierDetector` 默认逐值一致 → 零行为变更;
+  `adaptive_threshold=False` 即固定 3×MAD
+- **T4 (不实施)**: 非生产路径解耦器数值修复 — 相关类已由 ADR-043 弃用,
+  零生产调用、零测试覆盖, 修复与弃用决策冲突
+- 项目版本 **3.4.11** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | T1 移除 `alpha`; T2 `mean_diff_hac_statsmodels` 成对过滤 |
+| `pipelines_v2.py` | T3 新增 2 个 config 字段 + `StaticFactorPipeline` 2 个参数 + `_create_pipeline` 转发 |
+| `tests/test_backtest/test_ablation_runner.py` | 新增 `TestMeanDiffHACMissing` (E1-E2) |
+| `tests/test_backtest/test_ablation_knob_wiring.py` | 新增 3 例 (E3-E5) |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `docs/` | EXECUTION / CHECKLIST / CONSISTENCY_REVIEW / audit / PROJECT_STATUS / DEV_PROGRESS |
+| `CODE_WIKI.md` | 头部版本 + 版本历史 + 配置字段 |
+| `docs/analysis/MAD_WINSORIZE_O1_EXPERIMENT.md` | §6 O2 标注已参数化 |
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | E1-E5 (mean_diff 缺失 / detector 参数透传) | 新增 **5 passed** (Red: 5 failed / 3 passed → Green: **8 passed**, 含既有 3 例) |
+| 定向回归 | `test_ablation_runner.py` + `test_ablation_knob_wiring.py` | **123 passed** |
+| 定向回归 | `test_pipelines_v2.py` + `test_adapters` + `test_ablation_decoupler_arm.py` | **46 passed** |
+| 定向回归 | `tests/test_backtest` | **599 passed / 8 skipped** (573.34s; 基线 594 → +5) |
+| 全量回归 | `tests/` | **1746 passed / 15 skipped / 0 failed** (1176.01s; 基线 1741 → +5) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **6/6** |
+
+### 兼容性
+
+- `ledoit_wolf_hac_test` 移除未使用参数 (仓内唯一调用点已同步);
+- `mean_diff_hac_statsmodels` 仅测试路径, 无生产影响;
+- T3 为纯新增可选字段, 默认值 = detector 默认 → 生产输出逐位不变;
+- 缓存不失效。
+
 ## v3.4.10 — HAC 检验 NaN 过滤 (已实施, 2026-11-16)
 
 ### 概览
