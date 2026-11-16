@@ -22,10 +22,6 @@
 
 换句话说,这不只是一套代码,而是一种**认识论立场**:不信任因子、不信任模型、不信任自己的判断,然后用统计工具精确测量"在多大程度上可以相信"。
 
-> **延伸阅读** (作者博客):
-> - 中文: [草台班子观察笔记](https://github.com/StormstoutLau/StormstoutLau.github.io/blob/main/posts/10-%E8%8D%89%E5%8F%B0%E7%8F%AD%E5%AD%90%E8%A7%82%E5%AF%9F%E7%AC%94%E8%AE%B0.md)
-> - English: [Potemkin Village Notes](https://github.com/StormstoutLau/StormstoutLau.github.io/blob/main/posts/10-potemkin-village-notes.md)
-
 ---
 
 ## 目录

@@ -23,10 +23,6 @@ Most factor processing frameworks assume "the factor is valid; let's process it.
 
 In other words, this is not just code—it is an **epistemological stance**: distrust factors, distrust models, distrust your own judgment, then use statistical tools to precisely measure "to what extent can you believe."
 
-> **Further Reading** (author's blog):
-> - English: [Potemkin Village Notes](https://github.com/StormstoutLau/StormstoutLau.github.io/blob/main/posts/10-potemkin-village-notes.md)
-> - 中文: [草台班子观察笔记](https://github.com/StormstoutLau/StormstoutLau.github.io/blob/main/posts/10-%E8%8D%89%E5%8F%B0%E7%8F%AD%E5%AD%90%E8%A7%82%E5%AF%9F%E7%AC%94%E8%AE%B0.md)
-
 ---
 
 > **Note**: This English version is auto-translated. The Chinese [README.md](README.md) is the authoritative source.
