@@ -467,3 +467,136 @@ class TestPremiumEstimatorErrors:
         assert np.isfinite(res['beta_t']).all()
         # 精确拟合 → 残差仅剩浮点噪声; 旧实现 (÷0) 会得到 NaN
         assert (res['beta_se'] < 1e-12).all()
+
+
+class TestBreakpointDetectorMultiple:
+    """v3.5.0 Bai-Perron 多断点 (detect_multiple) — E1-E8"""
+
+    @staticmethod
+    def _series(T=120, breaks=(), means=(0.0,), seed=7, sigma=1.0):
+        """合成序列: 段均值 + 高斯噪声."""
+        rng = np.random.default_rng(seed)
+        y = rng.normal(0.0, sigma, T)
+        edges = [0] + list(breaks) + [T]
+        assert len(edges) - 1 == len(means)
+        for j, (a, b) in enumerate(zip(edges[:-1], edges[1:])):
+            y[a:b] += means[j]
+        return y
+
+    def test_e1_single_breakpoint(self):
+        """E1: T=120 单断点 (t=50) → n_breaks=1, 位置误差 <= 3"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._series(T=120, breaks=(50,), means=(0.0, 0.8))
+        res = BreakpointDetector().detect_multiple(y, m_max=3)
+        assert res['n_breaks'] == 1, res['bic']
+        assert res['has_breakpoint'] is True
+        assert abs(res['breakpoints'][0] - 50) <= 3, res['breakpoints']
+        assert len(res['segment_means']) == 2
+        assert res['n_valid'] == 120
+
+    def test_e2_two_breakpoints(self):
+        """E2: T=120 两断点 (t=40/80) → n_breaks=2, 误差 <= 5"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._series(T=120, breaks=(40, 80), means=(0.0, 0.8, -0.5),
+                         seed=11, sigma=0.6)
+        res = BreakpointDetector().detect_multiple(y, m_max=4)
+        assert res['n_breaks'] == 2, res['bic']
+        b1, b2 = res['breakpoints']
+        assert abs(b1 - 40) <= 5 and abs(b2 - 80) <= 5, res['breakpoints']
+        assert len(res['segment_means']) == 3
+        assert len(res['segment_bounds']) == 3
+
+    def test_e3_noise_selects_zero(self):
+        """E3: 纯噪声 → BIC 选 0 断点"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._series(T=120, seed=23)
+        res = BreakpointDetector().detect_multiple(y, m_max=3)
+        assert res['n_breaks'] == 0, (res['bic'], res['breakpoints'])
+        assert res['has_breakpoint'] is False
+        assert res['breakpoints'] == []
+        assert len(res['segment_means']) == 1
+
+    def test_e4_criteria_monotone_and_coverage(self):
+        """E4: SSR 随 m 单调非增; bic/lwz 覆盖 m=0..m_cap; best 在范围内"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._series(T=120, breaks=(40, 80), means=(0.0, 0.5, -0.3), seed=11)
+        res = BreakpointDetector().detect_multiple(y, m_max=4)
+        ks = sorted(res['ssr'])
+        assert ks == list(range(0, 5)), ks
+        assert all(res['ssr'][ks[i + 1]] <= res['ssr'][ks[i]] + 1e-12
+                   for i in range(len(ks) - 1))
+        for key in ('bic', 'lwz'):
+            assert sorted(res[key]) == ks
+            assert all(np.isfinite(res[key][k]) for k in ks)
+        assert res['best_bic_m'] in ks
+        assert res['best_lwz_m'] in ks
+
+        # G6: m_max 自动下调 (T=40, h=6 → m_cap = 40//6 - 1 = 5)
+        y40 = self._series(T=40, seed=3)
+        res40 = BreakpointDetector().detect_multiple(y40, m_max=10)
+        assert res40['m_max'] == 5, res40['m_max']
+        assert sorted(res40['ssr']) == list(range(0, 6))
+
+    def test_e5_dp_matches_bruteforce(self):
+        """E5: DP 全局最优与穷举逐位一致 (T=40, m<=2)"""
+        from itertools import combinations
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        T = 40
+        y = self._series(T=T, breaks=(13, 27), means=(0.0, 0.6, -0.4), seed=5)
+        det = BreakpointDetector(min_segment=0.15)
+        h = max(5, int(T * det.min_segment))
+        res = det.detect_multiple(y, m_max=2)
+
+        def ssr_of(cuts):
+            edges = [0] + list(cuts) + [T]
+            return float(sum(np.sum((y[a:b] - y[a:b].mean()) ** 2)
+                             for a, b in zip(edges[:-1], edges[1:])))
+
+        def feasible(cuts):
+            edges = [0] + list(cuts) + [T]
+            return all(b - a >= h for a, b in zip(edges[:-1], edges[1:]))
+
+        for m in (1, 2):
+            best = min(ssr_of(c) for c in combinations(range(1, T), m) if feasible(c))
+            assert abs(res['ssr'][m] - best) <= 1e-8 * max(1.0, abs(best)), (m, res['ssr'][m], best)
+
+    def test_e6_short_sample_degenerate(self):
+        """E6: T=20 (<30) → 12 键退化, 不抛异常"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        res = BreakpointDetector().detect_multiple(np.full(20, 0.01), m_max=3)
+        assert res['n_breaks'] == 0 and res['has_breakpoint'] is False
+        assert res['breakpoints'] == []
+        assert np.isnan(res['segment_means'][0])
+        assert np.isnan(res['ssr'][0]) and np.isnan(res['bic'][0])
+        assert res['n_valid'] == 20
+        assert res['trimming'] == 0
+
+    def test_e7_nan_index_mapping(self):
+        """E7: 含 NaN 输入 → 断点索引映射回原序列"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._series(T=60, breaks=(25,), means=(0.0, 1.5), seed=31, sigma=0.4)
+        x = np.full(70, np.nan)
+        x[5:65] = y          # 有效点原索引 5..64; y 的断点 25 → 原索引 30
+        res = BreakpointDetector().detect_multiple(x, m_max=1)
+        assert res['n_valid'] == 60
+        assert res['n_breaks'] == 1, res['bic']
+        bp = res['breakpoints'][0]
+        assert 5 <= bp <= 64
+        assert abs(bp - 30) <= 4, bp
+        assert res['segment_bounds'][0][0] == 5
+        assert res['segment_bounds'][-1][1] == 65
+
+    def test_e8_consistent_with_single_detect(self):
+        """E8: 同序列 m=1 与 detect 断点差 <= 1; DP 的 SSR 不劣于网格最优"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._series(T=120, breaks=(50,), means=(0.0, 1.2), seed=41)
+        det = BreakpointDetector()
+        single = det.detect(y)
+        multi = det.detect_multiple(y, m_max=1)
+        assert single['has_breakpoint'] is True
+        assert multi['n_breaks'] == 1
+        assert abs(single['breakpoint_idx'] - multi['breakpoints'][0]) <= 1
+        bp = single['breakpoint_idx']
+        a, b = y[:bp], y[bp:]
+        ssr_grid = float(np.sum((a - a.mean()) ** 2) + np.sum((b - b.mean()) ** 2))
+        assert multi['ssr'][1] <= ssr_grid + 1e-12

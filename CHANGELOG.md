@@ -1,5 +1,60 @@
 # 开发日志 (Changelog)
 
+## v3.5.0 — 多断点支持: Bai-Perron 全局最小 SSR + Stata 对拍 (已实施, 2026-11-16)
+
+### 概览
+
+`BreakpointDetector` 新增 `detect_multiple()` — 以动态规划求**全局最小 SSR**
+(Bai & Perron 1998 §3.2), 用 BIC (Yao 1988) 主 / LWZ (Liu-Wu-Zidek 1997) 对照选段数。
+`detect()`（单断点网格 sup-F）与 `diagnose()` **零改动**，默认标签路径不变。
+
+断点结果已与主控站 **Stata 18.0 MP** 的官方 `regress`（`e(rss)` / `test`）逐值对拍：
+**46 项全 PASS**。实测该 Stata 安装**无**官方 Bai-Perron 命令（`regress, breakpoints()` r(198) /
+`estat breakpoints` r(301)），故对拍以官方 OLS 数值库为锚，而非第三方包。
+
+### 核心产出
+
+- `detect_multiple(lambda_hat, m_max=None)` → **13 键**: `has_breakpoint` / `n_breaks` /
+  `breakpoints` / `segment_means` / `segment_bounds` / `ssr` / `bic` / `lwz` /
+  `best_bic_m` / `best_lwz_m` / `trimming` / `m_max` / `n_valid`
+- DP O(m·T²)；`ssr_mat` 用前缀和 `ssr(i,j)=Σy²-(Σy)²/(j-i)`
+- **不硬编码** Bai-Perron sup-F 临界值表（无可核实副本），`has_breakpoint := n_breaks > 0`
+- trimming `h = max(5, int(0.15T))` 与 `detect` 完全一致；`m_max` 默认 5 并自动下调
+- T<30 / trimming 不可行 → 退化结果（不抛异常），延续 v3.4.13 DEFECT-1 契约
+- 版本 **3.5.0**（6 锚点）；缓存代际不变 **`v2.3.0-cache`**；无新依赖
+
+### Stata 对拍 (46/46 PASS)
+
+| 级 | 内容 | 误差 |
+|----|------|------|
+| L1 | 单断点 sup-F（官方 `regress + test`） | F 相对 1.06e-8；argmax 断点完全相同 |
+| L2 | m=0/1/2 全局最小 SSR + 断点集（循环 `regress` 读 `e(rss)`） | SSR 相对 ≤8.5e-9；断点逐点相同 |
+| L3 | BIC / LWZ（用 Stata 侧 SSR） | 绝对 ≤8.5e-9；`best_*_m` 相同 |
+
+样本: `syn0` 纯噪声 (→m=0) / `syn1` 单断点 (→m=1) / `syn2` 两断点 (→m=2, [40,80]) /
+`real` A 股 `turnover_1m` β_t (T=72, **BIC/LWZ 均选 m=0 — 无断点**; [19,37] 为强制
+m=2 时的最优位置, 两侧相同。异构复审已更正初版「检出 2 断点」的误读)。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_health/__init__.py` | 新增 `detect_multiple` + 6 私有方法 (+176 行) |
+| `tests/unit/test_layer3_factor_health.py` | 新增 `TestBreakpointDetectorMultiple` (E1-E8, +133 行) |
+| `scripts/stata_breakpoint_crosscheck.py` | 新增 Stata 对拍脚本 (384 行) |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `DECISIONS.md` | ADR-046 |
+| `docs/` | RESEARCH / DESIGN(private) / EXECUTION / CHECKLIST / CONSISTENCY / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI |
+
+### 遗留
+
+- 多断点**未接入** `diagnose`（默认仍单断点）；接入需单独评估标签语义；
+- m≥3 未做 Stata 对拍（由 Python 内部穷举 E5 补足，DP 递推同构）；
+- **假阳性局限（异构复审量化）**：纯噪声下 BIC 选 m>0 的频率 44% (T=72) / 36% (T=120)，
+  LWZ (c0=0.1) 达 89%/75% 且与「LWZ 保守」预期相反 — `n_breaks>0` 在短样本上不可直接
+  解读为断点存在，LWZ 仅作对照不可单独引用；
+- NaN 间隙语义：两段同分布被 NaN 隔开时 54% 概率误报断点（拼接处），断续 β_t 需先检查连续性。
+
 ## v3.4.13 — DEFECT-1: BreakpointDetector 短样本退化 (已实施, 2026-11-16)
 
 ### 概览

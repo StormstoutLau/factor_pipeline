@@ -46,7 +46,8 @@
 | ADR-043 | 非生产路径解耦器弃用 — 保留导入 + 构造告警 | v3.4.1, 2026-11-11 |
 | ADR-044 | 断点监控调度 — 节拍器注入, 幂等 + 失败不推进 | v3.4.2, 2026-11-12 |
 | ADR-045 | Dynamic 组件可分离性 — 中性化与 AR 解耦独立开关 | v3.4.3, 2026-11-12 |
-| ADR-046 起 | 未占用 | — |
+| ADR-046 | 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对拍 | v3.5.0, 2026-11-16 |
+| ADR-047 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3156,6 +3157,94 @@ v3.4.0 调研发现 (代码事实 A8): `DynamicFactorPipeline` 的
 映射; 恢复 `test_module_enabled_all_false` 的键集合; 删除 2 个新测试文件;
 版本锚点 6 处回 3.4.2; 回退 ADR/CHANGELOG/README/PROJECT_STATUS/ARCHITECTURE/
 DEV_PROGRESS 的 v3.4.3 条目。无数据迁移, 缓存代际不变。
+
+---
+
+## ADR-046: 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对拍 (v3.5.0)
+
+**日期**: 2026-11-16
+**状态**: 已实施 (2026-11-16, v3.5.0)
+**优先级**: P1
+**关联测试**: `tests/unit/test_layer3_factor_health.py::TestBreakpointDetectorMultiple` (E1-E8)
+**关联脚本**: `scripts/stata_breakpoint_crosscheck.py` (46 项对拍全 PASS)
+**关联文档**: [调研](docs/research/RESEARCH_V3.5.0_MULTIPLE_BREAKPOINTS.md) / [设计](docs/private/DESIGN_V3.5.0_MULTIPLE_BREAKPOINTS.md) / [实施](docs/EXECUTION_V3.5.0_MULTIPLE_BREAKPOINTS.md) / [审计](docs/audit/2026-11-16-v3.5.0-multiple-breakpoints-audit.md) / [v3.3.0 §3.4 否决记录](docs/private/DESIGN_DISCUSSION_V3.3.0.md)
+
+### 背景
+
+`BreakpointDetector.detect` (v3.3.0) 只做**单断点网格 sup-F**; v3.3.0 §3.4 明确否决
+Bai-Perron 多断点, 理由为「BIC 选段数倾向过拟合 / 单断点够用 / 期望验证更诚实」。
+v3.4.13 修复短样本退化 (DEFECT-1) 后, 该模块的契约已稳定, 可以在**不改变默认行为**的
+前提下补齐多断点能力。
+
+同时, 用户要求「断点结果公式与主控站 Stata 对比校验」。实测发现:
+Stata 18.0 MP **无**官方 Bai-Perron 命令 — `regress, breakpoints()` 报 r(198),
+`estat breakpoints` 报 r(301), 且无 `pystata` 集成。因此对拍改走 Stata **官方 `regress`**
+（`e(rss)` / `test` 的 F 分布）作为数值锚, 而非第三方包。
+
+### 决策
+
+1. **新增** `BreakpointDetector.detect_multiple(lambda_hat, m_max=None)`;
+   `detect()` / `diagnose()` **零改动**, 默认标签路径不变;
+2. 模型与 `detect` 同族: 纯均值分段 `y_t = μ_j + ε_t` (j=1..m+1), 与 Stata
+   `regress y, breakpoints(m)` 的无协变量场景对应;
+3. 估计: **动态规划求全局最小 SSR** (Bai & Perron 1998 §3.2), 复杂度 O(m·T²);
+   预计算 `ssr_mat` 用前缀和 `ssr(i,j)=Σy²-(Σy)²/(j-i)`;
+4. 选段数: **BIC 主 + LWZ 对照**双报告 —
+   `BIC(m)=ln(SSR_m/T)+(m+1)ln(T)/T` (Yao 1988);
+   `LWZ(m)=ln(SSR_m/T)+(m+1)·0.1·ln(T)^2.1/T` (Liu-Wu-Zidek 1997; Bai-Perron 2003 §5.2);
+5. `has_breakpoint := n_breaks > 0` (BIC 选定); **不硬编码** Bai-Perron sup-F 临界值表;
+6. trimming `h = max(5, int(0.15·T))` 与 `detect` 完全一致; `m_max` 默认 5,
+   并自动下调至 `T//h - 1`;
+7. T<30 或 trimming 不可行 → 12 键退化结果, 不抛异常 (延续 v3.4.13 DEFECT-1 契约);
+8. 断点索引映射回**原序列** (`np.where(valid)[0]`), 与 `detect.breakpoint_idx` 同义;
+9. 输出 13 键: `has_breakpoint / n_breaks / breakpoints / segment_means /
+   segment_bounds / ssr / bic / lwz / best_bic_m / best_lwz_m / trimming / m_max / n_valid`;
+10. Stata 对拍脚本独立在 `scripts/`, 不进入生产模块; Stata 缺失时 SKIP (退出码 0);
+11. 版本 **3.5.0** (semver minor); 缓存代际 `v2.3.0-cache` 不变; 无新依赖。
+
+### Stata 对拍证据 (2026-11-16 实测)
+
+| 级 | 内容 | 结果 |
+|----|------|------|
+| L1 | 单断点 sup-F (`regress + test` 官方) | F 相对误差 **1.06e-8**; argmax 断点**完全相同** |
+| L2 | m=0/1/2 全局最小 SSR + 断点集 (循环 `regress`, 读 `e(rss)`) | SSR 相对误差 ≤ **8.5e-9**; 断点集**逐点相同** |
+| L3 | BIC / LWZ (用 Stata 侧 SSR) | 绝对误差 ≤ **8.5e-9**; `best_*_m` 相同 |
+
+样本: `syn0` (纯噪声, BIC→0) / `syn1` (单断点, BIC→1, bp=49 两侧相同) /
+`syn2` (两断点, BIC→2, bp=[40,80] 两侧相同) / `real` (A 股 turnover_1m 的 β_t, T=72,
+**BIC/LWZ 均选 m=0 即无断点**; [19, 37] 是强制 m=2 时的最优两断点位置, 两侧相同 —
+异构复审已更正初版「检出 2 断点」的误读, 见复审 H4)。
+汇总: **46 项对拍, PASS 46, FAIL 0**。
+
+> 判据说明: BIC/LWZ 用**绝对误差** (1e-8) — 准则值可接近 0, 相对误差会失真;
+> L1_F 用相对 1e-7 — Stata `regress` 与 numpy 前缀和的浮点累计路径不同。
+> 差异量级均 ≤1e-8, 无系统性偏差。
+
+### 后果
+
+- **能力**: 多断点只读诊断可用; `diagnose` 仍走单断点 (默认行为零变更);
+- **兼容**: `detect` 返回键/数值逐位不变; 既有 23 例 + 新增 8 例全绿;
+- **数值**: 真实 β_t (T=72) 经 BIC/LWZ 判为**无断点** (m=0); 注意蒙特卡洛显示本口径下
+  BIC 在纯噪声的假阳性率 44% (T=72) / 36% (T=120), LWZ (c0=0.1) 更高达 89%/75% 且与
+  「LWZ 保守」的预期相反 — `n_breaks > 0` 在短样本上不可直接解读为断点存在,
+  LWZ 输出仅作对照不可单独引用 (异构复审 H5/H6);
+- **风险**: BIC 在短样本偏高估 (E7 初版即命中), 已用 LWZ 对照 + 不接入标签路径规避;
+- **维护**: Stata 对拍脚本可在版本迭代时重跑 (约 2 分钟, 含数据加载)。
+
+### 替代方案
+
+- **直接替换 `detect` 为多断点** — 否决: 破坏 `diagnose` 契约与 v3.4.13 短样本语义;
+- **硬编码 Bai-Perron (1998) sup-F 临界值表** — 否决: 未取得可逐值核实的表副本,
+  硬编码有编造风险; 改用 BIC/LWZ 选段数 (Bai-Perron 2003 正规做法);
+- **用 SSC 第三方包 (`xtbreak` 等) 对拍** — 否决/不可行: 网络受限, 且 `xtbreak` 面向面板;
+- **Stata 侧自写 Mata DP 对拍** — 降级为「官方 `regress` 穷举」: 后者用官方数值库,
+  独立性更强, 且 m≤2 时耗时仅 ~3s。
+
+### 回滚方案
+
+删除 `detect_multiple` 及 6 个私有方法 (176 行) + E1-E8 + 对拍脚本; 版本锚点 6 处回
+3.4.13; 回退 ADR/CHANGELOG/PROJECT_STATUS/DEV_PROGRESS/CODE_WIKI 的 v3.5.0 条目。
+`detect` / `diagnose` 未改动, 无需回滚生产路径; 无数据迁移, 缓存代际不变。
 
 ---
 

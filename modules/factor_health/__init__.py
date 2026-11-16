@@ -352,6 +352,182 @@ class BreakpointDetector:
             'post_mean': float('nan'),
         }
 
+    # ── Bai-Perron 多断点 (v3.5.0, ADR-046) ──────────────────────────────
+
+    def detect_multiple(self, lambda_hat: np.ndarray,
+                        m_max: int = None) -> Dict:
+        """Bai-Perron 多断点: 全局最小 SSR + BIC/LWZ 选段数 (只读诊断)。
+
+        模型与 `detect` 同族 (纯均值分段):
+            y_t = μ_j + ε_t,  t ∈ (T_{j-1}, T_j],  j = 1..m+1
+
+        估计: 动态规划求全局最小 SSR (Bai & Perron 1998, §3.2);
+        选段数: BIC (Yao 1988) 主, LWZ (Liu-Wu-Zidek 1997; c0=0.1, δ0=0.1) 对照。
+
+        Parameters
+        ----------
+        lambda_hat : np.ndarray
+            待检测序列 (可含 NaN; NaN 会被剔除, 断点索引映射回原序列)。
+        m_max : int, optional
+            最大断点数。默认 5 (Bai & Perron 2003 常用上界)。实际生效上界为
+            `min(m_max, T//h - 1)`, 以输出键 `m_max` 为准。
+
+        Returns
+        -------
+        dict
+            13 键: has_breakpoint / n_breaks / breakpoints / segment_means /
+            segment_bounds / ssr / bic / lwz / best_bic_m / best_lwz_m /
+            trimming / m_max / n_valid。
+
+        Notes
+        -----
+        - 与 `detect` 完全独立: 后者单断点网格搜索, 本方法不改其行为;
+        - T<30 或 `(m_max+1)*h > T` 时返回退化结果 (不抛异常);
+        - `has_breakpoint` 由 BIC 选定段数决定 (n_breaks > 0), 不做 sup-F
+          临界值判定 — 未硬编码 Bai-Perron 临界值表, 见 ADR-046。
+        """
+        y_all = np.asarray(lambda_hat, dtype=float).ravel()
+        valid = ~np.isnan(y_all)
+        y = y_all[valid]
+        T = int(len(y))
+        m_max = 5 if m_max is None else max(int(m_max), 0)
+
+        if T < 30:
+            return self._multiple_no_breakpoint_result(T, m_max)
+
+        h = max(5, int(T * self.min_segment))
+        m_cap = min(m_max, T // h - 1)
+        if m_cap < 0:
+            return self._multiple_no_breakpoint_result(T, m_max)
+
+        cs, cs2 = self._ssr_prefix(y)
+        ssr_mat = self._build_ssr_matrix(cs, cs2, T, h)
+
+        ssr_by_m: Dict[int, float] = {0: float(ssr_mat[0, T])}
+        brk_by_m: Dict[int, list] = {0: []}
+        for k in range(1, m_cap + 1):
+            val, brks = self._dp_breaks(ssr_mat, T, h, k)
+            ssr_by_m[k] = val
+            brk_by_m[k] = brks
+
+        flat = (not np.isfinite(ssr_by_m[0])) or ssr_by_m[0] < 1e-12
+        if flat:
+            bic = {k: float('nan') for k in ssr_by_m}
+            lwz = {k: float('nan') for k in ssr_by_m}
+            best_bic, best_lwz = 0, 0
+        else:
+            bic = {k: self._bic(v, T, k) for k, v in ssr_by_m.items()}
+            lwz = {k: self._lwz(v, T, k) for k, v in ssr_by_m.items()}
+            best_bic = int(min(bic, key=lambda k: bic[k]))
+            best_lwz = int(min(lwz, key=lambda k: lwz[k]))
+
+        idx_map = np.where(valid)[0]
+        breaks = brk_by_m[best_bic]
+        bounds = [0] + list(breaks) + [T]
+        seg_means = [float(np.mean(y[a:b]))
+                     for a, b in zip(bounds[:-1], bounds[1:])]
+        seg_bounds = [(int(idx_map[a]), int(idx_map[b - 1]) + 1)
+                      for a, b in zip(bounds[:-1], bounds[1:])]
+
+        return {
+            'has_breakpoint': bool(best_bic > 0),
+            'n_breaks': int(best_bic),
+            'breakpoints': [int(idx_map[b]) for b in breaks],
+            'segment_means': seg_means,
+            'segment_bounds': seg_bounds,
+            'ssr': ssr_by_m,
+            'bic': bic,
+            'lwz': lwz,
+            'best_bic_m': best_bic,
+            'best_lwz_m': best_lwz,
+            'trimming': int(h),
+            'm_max': int(m_cap),
+            'n_valid': T,
+        }
+
+    @staticmethod
+    def _ssr_prefix(y: np.ndarray):
+        """前缀和 (长度 T+1, 首元素 0): ssr(i,j) = Σy² - (Σy)²/(j-i)."""
+        cs = np.concatenate(([0.0], np.cumsum(y)))
+        cs2 = np.concatenate(([0.0], np.cumsum(y * y)))
+        return cs, cs2
+
+    @staticmethod
+    def _build_ssr_matrix(cs: np.ndarray, cs2: np.ndarray,
+                          T: int, h: int) -> np.ndarray:
+        """预计算 ssr_mat[i, j] = 区间 (i, j] 的 SSR; 段长 < h 为 inf."""
+        mat = np.full((T + 1, T + 1), np.inf)
+        for i in range(T + 1 - h):
+            j = np.arange(i + h, T + 1)
+            n = (j - i).astype(float)
+            s = cs[j] - cs[i]
+            s2 = cs2[j] - cs2[i]
+            mat[i, j] = np.maximum(s2 - s * s / n, 0.0)
+        return mat
+
+    def _dp_breaks(self, ssr_mat: np.ndarray, T: int, h: int, k: int):
+        """DP: k 个断点 (k+1 段) 的全局最小 SSR 与断点集 (1-based 段结束)。"""
+        cost = np.full((k + 1, T + 1), np.inf)
+        arg = np.full((k + 1, T + 1), -1, dtype=int)
+        cost[0, :] = ssr_mat[0, :]
+        for kk in range(1, k + 1):
+            for jj in range((kk + 1) * h, T + 1):
+                lo, hi = kk * h, jj - h
+                if hi < lo:
+                    continue
+                cand = cost[kk - 1, lo:hi + 1] + ssr_mat[lo:hi + 1, jj]
+                pos = int(np.argmin(cand))
+                cost[kk, jj] = cand[pos]
+                arg[kk, jj] = lo + pos
+        if not np.isfinite(cost[k, T]):
+            return float('inf'), []
+        breaks = []
+        jj = T
+        for kk in range(k, 0, -1):
+            ii = int(arg[kk, jj])
+            breaks.append(ii)
+            jj = ii
+        breaks.reverse()
+        return float(cost[k, T]), breaks
+
+    @staticmethod
+    def _bic(ssr: float, T: int, k: int) -> float:
+        """Yao (1988) BIC: ln(SSR/T) + (k+1)*ln(T)/T (每段 1 个均值参数)."""
+        if not np.isfinite(ssr) or ssr <= 0:
+            return float('nan')
+        return float(np.log(ssr / T) + (k + 1) * np.log(T) / T)
+
+    @staticmethod
+    def _lwz(ssr: float, T: int, k: int) -> float:
+        """LWZ: ln(SSR/T) + (k+1)*c0*ln(T)^(2+δ0)/T, c0=0.1, δ0=0.1.
+
+        Liu, Wu & Zidek (1997); 实现口径同 Bai & Perron (2003) §5.2。
+        """
+        if not np.isfinite(ssr) or ssr <= 0:
+            return float('nan')
+        ln_t = np.log(T)
+        return float(np.log(ssr / T) + (k + 1) * 0.1 * ln_t ** 2.1 / T)
+
+    @staticmethod
+    def _multiple_no_breakpoint_result(T: int, m_max: int) -> Dict:
+        """多断点退化结果 (T<30 或 trimming 不可行): 显式标记未计算。"""
+        nan = float('nan')
+        return {
+            'has_breakpoint': False,
+            'n_breaks': 0,
+            'breakpoints': [],
+            'segment_means': [nan],
+            'segment_bounds': [],
+            'ssr': {0: nan},
+            'bic': {0: nan},
+            'lwz': {0: nan},
+            'best_bic_m': 0,
+            'best_lwz_m': 0,
+            'trimming': 0,
+            'm_max': int(m_max),
+            'n_valid': max(int(T), 0),
+        }
+
     def _sup_f_critical_value(
         self, T: int, epsilon: float, alpha: float
     ) -> float:
