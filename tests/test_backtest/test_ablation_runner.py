@@ -194,6 +194,150 @@ class TestLedoitWolfHAC:
         assert not np.isnan(t_stat)
         assert not np.isnan(p_value)
 
+    # ── v3.4.10: NaN/Inf 成对 complete-case (E1-E5) ──
+
+    def test_nan_same_positions_equivalence(self):
+        """v3.4.10 E1: 同位置 NaN → 等价于显式删除这些时点"""
+        np.random.seed(7)
+        n = 120
+        base_a = np.random.randn(n) * 0.01 + 0.0005
+        base_b = np.random.randn(n) * 0.008
+        drop = np.array([13, 57])
+
+        a = base_a.copy()
+        b = base_b.copy()
+        a[drop] = np.nan
+        b[drop] = np.nan
+
+        keep = np.ones(n, dtype=bool)
+        keep[drop] = False
+        t_ref, p_ref = ledoit_wolf_hac_test(base_a[keep], base_b[keep])
+        t_nan, p_nan = ledoit_wolf_hac_test(a, b)
+
+        assert np.isfinite(t_nan)
+        assert np.isfinite(p_nan)
+        assert t_nan == pytest.approx(t_ref, rel=1e-12)
+        assert p_nan == pytest.approx(p_ref, rel=1e-12)
+
+    def test_nan_different_positions_pairwise(self):
+        """v3.4.10 E2: 不同位置 NaN → 联合掩码配对, 非逐序列独立删除"""
+        np.random.seed(11)
+        n = 160
+        a = np.random.randn(n) * 0.01 + 0.001
+        b = np.random.randn(n) * 0.01 + 0.003
+        a[20] = np.nan
+        b[90] = np.nan
+
+        t_pair, p_pair = ledoit_wolf_hac_test(a, b)
+        assert np.isfinite(t_pair)
+        assert np.isfinite(p_pair)
+
+        # 参照: 联合掩码后的干净序列
+        mask = np.isfinite(a) & np.isfinite(b)
+        t_ref, _ = ledoit_wolf_hac_test(a[mask], b[mask])
+        assert t_pair == pytest.approx(t_ref, rel=1e-12)
+
+        # 对照: 逐序列独立删除 → 行号错位, 结果不应相同
+        t_indep, _ = ledoit_wolf_hac_test(a[~np.isnan(a)], b[~np.isnan(b)])
+        assert abs(t_pair - t_indep) > 1e-6, (
+            "joint mask should differ from per-series deletion"
+        )
+
+    def test_insufficient_valid_pairs_returns_no_evidence(self):
+        """v3.4.10 E3: 有效配对 < 3 → (0.0, 1.0), 不返回 NaN"""
+        a = np.array([0.010, 0.020, np.nan, np.nan, np.nan])
+        b = np.array([0.011, 0.019, np.nan, np.nan, 0.030])
+
+        t_stat, p_value = ledoit_wolf_hac_test(a, b)
+
+        assert t_stat == 0.0
+        assert p_value == 1.0
+
+    def test_all_nan_series_returns_no_evidence(self):
+        """v3.4.10 E4: 一条序列全 NaN → (0.0, 1.0)"""
+        np.random.seed(3)
+        a = np.full(50, np.nan)
+        b = np.random.randn(50) * 0.01
+
+        t_stat, p_value = ledoit_wolf_hac_test(a, b)
+
+        assert t_stat == 0.0
+        assert p_value == 1.0
+
+    def test_inf_treated_as_missing(self):
+        """v3.4.10 E5: ±Inf 与 NaN 同口径过滤"""
+        np.random.seed(13)
+        n = 100
+        a_base = np.random.randn(n) * 0.01 + 0.001
+        b_base = np.random.randn(n) * 0.01 + 0.001
+
+        a_nan = a_base.copy()
+        a_nan[[10, 50]] = np.nan
+        b_nan = b_base.copy()
+        b_nan[30] = np.nan
+
+        a_inf = a_base.copy()
+        a_inf[10] = np.inf
+        a_inf[50] = -np.inf
+        b_inf = b_nan.copy()
+
+        t_nan, p_nan = ledoit_wolf_hac_test(a_nan, b_nan)
+        t_inf, p_inf = ledoit_wolf_hac_test(a_inf, b_inf)
+
+        assert np.isfinite(t_inf)
+        assert np.isfinite(p_inf)
+        assert t_inf == pytest.approx(t_nan, rel=1e-12)
+        assert p_inf == pytest.approx(p_nan, rel=1e-12)
+
+    def test_compare_hac_finite_with_nan_ls(self):
+        """v3.4.10 E6: compare 集成 — LS 含 NaN 时 p_value_hac 有限"""
+        from factor_pipeline.pipelines_v2 import PipelineV2Config
+
+        runner = AblationRunner(PipelineV2Config(), n_bootstrap=100)
+
+        np.random.seed(5)
+        n = 80
+        ls_exp = np.random.randn(n) * 0.01 + 0.001
+        ls_ref = np.random.randn(n) * 0.01 + 0.002
+        ls_exp[7] = np.nan
+        ls_ref[60] = np.nan
+        ic_exp = np.random.randn(n) * 0.02
+        ic_ref = np.random.randn(n) * 0.02
+
+        exp_result = AblationResult(
+            config=AblationConfig(name='exp'),
+            metrics={
+                'ic_mean': float(np.mean(ic_exp)),
+                'sharpe_ls': float(np.mean(ls_exp[~np.isnan(ls_exp)])
+                                   / np.std(ls_exp[~np.isnan(ls_exp)], ddof=1)),
+            },
+            ic_series=ic_exp,
+            ls_return_series=ls_exp,
+            rho_step={}, ortho_diagnostics={},
+            n_factors=1, n_periods=n, runtime_sec=0.1,
+        )
+        ref_result = AblationResult(
+            config=AblationConfig(name='ref'),
+            metrics={
+                'ic_mean': float(np.mean(ic_ref)),
+                'sharpe_ls': float(np.mean(ls_ref[~np.isnan(ls_ref)])
+                                   / np.std(ls_ref[~np.isnan(ls_ref)], ddof=1)),
+            },
+            ic_series=ic_ref,
+            ls_return_series=ls_ref,
+            rho_step={}, ortho_diagnostics={},
+            n_factors=1, n_periods=n, runtime_sec=0.1,
+        )
+
+        comp = runner.compare(exp_result, ref_result)
+
+        assert np.isfinite(comp.p_value_hac)
+        assert 0.0 <= comp.p_value_hac <= 1.0
+
+        mask = np.isfinite(ls_exp) & np.isfinite(ls_ref)
+        _, p_ref = ledoit_wolf_hac_test(ls_exp[mask], ls_ref[mask])
+        assert comp.p_value_hac == pytest.approx(p_ref, rel=1e-12)
+
 
 # =============================================================================
 # E2-T2: Circular Block Bootstrap

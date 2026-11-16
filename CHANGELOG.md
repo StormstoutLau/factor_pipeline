@@ -1,5 +1,70 @@
 # 开发日志 (Changelog)
 
+## v3.4.10 — HAC 检验 NaN 过滤 (已实施, 2026-11-16)
+
+### 概览
+
+MAD 缩尾实验 ([§6 O1](docs/analysis/MAD_WINSORIZE_O1_EXPERIMENT.md)) 发现:
+`ledoit_wolf_hac_test` 入口不做缺失处理, LS/IC 序列各含 1 个 NaN 时
+`np.mean` / `np.std` / 矩条件被污染, `compare` 的 `p_value_hac` 静默返回 NaN,
+HAC 判定整体失效 (当次实验只能改用 NW 截距 t 补算)。
+
+### 核心产出
+
+- `ledoit_wolf_hac_test` 入口新增**成对联合** `isfinite` 掩码 (complete-case),
+  同时过滤 NaN 与 ±Inf; 不能逐序列独立删除 (交叉矩条件要求同一时刻配对)
+- 清洗后样本量 `n` 作为 Newey-West 带宽 `q` 与全部 `/T` 归一化的基数
+- 有效配对 `n < 3` 返回 `(0.0, 1.0)` = 无证据, 不再返回 NaN
+- 丢弃非有限配对时输出 1 条 `logger.debug` (原始 T / 有效 n / 丢弃数)
+- docstring 声明 Equal Spacing 口径 (Datta & Du 2012) 与「压缩时间轴」局限
+- `compare` / `compare_all` / `circular_block_bootstrap` /
+  `mean_diff_hac_statsmodels` **零改动**; P0-1 NaN 兜底保留为防御
+- 项目版本 **3.4.10** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+
+### 口径变化
+
+| 场景 | v3.4.9 | v3.4.10 |
+|------|--------|---------|
+| `ls_return_series` 含 NaN | 返回 `(nan, nan)` → `compare` 的 HAC 静默失效 | 成对剔除后正常估计; 输出有限 t/p |
+| 有效配对 < 3 | `(nan, nan)` | `(0.0, 1.0)` (无证据) |
+| 无缺失且 `n ≥ 3` | — | 逐位不变 (掩码全 True) |
+| 无缺失但 `n < 3` | NaN / 未定义 | `(0.0, 1.0)` (无证据) |
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | `ledoit_wolf_hac_test` 入口掩码 + 带宽基数 + `n<3` 退化 + docstring |
+| `tests/test_backtest/test_ablation_runner.py` | 新增 6 例 (E1-E6): 同位置 / 不同位置 / 不足配对 / 全 NaN / Inf / `compare` 集成 |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `docs/` | RESEARCH / DESIGN / EXECUTION / CHECKLIST / CONSISTENCY_REVIEW / audit / PROJECT_STATUS / DEV_PROGRESS |
+| `CODE_WIKI.md` | 头部版本 + 4.15 缺失值口径注 |
+| `docs/analysis/MAD_WINSORIZE_O1_EXPERIMENT.md` | §6 O1 标注已修复 |
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | E1-E6 (NaN/Inf 成对 / 退化 / 集成) | **6 passed** (Red: 6 failed / 5 passed → Green: 11 passed) |
+| 定向回归 | `tests/test_backtest/test_ablation_runner.py` | **89 passed** |
+| 定向回归 | `tests/test_backtest` | **594 passed / 8 skipped** (664.96s; 基线 588 → +6) |
+| 全量回归 | `tests/` | **1741 passed / 15 skipped / 0 failed** (1437.31s; 基线 1735 → +6) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **6/6** |
+
+### 兼容性
+
+- 公开签名 / 返回类型不变;
+- 无缺失输入的数值逐位不变;
+- BH-FDR 分母不受影响 (用 bootstrap p);
+- 生产管线零改动; 缓存不失效。
+
+### 说明
+
+本修复采用 Datta & Du (2012) 的 Equal Spacing 估计量 (删除缺失后按等间隔套
+Newey-West), 其渐近一致性与低偏差优势见
+[RESEARCH](docs/research/RESEARCH_HAC_NAN_FILTER.md) §2;
+未实现 AM 估计量 (记为观察项 O1)。
+
 ## v3.4.9 — L1/L2 消融臂 trivial 判定口径 (已实施, 2026-11-16)
 
 ### 概览

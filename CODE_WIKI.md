@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.4.9 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫)
+> **版本**: v3.4.10 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -1498,6 +1498,11 @@ Inclán & Tiao (1994) ICSS; Perron (1989) 突变污染 AR(1)。
 > 其 ρ_step 通过 Dynamic 中间数据 `imputation → decoupling` 采集;
 > `run_l1` 的 6 臂契约与报告 5 列在无 decoupler 数据时保持不变。
 
+> **v3.4.10 注**: `ledoit_wolf_hac_test` 对两条收益序列做**成对联合** `isfinite`
+> 掩码 (complete-case, 同时过滤 NaN/±Inf; 等价于 Datta & Du 2012 的
+> Equal Spacing 估计量), 带宽与归一化基于清洗后样本; 有效配对 < 3 返回
+> `(0.0, 1.0)`。`compare` / `compare_all` / bootstrap 零改动。
+
 ---
 
 ## 5. 依赖关系图
@@ -2563,5 +2568,6 @@ class ThresholdDriftMonitor:
 | v3.4.3 | 2026-11-12 | Dynamic 组件可分离性 (ADR-045, O2): `CompositeDecoupler` 新增 `enable_neutralization` / `enable_ar`; `module_enabled['decoupler']` 独立控制 AR; `neutralizer=False` 不再连带关闭 AR; 默认路径逐位不变; 新增 15 例, 全量 1682 passed |
 | v3.4.4 | 2026-11-13 | AblationRunner `decoupler` 消融臂: 新增 `run_l1_decoupler` (dynamic_ab 内 AR 开/关两臂, 参照可复用); `_collect_rho_steps` 条件采集 decoupler; 报告按需追加列; `run_l1`/`run_single` 修复 `market_cap_data` 转发; 新增 11 例, 全量 1705 passed |
 | v3.4.9 | 2026-11-16 | L1/L2 trivial 口径清扫: `run_l2` 的 `L2_unified` (与 B3 同为 unified) 标 trivial; `run_l1` 模块臂改合并覆盖 + 按 base 正交化启用状态判定 `L1_orthogonalizer_off`; 退化告警 1 条 + 外部 B3 提示 2 条; 新增 7 例 |
+| v3.4.10 | 2026-11-16 | HAC 检验 NaN 过滤: `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case, Equal Spacing), 带宽/归一化用清洗后 n; `n<3` 返回 `(0.0, 1.0)`; `compare`/bootstrap 零改动; 新增 6 例 |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

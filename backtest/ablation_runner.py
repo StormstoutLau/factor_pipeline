@@ -61,9 +61,18 @@ def ledoit_wolf_hac_test(
     Returns:
         (t_stat, p_value): HAC t 统计量 + 双侧 p 值
 
+    缺失值口径 (v3.4.10):
+        两条序列按**成对联合**掩码丢弃 NaN/±Inf (等价于 Datta & Du 2012
+        的 Equal Spacing 估计量), 带宽与归一化均基于清洗后样本; 有效配对
+        < 3 时返回 (0.0, 1.0) = 无证据. 注意: 删除缺失会压缩时间轴,
+        缺失点之后的滞后对应关系会前移; 缺失比例很低时可忽略.
+
     Reference:
         Ledoit, O. & Wolf, M. (2008). "Robust performance hypothesis testing
         with the Sharpe ratio." J. Empirical Finance 15(5):850-859.
+        Datta, D. D. & Du, W. (2012). "Nonparametric HAC Estimation for Time
+        Series Data with Missing Observations." IFDP 2012(1060):1-48.
+        DOI: 10.17016/ifdp.2012.1060
     """
     returns_a = np.asarray(returns_a, dtype=float)
     returns_b = np.asarray(returns_b, dtype=float)
@@ -72,6 +81,22 @@ def ledoit_wolf_hac_test(
     T = min(len(returns_a), len(returns_b))
     returns_a = returns_a[:T]
     returns_b = returns_b[:T]
+
+    # v3.4.10: 成对 complete-case — 联合丢弃非有限值 (NaN/±Inf).
+    # 不能逐序列独立删除: Cov(SR_a, SR_b) 的交叉矩条件要求同一时刻配对.
+    # 口径等价于 Datta & Du (2012) 的 Equal Spacing 估计量.
+    finite_mask = np.isfinite(returns_a) & np.isfinite(returns_b)
+    n_valid = int(finite_mask.sum())
+    if n_valid < T:
+        logger.debug(
+            "ledoit_wolf_hac_test: 丢弃 %d 个非有限配对 (原始 T=%d, 有效 n=%d)",
+            T - n_valid, T, n_valid,
+        )
+    if n_valid < 3:
+        return 0.0, 1.0
+    returns_a = returns_a[finite_mask]
+    returns_b = returns_b[finite_mask]
+    T = n_valid  # 带宽与归一化均基于清洗后样本
 
     # Newey-West 自动带宽
     q = max(1, int(4 * (T / 100) ** (2 / 9)))
