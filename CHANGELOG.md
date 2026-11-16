@@ -1,5 +1,36 @@
 # 开发日志 (Changelog)
 
+## v3.4.13 — DEFECT-1: BreakpointDetector 短样本退化 (已实施, 2026-11-16)
+
+### 概览
+
+修复 `BreakpointDetector.detect` 在有效点数 `T < 30` 时调用未定义方法
+`_no_breakpoint_result` 导致的 `AttributeError`。该分支此前从未被测试覆盖
+(现有测试面板 T=200), 唯一生产路径 `FactorHealthDiagnoser.diagnose → detect`
+在短样本因子 / 短回测窗 / 消融退化臂上会直接崩溃。
+
+### 核心产出
+
+- 新增 `BreakpointDetector._no_breakpoint_result(T)` → 6 键退化结果:
+  `has_breakpoint=False` / `chow_max_stat=0.0` / `critical=nan` /
+  `cusum_path=全 NaN (长度=T)` / `pre_mean=post_mean=nan`; 不含 `breakpoint_idx`
+  (与正常路径「无断点」分支同构, `diagnose` 用 `.get` → `None`)
+- 依据: T<30 时 `min_segment=0.15` 允许的候选切分过少, Andrews (1993) sup-F
+  渐近临界值不适用; 与同文件 `_detect_decay` 的 T<30 退化处理一致
+- `detect` 本体 / 正常路径 / `diagnose` **零改动**; T≥30 数值逐位不变
+- 新增 5 例 (E1-E5): T=10 / 有效 29 (输入 40 含 NaN) / 有效 30 正常路径 /
+  `diagnose` T=20 面板 / 全 NaN (T=0)
+- 项目版本 **3.4.13** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_health/__init__.py` | 新增 `_no_breakpoint_result` (L335-L353) |
+| `tests/unit/test_layer3_factor_health.py` | 新增 `TestBreakpointDetectorShortSample` (E1-E5) |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `docs/` | EXECUTION / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI |
+
 ## v3.4.12 — 面板 HAC / Premium 标准误 (已实施, 2026-11-16)
 
 ### 概览

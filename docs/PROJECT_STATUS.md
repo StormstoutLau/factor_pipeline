@@ -52,14 +52,15 @@ v3.4.9 (2026-11-16) L1/L2 trivial 口径清扫 (ortho / unified 臂退出 BH 分
 v3.4.10 (2026-11-16) HAC 检验 NaN 过滤 (成对 complete-case)                     [x]
 v3.4.11 (2026-11-16) 技术债小包 (alpha 清理 + mean_diff 缺失 + MAD 参数化)        [x]
 v3.4.12 (2026-11-16) 面板 HAC / Premium 标准误 (estimate_with_errors)            [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.12
+v3.4.13 (2026-11-16) DEFECT-1: BreakpointDetector 短样本退化                     [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.13
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持                            [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.4.12 完成后)
+## §2. 当前待办 (v3.4.13 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -67,10 +68,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 (v3.4.0 – v3.4.12)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 (v3.4.0 – v3.4.13)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.13 | DEFECT-1 短样本断点退化 | `BreakpointDetector._no_breakpoint_result(T)` 补齐 (T<30 返回 6 键无断点结果: `has_breakpoint=False` / `critical=nan` / `cusum` 全 NaN / 无 `breakpoint_idx`); `detect` 正常路径与 `diagnose` 零改动; 短样本 `diagnose` 由崩溃变为正常诊断 | — (Andrews 1993 sup-F 适用性) | 新增 5 passed (E1-E5); 定向 30 passed; 版本统一 7 passed + 手工 6/6; 全量回归 1760 passed / 15 skipped / 0 failed |
 | v3.4.12 | 面板 HAC / Premium 标准误 | `PremiumEstimator.estimate_with_errors` 新增 14 键输出: 逐期 OLS SE、λ̂(t) 局部 HAC SE、溢价均值 HAC SE + 正态 CI; 抽出 `_smooth_betas` / `_hac_long_run_variance`; 独立复审修正 F1 (SE 权重归一化) / F2 (σ̂² 守卫) + Stata 18 对拍验证 (引擎逐位一致, 唯一约定差 = Stata df 修正); `estimate` / `diagnose` 零变更 | — (方法学见 DESIGN_DISCUSSION_V3.3.0 §2 + RESEARCH_PREMIUM_HAC_SE) | 新增 9 passed (E1-E9); Layer 3 18 passed; `tests/test_backtest` 599 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1755 passed / 15 skipped / 0 failed |
 | v3.4.11 | 技术债小包 | 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 成对 complete-case; `PipelineV2Config` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传到 detector; 非生产解耦器明确不修复 | — | 新增 5 passed; 定向 123 + 46 passed; `tests/test_backtest` 599 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1746 passed / 15 skipped / 0 failed |
 | v3.4.10 | HAC 检验 NaN 过滤 | `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case); 带宽/归一化用清洗后 n; `n<3` → `(0.0,1.0)`; debug 日志; docstring 声明 Equal Spacing 口径; `compare`/bootstrap 零改动 | — (ADR-036 评估链实现修复) | 新增 6 passed (E1-E6); `test_ablation_runner.py` 89 passed; `tests/test_backtest` 594 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1741 passed / 15 skipped / 0 failed |
@@ -92,7 +94,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 | v3.3.2 | PL-03 | 标准化 auto→z_score 逐日行内 | — | 6.18e-01 (1800 格) → 0 |
 | v3.3.1 | — | 插补 P2 (向量化 + e2e + ablation) | — | — |
 
-> 当前缺陷登记: **DEFECT-1** — `BreakpointDetector.detect` 在 T<30 时调用不存在的 `_no_breakpoint_result` → `AttributeError` (唯一生产路径 `diagnose → detect`, L293-294/L499; `StructuralBreakMonitor` 不受影响; 现有测试未覆盖; 本次实证已避让)。待 v3.4.13 修复, 见 [多因子审计 Phase 8](audit/2026-11-16-multifactor-multiyear-audit.md)。无 known-xfail; 历史因果性修复链 (v3.3.1–v3.3.7) 全部闭环。
+> 当前缺陷登记: **无未修复缺陷**。DEFECT-1 (`BreakpointDetector.detect` T<30 → 调用不存在的 `_no_breakpoint_result` → AttributeError) 已于 **v3.4.13** 修复: 补 `_no_breakpoint_result(T)` 退化结果 + 5 例边界测试 (T=10/有效29/有效30/diagnose T=20/全 NaN), 正常路径与 `diagnose` 零改动。见 [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) / [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md)。无 known-xfail; 历史因果性修复链 (v3.3.1–v3.3.7) 全部闭环。
 
 ### 🟠 P1 — 下一任务 (先后顺序)
 
@@ -100,7 +102,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 |---|------|------|------|
 | 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023; v3.4.12: 4 因子/2020-2026; 2026-11-16: 12 因子 × 三分段 + Barra 中性化 40 月, 5/12 BH / 3/12 Bonferroni; **组合层 IC/Sharpe 回测待做**) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) + [多因子×多年验证](analysis/MULTIFACTOR_MULTIYEAR_VERIFICATION.md) |
 | 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | ✅ 实验完成 — 结论**不切换默认**, MAD 保留为可选项 | [实验报告](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) (ADR-042 已知遗留; O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
-| 3 | `BreakpointDetector.detect` T<30 → `_no_breakpoint_result` 缺失 (AttributeError) | [ ] 待修 (建议 v3.4.13; 影响面已排查: 唯一生产路径 `diagnose→detect` L293/L499, `StructuralBreakMonitor` 不受影响, 现有测试未覆盖 T<30 分支; 本次实证已避让) | [多因子审计 DEFECT-1](audit/2026-11-16-multifactor-multiyear-audit.md) + [缺陷登记](#-p1--下一任务-先后顺序) |
+| 3 | `BreakpointDetector.detect` T<30 → `_no_breakpoint_result` 缺失 (AttributeError) | ✅ v3.4.13 修复 (退化 6 键结果 + E1-E5 边界测试; 正常路径零改动) | [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) + [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md) |
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
@@ -245,6 +247,8 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 > **v3.4.4 (2026-11-13) 同步**: CHANGELOG / DECISIONS (ADR-045 实现补充) / 调研 v1.0 / 设计 v1.0 / 实施 v1.0 / 审计报告 / README / PROJECT_STATUS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.4。
 >
 > **v3.4.9 (2026-11-16) 同步**: CHANGELOG / 调研 v1.0 / 设计 v1.0 (private) / 实施 v1.0 / CHECKLIST / CONSISTENCY_REVIEW / 审计报告 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.9; DECISIONS 无新 ADR (沿用 ADR-036 归因前提)。
+>
+> **v3.4.13 (2026-11-16) 同步**: CHANGELOG / 实施 v1.0 (小任务裁剪, 调研+设计内联) / 审计报告 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI 已更新; 版本锚点 6 处统一 3.4.13; DECISIONS 无新 ADR (缺陷修复); README 版本摘要沿用近版惯例 (v3.4.5 后未逐版追加)。
 
 ---
 

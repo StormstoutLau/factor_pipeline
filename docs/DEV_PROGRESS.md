@@ -43,7 +43,8 @@ v3.4.9 (2026-11-16) L1/L2 trivial 口径清扫 (ortho / unified 臂退出 BH 分
 v3.4.10 (2026-11-16) HAC 检验 NaN 过滤 (成对 complete-case), 缓存代际不变
 v3.4.11 (2026-11-16) 技术债小包 (alpha 清理 + mean_diff 缺失 + MAD 参数化), 缓存代际不变
 v3.4.12 (2026-11-16) 面板 HAC / Premium 标准误 (estimate_with_errors), 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.12
+v3.4.13 (2026-11-16) DEFECT-1: BreakpointDetector 短样本退化 (T<30 → 无断点结果), 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.4.13
 v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点
 ```
 
@@ -71,6 +72,8 @@ v3.5.0 (远期)       内生性-溢价诊断交互 + 多断点
 > v3.4.11 模块影响: `backtest/ablation_runner.py` 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 增加成对 complete-case; `pipelines_v2.py` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传到 `ProcessingAdapter` (默认 = detector 默认, 零行为变更); 非生产解耦器数值修复标注不修复 (ADR-043)。
 
 > v3.4.12 模块影响: `modules/factor_health/__init__.py` `PremiumEstimator` 新增 `estimate_with_errors` (逐期 OLS SE + λ̂(t) 局部 Newey-West HAC SE + 溢价均值 HAC SE/CI), 抽出 `_smooth_betas` / `_hac_long_run_variance`; `estimate()` / `diagnose()` / `BreakpointDetector` 数值与标签零变更; 缓存代际不变。
+
+> v3.4.13 模块影响: `modules/factor_health/__init__.py` `BreakpointDetector` 新增 `_no_breakpoint_result(T)` — T<30 时返回 6 键无断点退化结果 (`has_breakpoint=False` / `chow_max_stat=0.0` / `critical=nan` / `cusum_path` 全 NaN / `pre_mean=post_mean=nan`, 不含 `breakpoint_idx`); `detect` 正常路径 (T≥30) 与 `diagnose` 零变更; 修复 DEFECT-1 短样本 `AttributeError`; 缓存代际不变。
 
 ### §2.1 核心编排层
 

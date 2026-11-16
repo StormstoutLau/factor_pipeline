@@ -332,6 +332,26 @@ class BreakpointDetector:
 
         return result
 
+    def _no_breakpoint_result(self, T: int) -> Dict:
+        """有效点 <30 的退化结果: 不做 sup-F 网格搜索, 直接判无断点。
+
+        T<30 时 `min_segment` 允许的候选切分过少, Andrews (1993) sup-F 渐近
+        临界值不适用, 检验无意义; 返回与正常路径同构的 6 键结果 (cusum 全 NaN,
+        不含 `breakpoint_idx`), 供 `diagnose` 与下游安全消费。
+
+        注: v3.4.12 及之前该分支调用未定义的方法 → AttributeError (DEFECT-1),
+        v3.4.13 补齐。
+        """
+        n = max(int(T), 0)
+        return {
+            'has_breakpoint': False,
+            'chow_max_stat': 0.0,
+            'critical': float('nan'),
+            'cusum_path': np.full(n, np.nan),
+            'pre_mean': float('nan'),
+            'post_mean': float('nan'),
+        }
+
     def _sup_f_critical_value(
         self, T: int, epsilon: float, alpha: float
     ) -> float:

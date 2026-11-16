@@ -149,6 +149,66 @@ class TestBreakpointDetector:
             assert 50 <= bp <= 160, f"breakpoint at t={bp}, expected near t=100"
 
 
+class TestBreakpointDetectorShortSample:
+    """DEFECT-1: T<30 退化路径 (v3.4.13)"""
+
+    def test_e1_short_sample_returns_no_breakpoint(self):
+        """E1: T=10 → 无断点退化结果, 不抛异常"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        res = BreakpointDetector().detect(np.full(10, 0.01))
+        assert res['has_breakpoint'] is False
+        assert res['chow_max_stat'] == 0.0
+        assert np.isnan(res['critical'])
+        assert np.isnan(res['pre_mean']) and np.isnan(res['post_mean'])
+        assert 'breakpoint_idx' not in res
+        assert len(res['cusum_path']) == 10
+        assert np.isnan(res['cusum_path']).all()
+
+    def test_e2_boundary_just_below_threshold(self):
+        """E2: 有效点 29 (输入 40 含 11 NaN) → 仍走退化路径"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        x = np.linspace(0.0, 0.05, 40)
+        x[:11] = np.nan  # 有效点 29 (阈值下界外)
+        assert np.isfinite(x).sum() == 29
+        res = BreakpointDetector().detect(x)
+        assert res['has_breakpoint'] is False
+        assert len(res['cusum_path']) == 29
+
+    def test_e3_threshold_30_still_normal_path(self):
+        """E3: 有效点 30 → 正常 sup-F 路径 (回归防护, 阈值不越界)"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        res = BreakpointDetector().detect(np.linspace(0.0, 0.05, 30))
+        assert np.isfinite(res['critical'])
+        assert res['critical'] > 0
+        assert len(res['cusum_path']) == 30
+        assert np.isfinite(res['chow_max_stat'])
+
+    def test_e4_diagnose_short_panel_no_raise(self):
+        """E4: diagnose 短面板 (T=20) → 不抛异常, 断点字段退化"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        np.random.seed(7)
+        T, N = 20, 50
+        dates = pd.date_range('2024-01-01', periods=T, freq='ME')
+        stocks = [f'S{i:02d}' for i in range(N)]
+        factor = pd.DataFrame(np.random.randn(T, N), index=dates, columns=stocks)
+        ret = pd.DataFrame(0.02 * factor.values + np.random.randn(T, N) * 0.05,
+                           index=dates, columns=stocks)
+        res = FactorHealthDiagnoser(bandwidth=6, alpha=0.05).diagnose(
+            factor, ret, return_type='static')
+        assert res['has_breakpoint'] is False
+        assert res['chow_max_stat'] == 0.0
+        assert res['breakpoint_idx'] is None
+        assert np.isfinite(res['premium_mean'])
+        assert res['premium_health'] in ('stable', 'suspect', 'insignificant')
+
+    def test_e5_all_nan_empty(self):
+        """E5: 全 NaN → T=0, 空 cusum, 不抛异常"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        res = BreakpointDetector().detect(np.full(12, np.nan))
+        assert res['has_breakpoint'] is False
+        assert len(res['cusum_path']) == 0
+
+
 class TestFactorHealthDiagnoser:
     """Multi-state diagnosis: return_type × premium_health"""
 

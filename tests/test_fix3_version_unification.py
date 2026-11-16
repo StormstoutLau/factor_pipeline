@@ -9,7 +9,7 @@ Fix 3: 版本号统一 — TDD 测试
   - test_config_v2.py:  期望 '2.0.0' (历史失败)
   - test_reporting.py:  期望 "2.0.0"
 
-统一目标 (v3.4.8 首次统一, 2026-11-15; 锚点随版本演进, 当前 3.4.12): 四处声明保持一致
+统一目标 (v3.4.8 首次统一, 2026-11-15; 锚点随版本演进, 当前 3.4.13): 四处声明保持一致
   - __init__.py / config_v2.py / reporting.py / pyproject.toml
   - 缓存 code_version = "v2.3.0-cache" (缓存语义版本, 非项目版本;
     因 PL-02 变换 / PL-06 Mixed 缩尾 / PL-05 AR 解耦 / PL-08 AR 阶数选择
@@ -31,7 +31,7 @@ for ext in ["F:/Coding/Factor_Fingerprint", "F:/Coding/Factor_Decoupler"]:
         sys.path.insert(0, ext)
 
 # 期望的统一版本号
-EXPECTED_VERSION = "3.4.12"
+EXPECTED_VERSION = "3.4.13"
 
 
 class TestFix3VersionUnification(unittest.TestCase):

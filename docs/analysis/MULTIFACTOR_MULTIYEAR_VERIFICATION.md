@@ -187,7 +187,7 @@ B 报告 §3 观察 4 称 amihud 方向「与经典流动性溢价相反」, 属
 **影响面 (已排查, 2026-11-16)**:
 - 缺陷本体: [factor_health L293-L294](../../modules/factor_health/__init__.py#L293-L294);
 - 唯一生产调用路径: `FactorHealthDiagnoser.diagnose` → `self.detector.detect(beta_raw)`
-  ([L499](../../modules/factor_health/__init__.py#L499)) — 公开 API, 任何 β 有效期 <30 的输入
+  ([L519](../../modules/factor_health/__init__.py#L519)) — 公开 API, 任何 β 有效期 <30 的输入
   (短样本因子 / 短回测窗口 / 消融退化臂) 必抛;
 - `pipelines_v2.StructuralBreakMonitor` (v3.4.0) 为独立实现, **不受影响**;
 - 现有测试 `test_layer3_factor_health.py` 两处 `detect` 的面板均 ≥30 期, 分支未覆盖;

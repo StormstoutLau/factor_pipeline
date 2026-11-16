@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.4.12 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误)
+> **版本**: v3.4.13 | **构建日期**: 2026-11-16 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -2597,5 +2597,6 @@ class ThresholdDriftMonitor:
 | v3.4.10 | 2026-11-16 | HAC 检验 NaN 过滤: `ledoit_wolf_hac_test` 入口成对联合 `isfinite` 掩码 (complete-case, Equal Spacing), 带宽/归一化用清洗后 n; `n<3` 返回 `(0.0, 1.0)`; `compare`/bootstrap 零改动; 新增 6 例 |
 | v3.4.11 | 2026-11-16 | 技术债小包: 移除 `ledoit_wolf_hac_test` 未使用的 `alpha`; `mean_diff_hac_statsmodels` 成对 complete-case; `PipelineV2Config` 新增 `static_outlier_adaptive_threshold` / `static_outlier_max_outlier_frac` 并透传 detector; 非生产解耦器标注不修复 (ADR-043); 新增 5 例 |
 | v3.4.12 | 2026-11-16 | 面板 HAC / Premium 标准误: `PremiumEstimator.estimate_with_errors` (逐期 OLS SE + λ̂(t) 局部 HAC SE + 均值 HAC SE/CI, 14 键); 抽出 `_smooth_betas` / `_hac_long_run_variance`; 复审修正 (SE 权重归一化 + σ̂² 守卫) + Stata 18 对拍验证; `estimate` / `diagnose` 零变更; 新增 9 例 |
+| v3.4.13 | 2026-11-16 | DEFECT-1 短样本断点退化: `BreakpointDetector._no_breakpoint_result(T)` 补齐 (T<30 → `has_breakpoint=False` / `chow_max_stat=0.0` / `critical=nan` / cusum 全 NaN / 无 `breakpoint_idx`); `detect` 正常路径与 `diagnose` 零变更; 新增 5 例 (E1-E5 边界) |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。
