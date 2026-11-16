@@ -248,7 +248,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
-| 2026-11-16 | _待回填_ | fix(v3.4.9): L1/L2 消融臂 trivial 口径清扫 (`L2_unified` / `L1_orthogonalizer_off` 退出 BH 分母 + module_enabled 合并覆盖) |
+| 2026-11-16 | 7f3b3d4 | fix(v3.4.9): L1/L2 消融臂 trivial 口径清扫 (`L2_unified` / `L1_orthogonalizer_off` 退出 BH 分母 + module_enabled 合并覆盖) |
 | 2026-11-13 | 26fb5e4 | feat(v3.4.4): AblationRunner decoupler 消融臂 (dynamic_ab 内 AR 开/关) + 全量 1705 passed |
 | 2026-11-13 | 0e81ab0 | docs(wiki): 同步 v3.4.0-v3.4.3 架构与 API 变更 |
 | 2026-11-12 | 853806c | test(v3.4.3): O2 复审 R-2 覆盖缺口补测 (12 例) |
