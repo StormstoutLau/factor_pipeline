@@ -1,5 +1,63 @@
 # 开发日志 (Changelog)
 
+## v3.5.1 — 多断点接入 `diagnose` 标签路径 (已实施, 2026-11-17)
+
+### 概览
+
+关闭 ADR-046 遗留 G10: `diagnose()` 新增 **opt-in** `breakpoint_mode='multiple'`,
+把 `detect_multiple` 的分段信息接入 `premium_health` / 综合标签。默认
+`breakpoint_mode='single'` 的标签、数值与旧键**逐位不变** (20/20 随机面板探针)。
+
+由于异构复审 H5/H6 已量化裸 BIC 的假阳性 (噪声下 39%/33%, T=72/120), 接入采用
+**两级门控**: 存在性由单断点 sup-F (`detect`, size 3.3%/5.3%) 判定; 未确认的
+BIC 断点仅在材料性 `max|Δ段均值|/sd_within >= 1.0` 时降级为 `suspect`,
+**不升级 ES**。这是 docstring 早已定义但此前未实现的 borderline 语义。
+
+### 核心产出
+
+- `diagnose(..., breakpoint_mode='single'|'multiple', m_max=5)`; 非法值 `ValueError`
+- 新增私有方法 `_resolve_breakpoints` / `_single_segment_view` / `_multi_break_materiality`
+- `FactorHealthDiagnoser.__init__(..., multi_break_shift_threshold=1.0)`
+- 输出新增 10 键: `breakpoint_mode` / `breakpoint_confirmed` / `breakpoint_material` /
+  `breakpoint_shift_ratio` / `n_breaks` / `breakpoints` / `segment_means` /
+  `segment_bounds` / `best_bic_m` / `best_lwz_m`; 旧键语义不变
+- 回退规则: sup-F 显著但 BIC 选 m=0 → 保留单断点分段 (n=1)
+- `detect` / `detect_multiple` / `PremiumEstimator` / `_detect_decay` / `_combine_label` 零改动
+- 版本 **3.5.1** (6 锚点); 缓存代际不变 `v2.3.0-cache`; 无新依赖
+
+### 门控证据 (序列级 300 次/配置; 复审补充面板级实测, 100 次/配置)
+
+| 场景 | sup-F 拒绝 | BIC n>0 | 材料性阈值 1.0 后 (suspect 触发率) |
+|------|-----------|---------|------------------|
+| 纯噪声 T=72 | 3.3% | 39.0% | 序列 19.3% / 面板 24% |
+| 纯噪声 T=120 | 5.3% | 33.3% | 序列 4.0% / 面板 6% |
+| 两断点 1.0σ T=120 | 68.7% | 100% | ES = sup-F 确认; 未确认者 suspect |
+
+> 注意 (复审 H2 更正): 纯噪声下的 **ES 率 = sup-F 名义 size** (面板级实测 3%/4%/3%
+> @T=72/120/240), 与 v3.5.0 之前的单断点路径一致 — 材料性门控压制的是「未确认 BIC
+> 分段」的升级, 不改变 sup-F 自身的 α 水平; 初版「ES 0%」为错误表述。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_health/__init__.py` | `diagnose` 分流 + 3 方法 (+201 / −16 行); 断点检测/估计零改动 |
+| `tests/unit/test_layer3_factor_health.py` | 新增 `TestDiagnoseMultipleBreakpointMode` (F1-F9, +9 passed) |
+| 6 处版本锚点 | 3.5.0 → 3.5.1 |
+| `DECISIONS.md` | ADR-047 |
+| `docs/` | RESEARCH / DESIGN / EXECUTION / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI |
+
+### 局限
+
+- `suspect` 在 T=72 纯噪声下约 19% (序列级) / 24% (面板级) 触发率 — 它是「需人工复核」
+  而非断点声明;
+- 材料性阈值是量纲解释 + 探针校准的工程取值, **不是显著性水平**;
+- `'multiple'` 模式为 opt-in, 不建议用于批量自动化决策;
+- LWZ 仍仅作对照 (`best_lwz_m`), 双断点面板实测 LWZ 选 3 而 BIC 选 2 (H5 再现);
+- 异构复审量化: NaN 间隙假断点经两级门控后 has_bp 8.5–12% (裸 BIC 64–70%);
+  BIC 在高信噪比真实断点面板会过分段 (单断点面板选 2–3 段最高 37%),
+  仅影响分段描述键, 不影响标签与定位。
+
 ## v3.5.0 — 多断点支持: Bai-Perron 全局最小 SSR + Stata 对拍 (已实施, 2026-11-16)
 
 ### 概览

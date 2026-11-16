@@ -600,3 +600,214 @@ class TestBreakpointDetectorMultiple:
         a, b = y[:bp], y[bp:]
         ssr_grid = float(np.sum((a - a.mean()) ** 2) + np.sum((b - b.mean()) ** 2))
         assert multi['ssr'][1] <= ssr_grid + 1e-12
+
+
+@pytest.fixture
+def two_break_premium_panel():
+    """两个断点: μ = 0.10 → -0.10 → 0.10 (T=240, 断点 80/160)"""
+    np.random.seed(42)
+    T, N = 240, 150
+    dates = pd.date_range('2019-01-01', periods=T, freq='ME')
+    stocks = [f'S{i:02d}' for i in range(N)]
+    factor = np.random.randn(T, N)
+    premium = np.concatenate([
+        np.full(T // 3, 0.10),
+        np.full(T // 3, -0.10),
+        np.full(T - 2 * (T // 3), 0.10),
+    ])
+    fwd = np.empty((T, N))
+    for t in range(T):
+        fwd[t] = premium[t] * factor[t] + np.random.randn(N) * 0.05
+    return (pd.DataFrame(factor, index=dates, columns=stocks),
+            pd.DataFrame(fwd, index=dates, columns=stocks))
+
+
+def _mock_single(has_bp, bp=120, T=200):
+    """构造 detect() 返回值 (无断点时不含 breakpoint_idx, 与真实契约一致)"""
+    res = {
+        'has_breakpoint': has_bp,
+        'chow_max_stat': 5.0 if has_bp else 1.0,
+        'critical': 8.0,
+        'cusum_path': np.zeros(T),
+        'pre_mean': 0.05 if has_bp else np.nan,
+        'post_mean': 0.02 if has_bp else np.nan,
+    }
+    if has_bp:
+        res['breakpoint_idx'] = bp
+    return res
+
+
+def _mock_multi(n_breaks, seg_means, ssr_by_m, breaks, T=200):
+    """构造 detect_multiple() 返回值 (只填消费方用到的键)"""
+    return {
+        'has_breakpoint': n_breaks > 0,
+        'n_breaks': n_breaks,
+        'breakpoints': list(breaks),
+        'segment_means': list(seg_means),
+        'segment_bounds': [(0, T)] if n_breaks == 0 else [(0, breaks[0])] +
+                          [(breaks[i], breaks[i + 1]) for i in range(len(breaks) - 1)] +
+                          [(breaks[-1], T)],
+        'ssr': dict(ssr_by_m),
+        'bic': {k: float(k) for k in ssr_by_m},
+        'lwz': {k: float(k) for k in ssr_by_m},
+        'best_bic_m': n_breaks,
+        'best_lwz_m': n_breaks,
+        'trimming': 30,
+        'm_max': 5,
+        'n_valid': T,
+    }
+
+
+class TestDiagnoseMultipleBreakpointMode:
+    """F1-F9: 多断点接入 diagnose 标签路径 (v3.5.1, ADR-047)"""
+
+    def test_f1_default_mode_unchanged(self, healthy_premium_panel):
+        """F1: 默认 single 模式 → 标签路径不变, 仅新增描述键"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        res = FactorHealthDiagnoser(bandwidth=24, alpha=0.05).diagnose(
+            factor, ret, return_type='static')
+        assert res['breakpoint_mode'] == 'single'
+        assert res['breakpoint_confirmed'] == res['has_breakpoint']
+        assert res['breakpoint_material'] == res['has_breakpoint']
+        assert res['best_bic_m'] is None and res['best_lwz_m'] is None
+        assert res['n_breaks'] == (1 if res['has_breakpoint'] else 0)
+        assert res['breakpoints'] == ([res['breakpoint_idx']]
+                                      if res['has_breakpoint'] else [])
+        assert res['diagnosis'] in ('pricing', 'suspect')
+        for key in ('segment_means', 'segment_bounds', 'breakpoint_shift_ratio'):
+            assert key in res
+
+    def test_f2_single_break_confirmed(self, breakpoint_premium_panel):
+        """F2: 强单断点 → confirmed=True, n_breaks=1, ES/ES+TD"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = breakpoint_premium_panel
+        res = FactorHealthDiagnoser(bandwidth=12, alpha=0.05).diagnose(
+            factor, ret, return_type='static', breakpoint_mode='multiple')
+        assert res['breakpoint_mode'] == 'multiple'
+        assert res['breakpoint_confirmed'] is True
+        assert res['has_breakpoint'] is True
+        assert res['n_breaks'] == 1
+        assert len(res['breakpoints']) == 1
+        assert 70 <= res['breakpoints'][0] <= 130
+        assert res['premium_health'] in ('ES', 'ES+TD')
+        assert len(res['segment_means']) == 2
+
+    def test_f3_two_breaks_detected(self, two_break_premium_panel):
+        """F3: 双断点 → n_breaks=2, 断点 [80,160]"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = two_break_premium_panel
+        res = FactorHealthDiagnoser(bandwidth=24, alpha=0.05).diagnose(
+            factor, ret, return_type='static', breakpoint_mode='multiple')
+        assert res['breakpoint_confirmed'] is True
+        assert res['n_breaks'] == 2, res['breakpoints']
+        assert res['breakpoints'] == [80, 160]
+        assert len(res['segment_means']) == 3
+        assert res['has_breakpoint'] is True
+        assert res['premium_health'] in ('ES', 'ES+TD')
+
+    def test_f4_noise_never_es(self, healthy_premium_panel):
+        """F4: 纯噪声 → 不得产出 ES; 若 has_bp 必为未确认 suspect"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        res = FactorHealthDiagnoser(bandwidth=24, alpha=0.05).diagnose(
+            factor, ret, return_type='static', breakpoint_mode='multiple')
+        assert res['premium_health'] not in ('ES', 'ES+TD')
+        if res['has_breakpoint']:
+            assert res['premium_health'] == 'suspect'
+            assert res['breakpoint_confirmed'] is False
+
+    def test_f5_invalid_mode_raises(self, healthy_premium_panel):
+        """F5: 非法 breakpoint_mode → ValueError"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        with pytest.raises(ValueError):
+            diag.diagnose(factor, ret, breakpoint_mode='bogus')
+
+    def test_f6_short_panel_multiple_no_raise(self):
+        """F6: T=20 + multiple → 退化, 不抛异常"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        np.random.seed(7)
+        T, N = 20, 50
+        dates = pd.date_range('2024-01-01', periods=T, freq='ME')
+        stocks = [f'S{i:02d}' for i in range(N)]
+        factor = pd.DataFrame(np.random.randn(T, N), index=dates, columns=stocks)
+        ret = pd.DataFrame(0.02 * factor.values + np.random.randn(T, N) * 0.05,
+                           index=dates, columns=stocks)
+        res = FactorHealthDiagnoser(bandwidth=6, alpha=0.05).diagnose(
+            factor, ret, return_type='static', breakpoint_mode='multiple')
+        assert res['breakpoint_mode'] == 'multiple'
+        assert res['n_breaks'] == 0
+        assert res['breakpoints'] == []
+        assert res['breakpoint_confirmed'] is False
+        assert res['has_breakpoint'] is False
+
+    def test_f7_unconfirmed_material_is_suspect(self, healthy_premium_panel, monkeypatch):
+        """F7: sup-F 不显著 + BIC 断点材料性 1.5 → suspect (不升级 ES)"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        # ratio = 0.03 / sqrt(0.08/200) = 1.5
+        multi = _mock_multi(1, [0.05, 0.02], {0: 9.0, 1: 0.08}, [120])
+        monkeypatch.setattr(diag.detector, 'detect', lambda y: _mock_single(False))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['breakpoint_confirmed'] is False
+        assert res['breakpoint_material'] is True
+        assert res['has_breakpoint'] is True
+        assert res['premium_health'] == 'suspect'
+        assert res['diagnosis'] == 'suspect'
+        assert abs(res['breakpoint_shift_ratio'] - 1.5) < 1e-9
+
+    def test_f8_unconfirmed_immaterial_ignored(self, healthy_premium_panel, monkeypatch):
+        """F8: sup-F 不显著 + 材料性 0.5 → 不改标签"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        # ratio = 0.03 / sqrt(0.72/200) = 0.5
+        multi = _mock_multi(1, [0.05, 0.02], {0: 9.0, 1: 0.72}, [120])
+        monkeypatch.setattr(diag.detector, 'detect', lambda y: _mock_single(False))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['breakpoint_confirmed'] is False
+        assert res['breakpoint_material'] is False
+        assert res['has_breakpoint'] is False
+        # 复审 H3: 旧键语义不变 — 无断点告警时 pre/post 必须为 NaN
+        assert res['breakpoint_idx'] is None
+        assert np.isnan(res['mean_premium_pre_bp'])
+        assert np.isnan(res['mean_premium_post_bp'])
+        assert res['premium_health'] != 'suspect' or res['has_breakpoint'] is False
+        assert res['premium_health'] not in ('ES', 'ES+TD')
+
+    def test_f9_confirmed_bic_zero_falls_back(self, healthy_premium_panel, monkeypatch):
+        """F9: sup-F 显著但 BIC 选 0 → 回退单断点分段"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        multi = _mock_multi(0, [0.03], {0: 5.0}, [])
+        monkeypatch.setattr(diag.detector, 'detect',
+                            lambda y: _mock_single(True, bp=120))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['breakpoint_confirmed'] is True
+        assert res['n_breaks'] == 1
+        assert res['breakpoints'] == [120]
+        assert res['premium_health'] == 'ES'
+        # 回退分段的 pre/post 由实际 beta_raw 重算 (与 detect 的 pre/post 同口径)
+        assert np.isfinite(res['mean_premium_pre_bp'])
+        assert np.isfinite(res['mean_premium_post_bp'])
+        assert res['mean_premium_pre_bp'] != res['mean_premium_post_bp']
+        assert res['breakpoint_idx'] == 120

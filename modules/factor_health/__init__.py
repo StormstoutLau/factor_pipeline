@@ -660,25 +660,42 @@ class FactorHealthDiagnoser:
         Significance level for breakpoint test.
     half_life_threshold : int
         Maximum half-life (months) to classify as TD. Default 60.
+    multi_break_shift_threshold : float
+        Materiality threshold for *unconfirmed* multi-breakpoints (v3.5.1):
+        `max |Δsegment_mean| / sd_within >= threshold` → `suspect`.
+        Default 1.0 (one within-segment standard deviation).
     """
 
     def __init__(self, bandwidth: int = 24, alpha: float = 0.05,
-                 half_life_threshold: int = 60):
+                 half_life_threshold: int = 60,
+                 multi_break_shift_threshold: float = 1.0):
         self.bandwidth = bandwidth
         self.alpha = alpha
         self.half_life_threshold = half_life_threshold
+        self.multi_break_shift_threshold = float(multi_break_shift_threshold)
         self.estimator = PremiumEstimator(bandwidth=bandwidth)
         self.detector = BreakpointDetector(alpha=alpha)
 
     def diagnose(self, factor: pd.DataFrame, forward_returns: pd.DataFrame,
-                 return_type: str = 'unknown') -> Dict:
+                 return_type: str = 'unknown',
+                 breakpoint_mode: str = 'single', m_max: int = 5) -> Dict:
         """Full diagnosis pipeline: estimate λ̂(t) → detect breakpoint → classify.
+
+        Parameters
+        ----------
+        breakpoint_mode : {'single', 'multiple'}
+            'single' (default): 单断点网格 sup-F, 与 v3.5.0 及之前完全一致。
+            'multiple': 额外调用 `detect_multiple` 获取多断点分段。存在性仍由
+            sup-F 判定 (`breakpoint_confirmed`); 未确认但材料性达标的 BIC 分段
+            降级为 `suspect`, 不升级为 ES。见 ADR-047。
+        m_max : int
+            多断点最大段数 (仅 'multiple' 生效), 透传 `detect_multiple`。
 
         Returns
         -------
         dict with keys:
             diagnosis : str — combined label
-            premium_health : str — ES/TD/ES+TD/stable/suspect
+            premium_health : str — ES/TD/ES+TD/stable/suspect/insignificant
             return_type : str — from Layer 2
             premium_mean, premium_std : float
             has_breakpoint : bool
@@ -686,13 +703,22 @@ class FactorHealthDiagnoser:
             mean_premium_pre_bp, mean_premium_post_bp : float
             half_life : float or None (months)
             chow_max_stat : float
+            breakpoint_mode / breakpoint_confirmed / breakpoint_material /
+            breakpoint_shift_ratio / n_breaks / breakpoints / segment_means /
+            segment_bounds / best_bic_m / best_lwz_m : 诊断描述键 (v3.5.1)
         """
+        if breakpoint_mode not in ('single', 'multiple'):
+            raise ValueError(
+                "breakpoint_mode must be 'single' or 'multiple', "
+                f"got {breakpoint_mode!r}"
+            )
+
         # Step 1: Estimate premium
         lambda_hat = self.estimator.estimate(factor, forward_returns)
         beta_raw = getattr(self.estimator, '_beta_raw', lambda_hat)
 
         # Step 2: Breakpoint detection on RAW betas (not kernel-smoothed)
-        bp_result = self.detector.detect(beta_raw)
+        bp_result = self._resolve_breakpoints(beta_raw, breakpoint_mode, m_max)
 
         # Step 3: Decay detection on smoothed lambda_hat
         td_result = self._detect_decay(lambda_hat)
@@ -711,35 +737,197 @@ class FactorHealthDiagnoser:
             'premium_mean': float(np.mean(lambda_hat[valid])) if valid.any() else 0.0,
             'premium_std': float(np.std(lambda_hat[valid])) if valid.any() else 0.0,
             'has_breakpoint': bp_result['has_breakpoint'],
-            'breakpoint_idx': bp_result.get('breakpoint_idx'),
-            'mean_premium_pre_bp': float(bp_result.get('pre_mean', np.nan)),
-            'mean_premium_post_bp': float(bp_result.get('post_mean', np.nan)),
+            'breakpoint_idx': bp_result['breakpoint_idx'],
+            'mean_premium_pre_bp': bp_result['pre_mean'],
+            'mean_premium_post_bp': bp_result['post_mean'],
             'half_life': td_result.get('half_life'),
-            'chow_max_stat': float(bp_result.get('chow_max_stat', 0.0)),
+            'chow_max_stat': bp_result['chow_max_stat'],
+            'breakpoint_mode': bp_result['breakpoint_mode'],
+            'breakpoint_confirmed': bp_result['breakpoint_confirmed'],
+            'breakpoint_material': bp_result['breakpoint_material'],
+            'breakpoint_shift_ratio': bp_result['breakpoint_shift_ratio'],
+            'n_breaks': bp_result['n_breaks'],
+            'breakpoints': bp_result['breakpoints'],
+            'segment_means': bp_result['segment_means'],
+            'segment_bounds': bp_result['segment_bounds'],
+            'best_bic_m': bp_result['best_bic_m'],
+            'best_lwz_m': bp_result['best_lwz_m'],
             'lambda_hat': lambda_hat,
         }
         return result
+
+    def _resolve_breakpoints(self, beta_raw: np.ndarray, mode: str,
+                             m_max: int) -> Dict:
+        """统一单/多断点的断点视图 (v3.5.1)。
+
+        `detect` (sup-F) 始终作为**存在性**判定; `detect_multiple` 仅提供分段。
+        mode='multiple' 时, 未确认但材料性达标的 BIC 断点标记为 material,
+        由 `_classify_premium_health` 降级为 suspect。
+        """
+        y_all = np.asarray(beta_raw, dtype=float).ravel()
+        valid = ~np.isnan(y_all)
+        y = y_all[valid]
+        idx_map = np.where(valid)[0]
+        T = int(len(y))
+
+        single = self.detector.detect(y_all)
+        confirmed = bool(single['has_breakpoint'])
+        single_view = self._single_segment_view(y, idx_map, single)
+
+        if mode == 'single':
+            single_view.update(
+                breakpoint_mode='single',
+                has_breakpoint=confirmed,
+                breakpoint_confirmed=confirmed,
+                breakpoint_material=confirmed,
+                best_bic_m=None,
+                best_lwz_m=None,
+            )
+            return single_view
+
+        multi = self.detector.detect_multiple(y_all, m_max=m_max)
+        material, ratio = self._multi_break_materiality(multi, T)
+        n_bic = int(multi['n_breaks'])
+
+        if n_bic > 0:
+            seg_means = [float(x) for x in multi['segment_means']]
+            seg_bounds = [(int(a), int(b)) for a, b in multi['segment_bounds']]
+            breaks = [int(b) for b in multi['breakpoints']]
+            label_bp = bool(confirmed or material)
+            view = {
+                'has_breakpoint': label_bp,
+                'breakpoint_idx': breaks[0] if (breaks and label_bp) else None,
+                'n_breaks': n_bic,
+                'breakpoints': breaks,
+                'segment_means': seg_means,
+                'segment_bounds': seg_bounds,
+                # 旧键语义不变 (复审 H3): pre/post 仅在断点相关告警存在时非 NaN
+                'pre_mean': (seg_means[0] if (seg_means and label_bp)
+                             else float('nan')),
+                'post_mean': (seg_means[-1] if (seg_means and label_bp)
+                              else float('nan')),
+                'breakpoint_shift_ratio': ratio,
+                'chow_max_stat': single_view['chow_max_stat'],
+            }
+        elif confirmed:
+            # G6 回退: 形式检验显著但 BIC 选 0 → 保留单断点分段
+            view = dict(single_view)
+            view['n_breaks'] = 1
+            view['breakpoints'] = ([single_view['breakpoint_idx']]
+                                   if single_view['breakpoint_idx'] is not None
+                                   else [])
+            view['breakpoint_shift_ratio'] = ratio
+            view['has_breakpoint'] = True
+        else:
+            multi_means = [float(x) for x in multi['segment_means']
+                           if np.isfinite(x)]
+            view = {
+                'has_breakpoint': False,
+                'breakpoint_idx': None,
+                'n_breaks': 0,
+                'breakpoints': [],
+                'segment_means': multi_means,
+                'segment_bounds': [(int(a), int(b))
+                                   for a, b in multi['segment_bounds']],
+                'pre_mean': float('nan'),
+                'post_mean': float('nan'),
+                'breakpoint_shift_ratio': ratio,
+                'chow_max_stat': single_view['chow_max_stat'],
+            }
+
+        view.update(
+            breakpoint_mode='multiple',
+            breakpoint_confirmed=confirmed,
+            breakpoint_material=material,
+            best_bic_m=int(multi['best_bic_m']),
+            best_lwz_m=int(multi['best_lwz_m']),
+        )
+        return view
+
+    @staticmethod
+    def _single_segment_view(y: np.ndarray, idx_map: np.ndarray,
+                             single: Dict) -> Dict:
+        """单断点分段视图 (原序列索引)。"""
+        nan = float('nan')
+        chow = float(single.get('chow_max_stat', 0.0))
+        if not single['has_breakpoint'] or 'breakpoint_idx' not in single or len(y) == 0:
+            return {
+                'has_breakpoint': False,
+                'breakpoint_idx': None,
+                'n_breaks': 0,
+                'breakpoints': [],
+                'segment_means': [float(np.mean(y))] if len(y) else [],
+                'segment_bounds': ([(int(idx_map[0]), int(idx_map[-1]) + 1)]
+                                   if len(y) else []),
+                'pre_mean': nan,
+                'post_mean': nan,
+                'breakpoint_shift_ratio': nan,
+                'chow_max_stat': chow,
+            }
+
+        bp_orig = int(single['breakpoint_idx'])
+        pos = int(np.searchsorted(idx_map, bp_orig))
+        pos = min(max(pos, 1), len(y) - 1)
+        pre, post = y[:pos], y[pos:]
+        pre_m, post_m = float(np.mean(pre)), float(np.mean(post))
+        ssr = float(np.sum((pre - pre_m) ** 2) + np.sum((post - post_m) ** 2))
+        sd_w = float(np.sqrt(max(ssr, 0.0) / len(y)))
+        ratio = (abs(post_m - pre_m) / sd_w) if sd_w > 0 else nan
+        return {
+            'has_breakpoint': True,
+            'breakpoint_idx': bp_orig,
+            'n_breaks': 1,
+            'breakpoints': [bp_orig],
+            'segment_means': [pre_m, post_m],
+            'segment_bounds': [(int(idx_map[0]), int(idx_map[pos - 1]) + 1),
+                               (int(idx_map[pos]), int(idx_map[-1]) + 1)],
+            'pre_mean': pre_m,
+            'post_mean': post_m,
+            'breakpoint_shift_ratio': float(ratio),
+            'chow_max_stat': chow,
+        }
+
+    def _multi_break_materiality(self, multi: Dict, T: int):
+        """材料性: max|Δsegment_mean| / sd_within, 返回 (bool, ratio)。"""
+        nan = float('nan')
+        if int(multi.get('n_breaks', 0)) <= 0 or T <= 0:
+            return False, nan
+        best = multi.get('best_bic_m', 0)
+        ssr = multi.get('ssr', {}).get(best, nan)
+        if not np.isfinite(ssr):
+            return False, nan
+        sd_w = float(np.sqrt(max(float(ssr), 0.0) / T))
+        if sd_w <= 0:
+            return False, nan
+        seg = multi.get('segment_means', [])
+        if len(seg) < 2 or not all(np.isfinite(seg)):
+            return False, nan
+        shift = max(abs(seg[i + 1] - seg[i]) for i in range(len(seg) - 1))
+        ratio = float(shift / sd_w)
+        return bool(ratio >= self.multi_break_shift_threshold), ratio
 
     def _classify_premium_health(self, lambda_hat: np.ndarray,
                                   bp_result: Dict, td_result: Dict) -> str:
         """Classify premium into health state.
 
         Decision tree:
-          ES detected + TD detected → 'ES+TD'
-          ES detected, no TD       → 'ES'
-          TD detected, no ES       → 'TD'
+          ES confirmed + TD         → 'ES+TD'
+          ES confirmed, no TD       → 'ES'
+          TD, no confirmed ES       → 'TD'
+          unconfirmed but material  → 'suspect' (v3.5.1 多断点降级)
           no ES, no TD, |premium| > 1σ → 'stable'
           no ES, no TD, |premium| < 1σ → 'suspect'
         """
         has_bp = bp_result['has_breakpoint']
+        confirmed = bp_result.get('breakpoint_confirmed', has_bp)
         has_td = td_result.get('has_decay', False)
 
-        if has_bp and has_td:
-            return 'ES+TD'
-        elif has_bp:
-            return 'ES'
-        elif has_td:
+        if has_bp and confirmed:
+            return 'ES+TD' if has_td else 'ES'
+        if has_td:
             return 'TD'
+        if has_bp:
+            return 'suspect'
 
         valid = ~np.isnan(lambda_hat)
         if valid.sum() < 10:

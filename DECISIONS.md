@@ -47,7 +47,8 @@
 | ADR-044 | 断点监控调度 — 节拍器注入, 幂等 + 失败不推进 | v3.4.2, 2026-11-12 |
 | ADR-045 | Dynamic 组件可分离性 — 中性化与 AR 解耦独立开关 | v3.4.3, 2026-11-12 |
 | ADR-046 | 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对拍 | v3.5.0, 2026-11-16 |
-| ADR-047 起 | 未占用 | — |
+| ADR-047 | 多断点接入 diagnose 标签路径 — opt-in + 形式检验 + 材料性门控 | v3.5.1, 2026-11-17 |
+| ADR-048 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3245,6 +3246,111 @@ Stata 18.0 MP **无**官方 Bai-Perron 命令 — `regress, breakpoints()` 报 r
 删除 `detect_multiple` 及 6 个私有方法 (176 行) + E1-E8 + 对拍脚本; 版本锚点 6 处回
 3.4.13; 回退 ADR/CHANGELOG/PROJECT_STATUS/DEV_PROGRESS/CODE_WIKI 的 v3.5.0 条目。
 `detect` / `diagnose` 未改动, 无需回滚生产路径; 无数据迁移, 缓存代际不变。
+
+---
+
+## ADR-047: 多断点接入 `diagnose` 标签路径 — opt-in + 形式检验 + 材料性门控 (v3.5.1)
+
+**日期**: 2026-11-17
+**状态**: 已实施 (v3.5.1)
+**优先级**: P1
+**关联测试**: `tests/unit/test_layer3_factor_health.py::TestDiagnoseMultipleBreakpointMode` (F1-F9)
+**关联文档**: [调研](docs/research/RESEARCH_V3.5.1_DIAGNOSE_MULTIBP.md) / [设计](docs/private/DESIGN_V3.5.1_DIAGNOSE_MULTIBP.md) / [实施](docs/EXECUTION_V3.5.1_DIAGNOSE_MULTIBP.md) / [审计](docs/audit/2026-11-17-v3.5.1-diagnose-multibp-audit.md) / ADR-046
+
+### 背景
+
+ADR-046 交付 `detect_multiple` 时把「接入 `diagnose` 标签路径」记为遗留 (G10),
+理由是需单独评估标签语义。v3.5.0 异构复审进一步量化了风险:
+
+- 纯噪声下 BIC 选 m>0 的假阳性 **44% (T=72) / 36% (T=120)** (H6);
+- LWZ (c0=0.1) 假阳性 **89%/75%**, 与「保守」预期相反 (H5), 仅可作对照;
+- 单断点 sup-F 在纯噪声下假阳性仅 **3.3%/5.3%**, 是有 size 控制的正式检验。
+
+因此, 直接把 `n_breaks > 0` 映射为 ES 会把误报率放大 10 倍, 不可接受。
+
+### 决策
+
+1. `diagnose` 新增 **opt-in** 参数 `breakpoint_mode='single'|'multiple'`, 默认
+   `'single'`, 默认标签/数值/旧键**零变更**; 非法值 `ValueError`;
+2. `m_max=5` 透传 `detect_multiple`, 仅 `'multiple'` 生效;
+3. **存在性**由既有单断点 sup-F (`detect`) 判定, 输出 `breakpoint_confirmed`;
+   BIC 仅负责**分段** (`n_breaks` / `breakpoints` / `segment_means` / `segment_bounds`);
+4. **材料性门控** (仅对未确认的 BIC 断点): `shift_ratio = max|Δ段均值| / sd_within`,
+   `sd_within = sqrt(SSR_best/T)`; `shift_ratio >= multi_break_shift_threshold` (默认 **1.0**)
+   才视为材料; 命中时 `premium_health='suspect'` (**不升级 ES**);
+5. `has_breakpoint := confirmed or material` (multiple); single 模式仍为 sup-F 结果;
+6. 标签决策树: confirmed → ES/ES+TD; 未确认 + TD → TD; 未确认但材料 → suspect;
+   其余走既有 FM t 路径;
+7. **回退规则**: confirmed 但 BIC 选 m=0 → 保留单断点分段 (n=1, 位置取 sup-F);
+8. `breakpoint_idx` = 首个 BIC 断点 (仅 `has_breakpoint=True` 时非 None); `pre/post` =
+   首/末段均值; m=1 时与单断点同义; BIC 原始断点列表始终见 `breakpoints`;
+9. 输出**只增不改**: 新增 `breakpoint_mode` / `breakpoint_confirmed` /
+   `breakpoint_material` / `breakpoint_shift_ratio` / `n_breaks` / `breakpoints` /
+   `segment_means` / `segment_bounds` / `best_bic_m` / `best_lwz_m`;
+6 个既有键语义不变;
+10. 阈值经 `__init__(multi_break_shift_threshold=1.0)` 可配置 (与 bandwidth/alpha 同类);
+11. 不硬编码 Bai-Perron 临界值表; 无新依赖; 缓存代际 `v2.3.0-cache` 不变;
+12. 版本 **3.5.1** (6 锚点); 不修改 ADR-046 历史文本, 以其扩展记录本决策。
+
+### 证据 (2026-11-17 探针, 300 次/配置)
+
+| 场景 | sup-F 拒绝率 | BIC n>0 率 | 二者同时 |
+|------|------------|-----------|---------|
+| 纯噪声 T=72 | 3.3% | 39.0% | 3.3% |
+| 纯噪声 T=120 | 5.3% | 33.3% | 5.3% |
+| 单断点 0.8σ T=120 | 96.0% | 99.7% | 96.0% |
+| 两断点 0.8σ T=120 | 47.7% | 98.0% | 47.7% |
+| 两断点 1.0σ T=120 | 68.7% | 100% | 68.7% |
+
+材料性阈值 (within-sd) 权衡 (suspect 触发率, 序列级): 1.0 → 19.3% (T=72) / 4.0% (T=120),
+双断点 1.0σ 功效 87.3%; 1.25 → 10.7% / 0%, 功效 48.3%。
+
+### 异构复审 (2026-11-17)
+
+- **H2 文档误述**: 初版门控证据表写「纯噪声 ES 0%」— 实际 ES 率 = sup-F 名义 size
+  (面板级实测 3%/4%/3% @T=72/120/240), 材料性门控只压制未确认升级, 不改变 sup-F 的
+  α 水平; 已更正 CHANGELOG;
+- **H3 代码缺陷**: multiple 模式「未确认且不材料」分支曾把 BIC 段均值回填
+  `mean_premium_pre_bp/post_bp` (此时 has_breakpoint=False), 违反决策 9「旧键语义不变」
+  → 修正为 NaN (与单断点契约一致) + F8 断言; layer3 40 + 版本统一 7 重跑通过;
+- **H4-H6 量化披露**: 面板级 suspect 触发 24%/6%/0% (T=72/120/240); NaN 间隙假断点经
+  两级门控后 has_bp 8.5-12% (裸 BIC 64-70%); BIC 高信噪比过分段最高 37% (仅影响分段
+  描述键, 定位无偏 med=0);
+- H1/H7/H8 确认: 默认模式等价扩样 **60/60** 面板; 真实 β_t (T=72) 无告警 (sup-F
+  F=1.0<8.8 + BIC m=0, 与 v3.5.0 一致); 输出契约 22 键完整、边界全部正确。
+
+实施后验证: 20 个随机面板 single 模式 `premium_health` 与旧分类器 **20/20 一致**;
+20 个噪声面板多断点不变量 **0 违规**; 双断点面板 (T=240, μ=0.10/-0.10/0.10)
+输出 `ES`, `n_breaks=2`, `[80,160]`, 而 `best_lwz_m=3` (再次印证 H5)。
+
+### 后果
+
+- **正面**: 多断点分段进入诊断输出; 正式检验守住 ES 误报; 未确认材料断点获得
+  `suspect` 早期告警通道 (首次实现 docstring 早已定义的 borderline 语义);
+- **默认不变**: `diagnose(f, r, return_type=...)` 的标签与旧键逐位不变
+  (20/20 探针 + 全量回归);
+- **局限**: `suspect` 在 T=72 纯噪声下约 19% (序列级) / 24% (面板级) 触发率 — 它是
+  「需人工复核」而非断点声明; `'multiple'` 模式属 opt-in, 不应用于批量自动化决策;
+- **风险**: 材料性阈值是量纲解释 + 探针校准的工程取值, 不是显著性水平;
+  不同因子族可经构造参数调整并留痕;
+- **维护**: 若未来取得可核实的 Bai-Perron sup-F_m 临界值表, 可替换两级门控。
+
+### 替代方案
+
+| 方案 | 否决理由 |
+|------|---------|
+| 裸 BIC (`has_breakpoint := n_breaks>0`) | 噪声假阳性 39%/33%, ES 误报放大 10 倍 |
+| `sup-F ∧ BIC>0` 且不设 suspect 层 | 双断点 sup-F 功效仅 48%–69%, 丢失多断点全部增量 |
+| LWZ 作为选段依据 | H5: 假阳性 89%/75%, 与「保守」相反 |
+| 默认切多断点 | 违反 ADR-046 兼容承诺; 短样本 BIC 不可直接解读 |
+| 自写 sup-F_m 临界值表 | 无可核实副本, 硬编码有编造风险 |
+
+### 回滚方案
+
+删除 `diagnose` 的 `breakpoint_mode`/`m_max` 参数与 3 个新增私有方法, 恢复
+`_classify_premium_health` 原分支; 删除 F1-F9; 版本 6 锚点回 3.5.0; 回退
+ADR-047/CHANGELOG/PROJECT_STATUS/DEV_PROGRESS/CODE_WIKI 条目。`detect` /
+`detect_multiple` / Estimator 未改动, 无需回滚。
 
 ---
 

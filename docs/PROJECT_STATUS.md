@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-11-16
+> **更新日期**: 2026-11-17
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -54,9 +54,10 @@ v3.4.11 (2026-11-16) 技术债小包 (alpha 清理 + mean_diff 缺失 + MAD 参�
 v3.4.12 (2026-11-16) 面板 HAC / Premium 标准误 (estimate_with_errors)            [x]
 v3.4.13 (2026-11-16) DEFECT-1: BreakpointDetector 短样本退化                     [x]
 v3.5.0 (2026-11-16) 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对拍 (ADR-046)  [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.5.0
+v3.5.1 (2026-11-17) 多断点接入 diagnose 标签路径 — opt-in + 两级门控 (ADR-047)  [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.5.1
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
-v3.5.x (远期)     内生性-溢价诊断交互 (多断点部分已于 v3.5.0 交付)              [ ]
+v3.5.x (远期)     内生性-溢价诊断交互                                           [ ]
 ```
 
 ---
@@ -69,10 +70,11 @@ v3.5.x (远期)     内生性-溢价诊断交互 (多断点部分已于 v3.5.0 �
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 (v3.4.0 – v3.5.0)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose (v3.4.0 – v3.5.1)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.5.1 | 多断点接入 `diagnose` | `diagnose(..., breakpoint_mode='single'|'multiple', m_max=5)`; 存在性由 sup-F (`breakpoint_confirmed`) + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 single 零变更; `detect`/`detect_multiple`/Estimator 零改动 | ADR-047 | F1-F9 9 passed; layer3 40 passed; single 模式 20/20 与旧分类器一致; 双断点 T=240 → `ES`, n=2, [80,160]; 版本统一 7 passed + 手工 5/5; 全量回归 1777 passed / 15 skipped / 0 failed |
 | v3.5.0 | 多断点支持 (Bai-Perron) | `BreakpointDetector.detect_multiple()` 新增: DP 全局最小 SSR (O(m·T²)) + BIC/LWZ 选段数; 13 键输出 (含 `breakpoints` / `segment_means` / `segment_bounds`); 不硬编码 sup-F 临界值表; T<30 退化; `detect` / `diagnose` 零改动 | ADR-046 | 新增 8 passed (E1-E8); layer3 31 passed; 版本统一 7 passed + 手工 5/5; **Stata 18.0 MP 官方 regress 对拍 46/46 PASS** (断点逐点相同, SSR rel ≤8.5e-9, BIC abs ≤8.5e-9); 真实 β_t (T=72) BIC/LWZ 判 m=0 无断点 (初版误读已按复审 H4 更正) |
 | v3.4.13 | DEFECT-1 短样本断点退化 | `BreakpointDetector._no_breakpoint_result(T)` 补齐 (T<30 返回 6 键无断点结果: `has_breakpoint=False` / `critical=nan` / `cusum` 全 NaN / 无 `breakpoint_idx`); `detect` 正常路径与 `diagnose` 零改动; 短样本 `diagnose` 由崩溃变为正常诊断 | — (Andrews 1993 sup-F 适用性) | 新增 5 passed (E1-E5); 定向 30 passed; 版本统一 7 passed + 手工 6/6; 全量回归 1760 passed / 15 skipped / 0 failed |
 | v3.4.12 | 面板 HAC / Premium 标准误 | `PremiumEstimator.estimate_with_errors` 新增 14 键输出: 逐期 OLS SE、λ̂(t) 局部 HAC SE、溢价均值 HAC SE + 正态 CI; 抽出 `_smooth_betas` / `_hac_long_run_variance`; 独立复审修正 F1 (SE 权重归一化) / F2 (σ̂² 守卫) + Stata 18 对拍验证 (引擎逐位一致, 唯一约定差 = Stata df 修正); `estimate` / `diagnose` 零变更 | — (方法学见 DESIGN_DISCUSSION_V3.3.0 §2 + RESEARCH_PREMIUM_HAC_SE) | 新增 9 passed (E1-E9); Layer 3 18 passed; `tests/test_backtest` 599 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1755 passed / 15 skipped / 0 failed |
@@ -133,7 +135,7 @@ v3.5.x (远期)     内生性-溢价诊断交互 (多断点部分已于 v3.5.0 �
 | — | HAC 检验 NaN 过滤 (`ledoit_wolf_hac_test` 未 drop NaN → `compare` 的 HAC 静默返回 NaN) | ✅ v3.4.10 | [MAD 实验 §6 O1](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) |
 | — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.1 |
 | — | 多断点支持 (Bai-Perron) | ✅ v3.5.0 (`detect_multiple` + Stata 46/46 对拍) | DESIGN_DISCUSSION_V3.3.0 §6.2 |
-| — | 多断点接入 `diagnose` 标签路径 | [ ] | v3.5.0 ADR-046 遗留 (需单独评估标签语义) |
+| — | 多断点接入 `diagnose` 标签路径 | ✅ v3.5.1 (opt-in `breakpoint_mode='multiple'` + sup-F 确认 + 材料性 suspect) | v3.5.0 ADR-046 遗留 |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
 | — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
 | — | Anderson-Rubin 后验检验 (中性化质量监控) | ✅ v3.2.0 (`enable_ar_check`, 默认关闭) | v3.2.0 Step 8 |
