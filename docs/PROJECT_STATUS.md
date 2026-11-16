@@ -92,14 +92,15 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 | v3.3.2 | PL-03 | 标准化 auto→z_score 逐日行内 | — | 6.18e-01 (1800 格) → 0 |
 | v3.3.1 | — | 插补 P2 (向量化 + e2e + ablation) | — | — |
 
-> 当前缺陷登记: **无 known-xfail**; 历史因果性修复链 (v3.3.1–v3.3.7) 全部闭环, 见下方 P1 表与 git 历史。
+> 当前缺陷登记: **DEFECT-1** — `BreakpointDetector.detect` 在 T<30 时调用不存在的 `_no_breakpoint_result` → `AttributeError` (唯一生产路径 `diagnose → detect`, L293-294/L499; `StructuralBreakMonitor` 不受影响; 现有测试未覆盖; 本次实证已避让)。待 v3.4.13 修复, 见 [多因子审计 Phase 8](audit/2026-11-16-multifactor-multiyear-audit.md)。无 known-xfail; 历史因果性修复链 (v3.3.1–v3.3.7) 全部闭环。
 
 ### 🟠 P1 — 下一任务 (先后顺序)
 
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
-| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023; v3.4.12 真实数据 Layer 3 HAC 验证 4 因子/2020-2026; 多年多因子全量对比待扩) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) |
+| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023; v3.4.12: 4 因子/2020-2026; 2026-11-16: 12 因子 × 三分段 + Barra 中性化 40 月, 5/12 BH / 3/12 Bonferroni; **组合层 IC/Sharpe 回测待做**) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) + [多因子×多年验证](analysis/MULTIFACTOR_MULTIYEAR_VERIFICATION.md) |
 | 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | ✅ 实验完成 — 结论**不切换默认**, MAD 保留为可选项 | [实验报告](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) (ADR-042 已知遗留; O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
+| 3 | `BreakpointDetector.detect` T<30 → `_no_breakpoint_result` 缺失 (AttributeError) | [ ] 待修 (建议 v3.4.13; 影响面已排查: 唯一生产路径 `diagnose→detect` L293/L499, `StructuralBreakMonitor` 不受影响, 现有测试未覆盖 T<30 分支; 本次实证已避让) | [多因子审计 DEFECT-1](audit/2026-11-16-multifactor-multiyear-audit.md) + [缺陷登记](#-p1--下一任务-先后顺序) |
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
