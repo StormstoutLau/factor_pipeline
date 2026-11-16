@@ -48,7 +48,8 @@
 | ADR-045 | Dynamic 组件可分离性 — 中性化与 AR 解耦独立开关 | v3.4.3, 2026-11-12 |
 | ADR-046 | 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对拍 | v3.5.0, 2026-11-16 |
 | ADR-047 | 多断点接入 diagnose 标签路径 — opt-in + 形式检验 + 材料性门控 | v3.5.1, 2026-11-17 |
-| ADR-048 起 | 未占用 | — |
+| ADR-048 | 多断点路径 NaN 间隙守卫 — 连续性描述 + ES 降级 suspect | v3.5.2, 2026-11-17 |
+| ADR-049 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3351,6 +3352,101 @@ ADR-046 交付 `detect_multiple` 时把「接入 `diagnose` 标签路径」记�
 `_classify_premium_health` 原分支; 删除 F1-F9; 版本 6 锚点回 3.5.0; 回退
 ADR-047/CHANGELOG/PROJECT_STATUS/DEV_PROGRESS/CODE_WIKI 条目。`detect` /
 `detect_multiple` / Estimator 未改动, 无需回滚。
+
+---
+
+## ADR-048: 多断点路径 NaN 间隙守卫 — 连续性描述 + ES 降级 suspect (v3.5.2)
+
+**日期**: 2026-11-17
+**状态**: 已实施 (v3.5.2)
+**优先级**: P1
+**关联测试**: `tests/unit/test_layer3_factor_health.py::TestMultipleBreakpointGapGuard` (G1-G9)
+**关联文档**: [调研](docs/research/RESEARCH_V3.5.2_NAN_GAP_GUARD.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.5.2_NAN_GAP_GUARD.md) / [审计](docs/audit/2026-11-17-v3.5.2-nan-gap-guard-audit.md) / ADR-046 / ADR-047
+
+### 背景
+
+v3.5.0 复审 H7 与 v3.5.1 复审 H5 指出: `detect_multiple` 先剔除 NaN 再在压缩
+序列上分段, 长缺失区间被压缩为相邻两点, 断点可能"跨越"缺失区间。此时:
+
+- 断点时点不可观测 (真实位移可能发生在缺失区间内);
+- 继续输出 `ES` 会把"数据断档"误读为"已定位的结构突变"。
+
+v3.5.2 探针 (T=120, 300 次/配置, α=0.05) 量化了该风险与守卫代价:
+
+| 场景 | 守卫触发 | ES 旧 | ES 新 |
+|------|----------|-------|-------|
+| 纯噪声 (无间隙 / g10 / 5×g3 / 散点 5%) | 0-1.3% | 4.3-6.0% | 3.7-6.0% |
+| 真断点 + 间隙远离 | 0.7% | 92.0% | 91.3% |
+| 真断点 + 散点 NaN | 0.3% | 94.3% | 94.0% |
+| 真断点 + g5 正落在断点 | 21.7% | 95.3% | 73.7% |
+| 真断点 + g10 正落在断点 | 17.0% | 93.0% | 76.0% |
+
+gmin 扫描: gmin=1 会把"真断点 + 孤立 NaN"误降级 7.3%; gmin=2 降至 0.3%,
+且仍能捕获 g≥2 的间隙 → 默认取 **2**。
+
+自相关对照: sup-F 过度拒绝与间隙无关 (φ=0.5: 无间隙 48.7% vs g10 45.3%),
+本 ADR 不处理该问题。
+
+### 决策
+
+1. `detect_multiple` **只增不改**: 新增 `n_nan` / `n_gaps` / `max_gap_run` /
+   `breakpoints_gap_missing` / `gap_missing_at_bp` (13 → 18 键);
+   分段结果、SSR、BIC/LWZ 逐位不变;
+2. 定义边界跨越缺失数: `gap_missing(b) = idx_map[pos] - idx_map[pos-1] - 1`,
+   `pos` 为断点在有效点序列中的位置;
+3. `FactorHealthDiagnoser.__init__` 新增 `multi_break_gap_min_run=2`,
+   `< 1` → `ValueError`; 仅在 `breakpoint_mode='multiple'` 生效;
+4. 守卫依据**标签相关边界**:
+   - `confirmed=True` → sup-F 断点;
+   - `confirmed=False & material=True` → 最大位移所在 BIC 边界 (`driver_k`);
+5. `breakpoint_gap_risk=True` 时, `ES`/`ES+TD` 降级为 `suspect`;
+   `TD` 独立成立时保留 TD (沿用 v3.5.1 优先级);
+6. `has_breakpoint` 语义不变 (`confirmed or material`), 守卫只降级标签;
+7. `breakpoint_idx` / `breakpoints` / `segment_means` 仍为描述值,
+   便于定位"断点落在间隙边缘";
+8. 默认 `single` 模式 `breakpoint_gap_risk=False`, 标签与旧键逐位不变;
+9. `diagnose` 输出 +6 键 (22 → 28), 原有 22 键语义不变;
+10. 不做 NaN 插值、不加权 SSR、不新增临界值表; 缓存代际 `v2.3.0-cache` 不变;
+11. 版本 **3.5.2** (6 锚点); 不修改 ADR-046/047 历史文本, 以其扩展记录本决策。
+
+### 证据 (2026-11-17 探针, 300 次/配置)
+
+| 指标 | 数值 |
+|------|------|
+| 纯噪声守卫触发率 | 0-1.3% |
+| 真断点远离间隙误降级 | ≤0.7% |
+| 真断点落在 g=5 间隙降级 | 21.7% (ES → suspect) |
+| 散点 NaN 误降级 (gmin=1 → 2) | 7.3% → 0.3% |
+| 端到端 (真实 FM, 断点 60, g=5) | single=ES / multiple=suspect (bp=63, gap=5) |
+| 自相关对照 (φ=0.5) | 48.7% vs 45.3% (无间隙 vs g10) |
+
+### 后果
+
+- **正面**: 断点落在数据间隙边缘时不再宣称 `ES`, 改为可复核的 `suspect`;
+  连续性诊断可解释、可追踪;
+- **代价**: 真实断点被间隙遮挡时, 约 17-22% 的 ES 降级为 suspect —
+  这是"时点不可观测"的保守代价, 已在文档披露;
+- **局限**: 不解决自相关下 sup-F 的过度拒绝 (P4), 不解决 BIC 过分段 (H6);
+- **风险**: gmin=2 是探针校准的工程取值, 不是显著性水平; 不同数据缺失模式
+  可经构造参数调整并留痕。
+
+### 替代方案
+
+| 方案 | 否决理由 |
+|------|---------|
+| 丢弃含 NaN 的整段序列 | 丢失真实数据; T 不足时退化过多 |
+| 缺失区间插值后再检测 | 制造伪数据, 违反因果性/诚实性 |
+| 加权 SSR (按时间距离) | 改变 Bai-Perron 目标函数, 需重推临界值 |
+| 段内含 NaN 就降级 | 误伤过广 (散点 NaN 普遍) |
+| gmin=1 | 真断点 + 孤立 NaN 误降级 7.3% |
+
+### 回滚方案
+
+删除 `multi_break_gap_min_run` 参数、`_gap_runs` / `_gap_missing_at`、
+`detect_multiple` 的 5 个新键与 `diagnose` 的 6 个新键; 恢复
+`_multi_break_materiality` 的二元返回与 `_classify_premium_health` 原分支;
+删除 G1-G9; 版本 6 锚点回 3.5.1; 回退 ADR-048/CHANGELOG/PROJECT_STATUS/
+DEV_PROGRESS/CODE_WIKI 条目。`detect` 与分段算法未改动, 无需回滚。
 
 ---
 

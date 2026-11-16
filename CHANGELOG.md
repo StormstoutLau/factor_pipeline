@@ -1,5 +1,63 @@
 # 开发日志 (Changelog)
 
+## v3.5.2 — 多断点路径 NaN 间隙守卫 (已实施, 2026-11-17)
+
+### 概览
+
+关闭 v3.5.0 H7 / v3.5.1 H5 的遗留: `detect_multiple` 先剔除 NaN 再在压缩序列
+上分段, 长缺失区间被压缩为相邻两点, 断点可能"跨越"数据间隙。当时点不可观测时
+继续输出 `ES` 会把"数据断档"误读为"已定位的结构突变"。
+
+v3.5.2 在 opt-in 多断点路径上增加**连续性守卫**: 标签相关边界跨越
+`>= multi_break_gap_min_run` (默认 2) 期缺失时, `ES`/`ES+TD` 降级为 `suspect`;
+默认 `single` 模式标签与旧键**逐位不变**。
+
+### 核心产出
+
+- `FactorHealthDiagnoser.__init__(..., multi_break_gap_min_run=2)`; `< 1` → `ValueError`
+- `detect_multiple` 新增 5 键: `n_nan` / `n_gaps` / `max_gap_run` /
+  `breakpoints_gap_missing` / `gap_missing_at_bp` (13 → 18 键); 分段结果零改动
+- `diagnose` 新增 6 键: 上述 5 键 + `breakpoint_gap_risk` (22 → 28 键)
+- 守卫依据: `confirmed` → sup-F 断点; 未确认但材料 → 最大位移 BIC 边界
+- `has_breakpoint` 语义不变 (`confirmed or material`), 守卫只降级标签
+- 不插值、不加权 SSR、不新增临界值表
+- 版本 **3.5.2** (6 锚点); 缓存代际不变 `v2.3.0-cache`; 无新依赖
+
+### 守卫证据 (序列级 300 次/配置, T=120, α=0.05)
+
+| 场景 | gap_risk (gmin=2) | ES 旧 | ES 新 |
+|------|-------------------|-------|-------|
+| 纯噪声 无间隙 | 0.0% | 4.7% | 4.7% |
+| 纯噪声 单间隙 g=10 | 0.0% | 6.0% | 6.0% |
+| 纯噪声 5×g=3 | 1.3% | 4.3% | 3.7% |
+| 纯噪声 散点 5% NaN | 0.0% | 5.0% | 5.0% |
+| 真断点 间隙远离 | 0.7% | 92.0% | 91.3% |
+| 真断点 散点 NaN | 0.3% | 94.3% | 94.0% |
+| 真断点 g=5 正落断点 | 21.7% | 95.3% | 73.7% |
+| 真断点 g=10 正落断点 | 17.0% | 93.0% | 76.0% |
+
+gmin 选择: gmin=1 会把"真断点 + 孤立 NaN"误降级 7.3%; gmin=2 降至 0.3%,
+且仍能捕获 g≥2 的间隙 → 默认 **2**。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_health/__init__.py` | 2 个静态辅助 + `detect_multiple` +5 键 + `diagnose` +6 键 + 守卫分流 (~+110 行); 分段算法零改动 |
+| `tests/unit/test_layer3_factor_health.py` | 新增 `TestMultipleBreakpointGapGuard` (G1-G9, +9 passed) |
+| 6 处版本锚点 | 3.5.1 → 3.5.2 |
+| `DECISIONS.md` | ADR-048 |
+| `docs/` | RESEARCH / DESIGN(private) / EXECUTION / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI |
+
+### 局限
+
+- 守卫只在**边界跨越间隙**时触发; 真实断点被间隙遮挡时约 17-22% 的 ES
+  降级为 suspect — 属"时点不可观测"的有意保守代价;
+- sup-F 在自相关下的过度拒绝与间隙无关 (φ=0.5: 无间隙 48.7% vs g10 45.3%),
+  本版不处理;
+- gmin=2 是探针校准的工程取值, **不是显著性水平**;
+- `'multiple'` 模式仍为 opt-in, 不建议用于批量自动化决策。
+
 ## v3.5.1 — 多断点接入 `diagnose` 标签路径 (已实施, 2026-11-17)
 
 ### 概览

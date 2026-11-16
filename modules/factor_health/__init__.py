@@ -375,9 +375,10 @@ class BreakpointDetector:
         Returns
         -------
         dict
-            13 键: has_breakpoint / n_breaks / breakpoints / segment_means /
+            18 键: has_breakpoint / n_breaks / breakpoints / segment_means /
             segment_bounds / ssr / bic / lwz / best_bic_m / best_lwz_m /
-            trimming / m_max / n_valid。
+            trimming / m_max / n_valid / n_nan / n_gaps / max_gap_run /
+            breakpoints_gap_missing / gap_missing_at_bp (v3.5.2 新增后 5 键)。
 
         Notes
         -----
@@ -391,14 +392,19 @@ class BreakpointDetector:
         y = y_all[valid]
         T = int(len(y))
         m_max = 5 if m_max is None else max(int(m_max), 0)
+        n_nan, n_gaps, max_gap_run = self._gap_runs(y_all)
 
         if T < 30:
-            return self._multiple_no_breakpoint_result(T, m_max)
+            return self._multiple_no_breakpoint_result(
+                T, m_max, n_nan=n_nan, n_gaps=n_gaps,
+                max_gap_run=max_gap_run)
 
         h = max(5, int(T * self.min_segment))
         m_cap = min(m_max, T // h - 1)
         if m_cap < 0:
-            return self._multiple_no_breakpoint_result(T, m_max)
+            return self._multiple_no_breakpoint_result(
+                T, m_max, n_nan=n_nan, n_gaps=n_gaps,
+                max_gap_run=max_gap_run)
 
         cs, cs2 = self._ssr_prefix(y)
         ssr_mat = self._build_ssr_matrix(cs, cs2, T, h)
@@ -428,11 +434,15 @@ class BreakpointDetector:
                      for a, b in zip(bounds[:-1], bounds[1:])]
         seg_bounds = [(int(idx_map[a]), int(idx_map[b - 1]) + 1)
                       for a, b in zip(bounds[:-1], bounds[1:])]
+        bp_orig = [int(idx_map[b]) for b in breaks]
+        bp_gaps = [self._gap_missing_at(idx_map,
+                                       int(np.searchsorted(idx_map, b)))
+                   for b in bp_orig]
 
         return {
             'has_breakpoint': bool(best_bic > 0),
             'n_breaks': int(best_bic),
-            'breakpoints': [int(idx_map[b]) for b in breaks],
+            'breakpoints': bp_orig,
             'segment_means': seg_means,
             'segment_bounds': seg_bounds,
             'ssr': ssr_by_m,
@@ -443,7 +453,33 @@ class BreakpointDetector:
             'trimming': int(h),
             'm_max': int(m_cap),
             'n_valid': T,
+            'n_nan': int(n_nan),
+            'n_gaps': int(n_gaps),
+            'max_gap_run': int(max_gap_run),
+            'breakpoints_gap_missing': bp_gaps,
+            'gap_missing_at_bp': (bp_gaps[0] if bp_gaps else None),
         }
+
+    @staticmethod
+    def _gap_runs(y_all: np.ndarray):
+        """NaN 连续性统计: (n_nan, n_gaps, max_gap_run)。"""
+        nan = np.isnan(np.asarray(y_all, dtype=float).ravel())
+        n_nan = int(nan.sum())
+        if n_nan == 0:
+            return 0, 0, 0
+        padded = np.concatenate(([False], nan, [False]))
+        diff = np.diff(padded.astype(np.int8))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+        runs = ends - starts
+        return n_nan, int(len(runs)), int(runs.max())
+
+    @staticmethod
+    def _gap_missing_at(idx_map: np.ndarray, pos):
+        """断点在有效点序列中的位置 pos 所跨越的缺失期数。"""
+        if pos is None or pos <= 0 or pos >= len(idx_map):
+            return None
+        return int(idx_map[pos] - idx_map[pos - 1] - 1)
 
     @staticmethod
     def _ssr_prefix(y: np.ndarray):
@@ -509,7 +545,9 @@ class BreakpointDetector:
         return float(np.log(ssr / T) + (k + 1) * 0.1 * ln_t ** 2.1 / T)
 
     @staticmethod
-    def _multiple_no_breakpoint_result(T: int, m_max: int) -> Dict:
+    def _multiple_no_breakpoint_result(T: int, m_max: int,
+                                       n_nan: int = 0, n_gaps: int = 0,
+                                       max_gap_run: int = 0) -> Dict:
         """多断点退化结果 (T<30 或 trimming 不可行): 显式标记未计算。"""
         nan = float('nan')
         return {
@@ -526,6 +564,11 @@ class BreakpointDetector:
             'trimming': 0,
             'm_max': int(m_max),
             'n_valid': max(int(T), 0),
+            'n_nan': int(n_nan),
+            'n_gaps': int(n_gaps),
+            'max_gap_run': int(max_gap_run),
+            'breakpoints_gap_missing': [],
+            'gap_missing_at_bp': None,
         }
 
     def _sup_f_critical_value(
@@ -664,15 +707,27 @@ class FactorHealthDiagnoser:
         Materiality threshold for *unconfirmed* multi-breakpoints (v3.5.1):
         `max |Δsegment_mean| / sd_within >= threshold` → `suspect`.
         Default 1.0 (one within-segment standard deviation).
+    multi_break_gap_min_run : int
+        Minimum number of missing periods a label-relevant boundary must span
+        before it is treated as a continuity risk (v3.5.2). Default 2
+        (isolated single NaN does not trigger). Must be >= 1.
     """
 
     def __init__(self, bandwidth: int = 24, alpha: float = 0.05,
                  half_life_threshold: int = 60,
-                 multi_break_shift_threshold: float = 1.0):
+                 multi_break_shift_threshold: float = 1.0,
+                 multi_break_gap_min_run: int = 2):
         self.bandwidth = bandwidth
         self.alpha = alpha
         self.half_life_threshold = half_life_threshold
         self.multi_break_shift_threshold = float(multi_break_shift_threshold)
+        gap_min_run = int(multi_break_gap_min_run)
+        if gap_min_run < 1:
+            raise ValueError(
+                "multi_break_gap_min_run must be >= 1, "
+                f"got {multi_break_gap_min_run!r}"
+            )
+        self.multi_break_gap_min_run = gap_min_run
         self.estimator = PremiumEstimator(bandwidth=bandwidth)
         self.detector = BreakpointDetector(alpha=alpha)
 
@@ -706,6 +761,9 @@ class FactorHealthDiagnoser:
             breakpoint_mode / breakpoint_confirmed / breakpoint_material /
             breakpoint_shift_ratio / n_breaks / breakpoints / segment_means /
             segment_bounds / best_bic_m / best_lwz_m : 诊断描述键 (v3.5.1)
+            n_nan / n_gaps / max_gap_run / breakpoints_gap_missing /
+            gap_missing_at_bp / breakpoint_gap_risk : 连续性描述与守卫键
+            (v3.5.2; single 模式 breakpoint_gap_risk 恒 False)
         """
         if breakpoint_mode not in ('single', 'multiple'):
             raise ValueError(
@@ -752,27 +810,43 @@ class FactorHealthDiagnoser:
             'segment_bounds': bp_result['segment_bounds'],
             'best_bic_m': bp_result['best_bic_m'],
             'best_lwz_m': bp_result['best_lwz_m'],
+            'n_nan': bp_result['n_nan'],
+            'n_gaps': bp_result['n_gaps'],
+            'max_gap_run': bp_result['max_gap_run'],
+            'breakpoints_gap_missing': bp_result['breakpoints_gap_missing'],
+            'gap_missing_at_bp': bp_result['gap_missing_at_bp'],
+            'breakpoint_gap_risk': bp_result['breakpoint_gap_risk'],
             'lambda_hat': lambda_hat,
         }
         return result
 
     def _resolve_breakpoints(self, beta_raw: np.ndarray, mode: str,
                              m_max: int) -> Dict:
-        """统一单/多断点的断点视图 (v3.5.1)。
+        """统一单/多断点的断点视图 (v3.5.1; v3.5.2 增加 NaN 间隙守卫)。
 
         `detect` (sup-F) 始终作为**存在性**判定; `detect_multiple` 仅提供分段。
         mode='multiple' 时, 未确认但材料性达标的 BIC 断点标记为 material,
         由 `_classify_premium_health` 降级为 suspect。
+
+        v3.5.2: 标签相关边界跨越 >= `multi_break_gap_min_run` 期缺失时,
+        `breakpoint_gap_risk=True`, ES 降级为 suspect; `single` 模式守卫关闭。
         """
         y_all = np.asarray(beta_raw, dtype=float).ravel()
         valid = ~np.isnan(y_all)
         y = y_all[valid]
         idx_map = np.where(valid)[0]
         T = int(len(y))
+        n_nan, n_gaps, max_gap_run = self.detector._gap_runs(y_all)
 
         single = self.detector.detect(y_all)
         confirmed = bool(single['has_breakpoint'])
         single_view = self._single_segment_view(y, idx_map, single)
+
+        sup_gap = None
+        if confirmed and single_view['breakpoint_idx'] is not None:
+            pos = int(np.searchsorted(idx_map,
+                                      int(single_view['breakpoint_idx'])))
+            sup_gap = self.detector._gap_missing_at(idx_map, pos)
 
         if mode == 'single':
             single_view.update(
@@ -782,17 +856,30 @@ class FactorHealthDiagnoser:
                 breakpoint_material=confirmed,
                 best_bic_m=None,
                 best_lwz_m=None,
+                n_nan=int(n_nan),
+                n_gaps=int(n_gaps),
+                max_gap_run=int(max_gap_run),
+                breakpoints_gap_missing=([int(sup_gap)]
+                                         if sup_gap is not None else []),
+                gap_missing_at_bp=(int(sup_gap) if sup_gap is not None
+                                   else None),
+                breakpoint_gap_risk=False,
             )
             return single_view
 
         multi = self.detector.detect_multiple(y_all, m_max=m_max)
-        material, ratio = self._multi_break_materiality(multi, T)
+        material, ratio, driver_k = self._multi_break_materiality(multi, T)
         n_bic = int(multi['n_breaks'])
+        raw_bounds = [(int(a), int(b)) for a, b in multi['segment_bounds']]
+        breaks = [int(b) for b in multi['breakpoints']]
+        bp_gaps = []
+        for b in breaks:
+            pos = int(np.searchsorted(idx_map, b))
+            bp_gaps.append(self.detector._gap_missing_at(idx_map, pos))
 
         if n_bic > 0:
             seg_means = [float(x) for x in multi['segment_means']]
-            seg_bounds = [(int(a), int(b)) for a, b in multi['segment_bounds']]
-            breaks = [int(b) for b in multi['breakpoints']]
+            seg_bounds = raw_bounds
             label_bp = bool(confirmed or material)
             view = {
                 'has_breakpoint': label_bp,
@@ -809,6 +896,7 @@ class FactorHealthDiagnoser:
                 'breakpoint_shift_ratio': ratio,
                 'chow_max_stat': single_view['chow_max_stat'],
             }
+            gap_at_bp = bp_gaps[0] if bp_gaps else None
         elif confirmed:
             # G6 回退: 形式检验显著但 BIC 选 0 → 保留单断点分段
             view = dict(single_view)
@@ -818,6 +906,8 @@ class FactorHealthDiagnoser:
                                    else [])
             view['breakpoint_shift_ratio'] = ratio
             view['has_breakpoint'] = True
+            bp_gaps = ([sup_gap] if sup_gap is not None else [])
+            gap_at_bp = sup_gap
         else:
             multi_means = [float(x) for x in multi['segment_means']
                            if np.isfinite(x)]
@@ -827,13 +917,26 @@ class FactorHealthDiagnoser:
                 'n_breaks': 0,
                 'breakpoints': [],
                 'segment_means': multi_means,
-                'segment_bounds': [(int(a), int(b))
-                                   for a, b in multi['segment_bounds']],
+                'segment_bounds': raw_bounds,
                 'pre_mean': float('nan'),
                 'post_mean': float('nan'),
                 'breakpoint_shift_ratio': ratio,
                 'chow_max_stat': single_view['chow_max_stat'],
             }
+            gap_at_bp = None
+
+        gap_risk = False
+        if confirmed:
+            gap_risk = (sup_gap is not None
+                        and sup_gap >= self.multi_break_gap_min_run)
+        elif material:
+            driver_gap = None
+            if 0 <= driver_k and driver_k + 1 < len(raw_bounds):
+                b_orig = raw_bounds[driver_k + 1][0]
+                pos = int(np.searchsorted(idx_map, b_orig))
+                driver_gap = self.detector._gap_missing_at(idx_map, pos)
+            gap_risk = (driver_gap is not None
+                        and driver_gap >= self.multi_break_gap_min_run)
 
         view.update(
             breakpoint_mode='multiple',
@@ -841,6 +944,14 @@ class FactorHealthDiagnoser:
             breakpoint_material=material,
             best_bic_m=int(multi['best_bic_m']),
             best_lwz_m=int(multi['best_lwz_m']),
+            n_nan=int(n_nan),
+            n_gaps=int(n_gaps),
+            max_gap_run=int(max_gap_run),
+            breakpoints_gap_missing=[0 if g is None else int(g)
+                                     for g in bp_gaps],
+            gap_missing_at_bp=(int(gap_at_bp) if gap_at_bp is not None
+                               else None),
+            breakpoint_gap_risk=bool(gap_risk),
         )
         return view
 
@@ -888,44 +999,53 @@ class FactorHealthDiagnoser:
         }
 
     def _multi_break_materiality(self, multi: Dict, T: int):
-        """材料性: max|Δsegment_mean| / sd_within, 返回 (bool, ratio)。"""
+        """材料性: max|Δsegment_mean| / sd_within, 返回 (bool, ratio, driver_k)。
+
+        v3.5.2: 额外返回最大位移所在边界序号 `driver_k`
+        （第 k 与第 k+1 段之间），用于判定该边界是否跨越 NaN 间隙。
+        """
         nan = float('nan')
         if int(multi.get('n_breaks', 0)) <= 0 or T <= 0:
-            return False, nan
+            return False, nan, -1
         best = multi.get('best_bic_m', 0)
         ssr = multi.get('ssr', {}).get(best, nan)
         if not np.isfinite(ssr):
-            return False, nan
+            return False, nan, -1
         sd_w = float(np.sqrt(max(float(ssr), 0.0) / T))
         if sd_w <= 0:
-            return False, nan
+            return False, nan, -1
         seg = multi.get('segment_means', [])
         if len(seg) < 2 or not all(np.isfinite(seg)):
-            return False, nan
-        shift = max(abs(seg[i + 1] - seg[i]) for i in range(len(seg) - 1))
-        ratio = float(shift / sd_w)
-        return bool(ratio >= self.multi_break_shift_threshold), ratio
+            return False, nan, -1
+        shifts = [abs(seg[i + 1] - seg[i]) for i in range(len(seg) - 1)]
+        driver_k = int(np.argmax(shifts))
+        ratio = float(shifts[driver_k] / sd_w)
+        return (bool(ratio >= self.multi_break_shift_threshold), ratio, driver_k)
 
     def _classify_premium_health(self, lambda_hat: np.ndarray,
                                   bp_result: Dict, td_result: Dict) -> str:
         """Classify premium into health state.
 
         Decision tree:
-          ES confirmed + TD         → 'ES+TD'
-          ES confirmed, no TD       → 'ES'
-          TD, no confirmed ES       → 'TD'
-          unconfirmed but material  → 'suspect' (v3.5.1 多断点降级)
-          no ES, no TD, |premium| > 1σ → 'stable'
-          no ES, no TD, |premium| < 1σ → 'suspect'
+          ES confirmed + no gap risk + TD → 'ES+TD'
+          ES confirmed + no gap risk      → 'ES'
+          TD (independent of breakpoint)  → 'TD'
+          gap risk (v3.5.2)               → 'suspect'
+          unconfirmed but material        → 'suspect' (v3.5.1 多断点降级)
+          no ES, no TD, |premium| > 1σ    → 'stable'
+          no ES, no TD, |premium| < 1σ    → 'suspect'
         """
         has_bp = bp_result['has_breakpoint']
         confirmed = bp_result.get('breakpoint_confirmed', has_bp)
         has_td = td_result.get('has_decay', False)
+        gap_risk = bool(bp_result.get('breakpoint_gap_risk', False))
 
-        if has_bp and confirmed:
+        if has_bp and confirmed and not gap_risk:
             return 'ES+TD' if has_td else 'ES'
         if has_td:
             return 'TD'
+        if gap_risk:
+            return 'suspect'
         if has_bp:
             return 'suspect'
 

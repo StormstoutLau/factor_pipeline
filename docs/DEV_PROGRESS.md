@@ -81,6 +81,8 @@ v3.5.x (远期)       内生性-溢价诊断交互
 
 > v3.5.1 模块影响: `modules/factor_health/__init__.py` `FactorHealthDiagnoser.diagnose` 新增 opt-in `breakpoint_mode='single'|'multiple'` + `m_max=5`, `__init__` 新增 `multi_break_shift_threshold=1.0`; 新增 `_resolve_breakpoints` / `_single_segment_view` / `_multi_break_materiality`; `_classify_premium_health` 增加 confirmed/material 分支 (未确认材料 → `suspect`); 输出新增 10 键; `detect` / `detect_multiple` / `PremiumEstimator` / 默认 single 标签零变更; 缓存代际不变。
 
+> v3.5.2 模块影响: `modules/factor_health/__init__.py` `BreakpointDetector` 新增 `_gap_runs` / `_gap_missing_at` (静态), `detect_multiple` 新增 5 个连续性描述键 (13→18); `FactorHealthDiagnoser.__init__` 新增 `multi_break_gap_min_run=2`, `_multi_break_materiality` 返回最大位移边界 `driver_k`, `_classify_premium_health` 增加 gap 分支 (ES/ES+TD → suspect), `diagnose` 新增 6 键 (22→28); 默认 single 标签零变更; 分段算法/`detect` 零改动; 缓存代际不变。
+
 ### §2.1 核心编排层
 
 | 模块 / 文件 | v1.0 | v2.0 | v2.1 | v2.2 | v2.3-2.6 | v3.0 | v3.1 | v3.2 | v3.3 | v3.3.1 |

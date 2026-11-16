@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.5.1 | **构建日期**: 2026-11-17 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose)
+> **版本**: v3.5.2 | **构建日期**: 2026-11-17 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -1411,6 +1411,24 @@ res = diag.diagnose(factor, forward_returns, return_type='static',
 - 未确认且不材料 → 不改标签; sup-F 显著但 BIC 选 0 → 回退单断点分段
 - `breakpoint_mode='single'` (默认) 的标签/旧键逐位不变; 非法值 `ValueError`
 
+**NaN 间隙守卫 (v3.5.2, ADR-048)** — 连续性描述 + ES 降级
+
+```python
+diag = FactorHealthDiagnoser(multi_break_gap_min_run=2)  # 默认 2
+res = diag.diagnose(..., breakpoint_mode='multiple')
+# 新增键:
+#   'n_nan': 5, 'n_gaps': 1, 'max_gap_run': 5,
+#   'breakpoints_gap_missing': [5],   # 与 breakpoints 对齐
+#   'gap_missing_at_bp': 5,
+#   'breakpoint_gap_risk': True,      # 标签相关边界跨 >= min_run 期缺失
+```
+
+- 边界跨越缺失数 = `idx_map[pos] - idx_map[pos-1] - 1`（`pos` 为断点在有效点序列中的位置）
+- `confirmed` → 检查 sup-F 断点; 未确认但材料 → 检查最大位移 BIC 边界
+- `breakpoint_gap_risk=True` → `premium_health` 不返回 ES/ES+TD, 降级 `suspect`
+- 默认 `single` 模式 `breakpoint_gap_risk=False`, 标签零变更
+- `detect_multiple` 13→18 键, `diagnose` 22→28 键; 分段算法零改动
+
 **`FactorHealthDiagnoser`** — 多状态综合诊断
 
 ```python
@@ -1427,7 +1445,7 @@ result = diagnoser.diagnose(factor, forward_returns, return_type='static')
 | `ES` | 结构断点检测到 | External Shock: 溢价发生结构性变化 |
 | `TD` | 半衰期 < 60个月 | Time-Varying Decay: 溢价指数衰减 |
 | `ES+TD` | 断点 + 衰减同时存在 | 复合失效: 结构性变化 + 持续衰减 |
-| `suspect` | 数据不足 / 边界模糊 / 未确认但材料的多断点 | 无法判断或需人工复核 |
+| `suspect` | 数据不足 / 边界模糊 / 未确认但材料的多断点 / 断点边界跨 NaN 间隙 | 无法判断或需人工复核 |
 
 #### 综合标签 (return_type × premium_health)
 
@@ -2643,5 +2661,6 @@ class ThresholdDriftMonitor:
 | v3.4.13 | 2026-11-16 | DEFECT-1 短样本断点退化: `BreakpointDetector._no_breakpoint_result(T)` 补齐 (T<30 → `has_breakpoint=False` / `chow_max_stat=0.0` / `critical=nan` / cusum 全 NaN / 无 `breakpoint_idx`); `detect` 正常路径与 `diagnose` 零变更; 新增 5 例 (E1-E5 边界) |
 | v3.5.0 | 2026-11-16 | 多断点支持 (ADR-046): 新增 `BreakpointDetector.detect_multiple()` — Bai-Perron 全局最小 SSR (DP, O(m·T²)) + BIC/LWZ 选段数, 13 键输出 (含 `breakpoints` / `segment_means` / `segment_bounds`); 不硬编码 sup-F 临界值表; T<30 退化; `detect` / `diagnose` 零改动; Stata 18.0 MP 官方 `regress` 对拍 46/46 PASS |
 | v3.5.1 | 2026-11-17 | 多断点接入 diagnose (ADR-047): `diagnose(..., breakpoint_mode='single'|'multiple', m_max=5)`; 存在性由 sup-F (`breakpoint_confirmed`) + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 single 标签逐位不变; 新增 9 例 (F1-F9) |
+| v3.5.2 | 2026-11-17 | NaN 间隙守卫 (ADR-048): `multi_break_gap_min_run=2`; 标签相关边界跨 ≥2 期缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; `detect_multiple` +5 键 (18), `diagnose` +6 键 (28); 默认 single 零变更; 新增 9 例 (G1-G9) |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。

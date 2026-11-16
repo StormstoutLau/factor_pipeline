@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.5.1 的"**多断点支持 + 多断点接入诊断标签路径 + 因子路由统一化治理**"（ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.5.2 的"**多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 因子路由统一化治理**"（ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -40,6 +40,25 @@
 ---
 
 ## 版本更新摘要
+
+### v3.5.2 多断点路径 NaN 间隙守卫 (2026.11, 已实施)
+
+> **状态**: 已实施, 新增 9 passed (G1-G9); layer3 49 passed; 全量回归 1786 passed / 15 skipped / 0 failed
+> **文档**: [ADR-048](DECISIONS.md) / [调研](docs/research/RESEARCH_V3.5.2_NAN_GAP_GUARD.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.5.2_NAN_GAP_GUARD.md) / [审计](docs/audit/2026-11-17-v3.5.2-nan-gap-guard-audit.md)
+> **版本 / 缓存**: 3.5.2 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: `detect_multiple` 剔除 NaN 后在压缩序列上分段，长缺失区间被压缩为相邻两点；断点跨越间隙时时点不可观测，继续输出 `ES` 会把数据断档误读为已定位的结构突变（v3.5.0 H7 / v3.5.1 H5）。
+
+**决策**: `diagnose(..., breakpoint_mode='multiple')` 新增连续性守卫 — 标签相关边界跨越 ≥ `multi_break_gap_min_run`（默认 2）期缺失时 `breakpoint_gap_risk=True`，`ES`/`ES+TD` 降级为 `suspect`；`detect_multiple` +5 个连续性描述键，`diagnose` +6 键；默认 `'single'` 标签与旧键逐位不变。
+
+| 项 | 实测 |
+|---|---|
+| 纯噪声守卫触发率 | 0-1.3%（无间隙 / g10 / 5×g3 / 散点 5%） |
+| 真断点远离间隙 | 误降级 ≤0.7%，ES 保留 91.3% |
+| 真断点正落 g=5 间隙 | 降级 21.7%（ES 95.3% → 73.7%，时点不可观测的保守代价） |
+| gmin 选择 | gmin=1 误降级 7.3% → gmin=2 降至 0.3% |
+| 端到端 | single=ES / multiple=suspect（bp=63，gap=5） |
+| 版本统一 | 7 passed + 手工 5/5 |
 
 ### v3.5.1 多断点接入 diagnose 标签路径 (2026.11, 已实施)
 
@@ -694,7 +713,7 @@ v3.0.0 T1: 指纹维度扩展至 21 维 (已实施)
 |------|------|
 | **核心类** | `PremiumEstimator` / `BreakpointDetector` / `FactorHealthDiagnoser` |
 | **溢价估计** | Fama-MacBeth 逐期截面 β_t + Epanechnikov 核平滑 λ̂(t); 可选 Newey-West HAC 标准误 |
-| **断点检测** | 单断点 sup-F (Andrews 1993) 默认; 多断点 `detect_multiple` (Bai-Perron 1998 DP + BIC/LWZ) opt-in |
+| **断点检测** | 单断点 sup-F (Andrews 1993) 默认; 多断点 `detect_multiple` (Bai-Perron 1998 DP + BIC/LWZ) opt-in; NaN 间隙守卫 (ADR-048) |
 | **诊断标签** | ES / TD / ES+TD / stable / suspect → pricing / recalibrate / monitor / review / suspect |
 | **学术依据** | Fama-MacBeth (1973) / Andrews (1993) / Bai-Perron (1998, 2003) / Yao (1988) |
 
@@ -1074,15 +1093,16 @@ class PipelineV2Config:
 | 方法 | 说明 |
 |------|------|
 | `detect(lambda_hat)` | 单断点网格 sup-F (Andrews 1993); 返回 `has_breakpoint` / `breakpoint_idx` / `chow_max_stat` / `critical` 等 |
-| `detect_multiple(lambda_hat, m_max=5)` | Bai-Perron 多断点: DP 全局最小 SSR + BIC 主 / LWZ 对照选段数; 13 键输出 (`breakpoints` / `segment_means` / `segment_bounds` 等); T<30 退化 |
+| `detect_multiple(lambda_hat, m_max=5)` | Bai-Perron 多断点: DP 全局最小 SSR + BIC 主 / LWZ 对照选段数; 18 键输出 (`breakpoints` / `segment_means` / `segment_bounds` / `n_gaps` / `max_gap_run` / `breakpoints_gap_missing` 等); T<30 退化 |
 
 ### FactorHealthDiagnoser
 
 | 参数 / 方法 | 说明 | 默认 |
 |------|------|------|
 | `diagnose(factor, forward_returns, return_type, breakpoint_mode, m_max)` | 完整诊断: 溢价估计 → 断点 → 衰减 → 综合标签 | `breakpoint_mode='single'`, `m_max=5` |
-| `breakpoint_mode='multiple'` | opt-in 多断点分段; 存在性仍由 sup-F 确认 (`breakpoint_confirmed`), 未确认但材料 → `suspect` | — |
+| `breakpoint_mode='multiple'` | opt-in 多断点分段; 存在性仍由 sup-F 确认 (`breakpoint_confirmed`), 未确认但材料 → `suspect`; 边界跨间隙 → `breakpoint_gap_risk` 并降级 | — |
 | `multi_break_shift_threshold` | 未确认多断点的材料性阈值 (`max|Δ段均值| / sd_within`) | 1.0 |
+| `multi_break_gap_min_run` | 边界跨越缺失期数达到该值才触发间隙守卫 | 2 |
 
 ### GarchWhiteningAdapter
 
@@ -1178,13 +1198,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.5.1 (多断点接入 `diagnose` 标签路径, ADR-047; 含 v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
+- **Pipeline 版本**: v3.5.2 (多断点路径 NaN 间隙守卫, ADR-048; 含 v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: **全量回归 1777 passed / 15 skipped / 0 failed** (1134.45s, 2026-11-17, v3.5.1, 复审修正后最终代码; = v3.4.13 基线 1760 + v3.5.0 新增 8 + v3.5.1 新增 9); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 5/5; 性能门禁 ratio 1.0092 ≤ 1.05 (v3.4.4 实测, 本版未重测)
+- **测试基线**: **全量回归 1786 passed / 15 skipped / 0 failed** (1160.73s, 2026-11-17, v3.5.2; = v3.5.1 基线 1777 + v3.5.2 新增 9); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 5/5; 性能门禁 ratio 1.0092 ≤ 1.05 (v3.4.4 实测, 本版未重测)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.17 (v3.5.1 多断点接入 diagnose)
-- **状态**: STABLE (v3.5.1, 10 步 spec 工作流 §13.8 中任务裁剪)
+- **构建日期**: 2026.11.17 (v3.5.2 NaN 间隙守卫)
+- **状态**: STABLE (v3.5.2, 10 步 spec 工作流 §13.8 小任务裁剪)
 
 ### 版本历史
 
@@ -1223,6 +1243,7 @@ factor_pipeline/
 | v3.4.13 | 2026.11.16 | DEFECT-1 短样本断点退化: `_no_breakpoint_result(T)` 补齐 (T<30 → 6 键无断点结果), `diagnose` 不再 AttributeError; 新增 5 例 |
 | v3.5.0 | 2026.11.16 | 多断点支持 (ADR-046): `BreakpointDetector.detect_multiple()` — 动态规划全局最小 SSR (Bai-Perron 1998) + BIC/LWZ 选段数, 13 键输出; 不硬编码临界值表; T<30 退化; Stata 18.0 MP 官方 `regress` 对拍 46/46 PASS |
 | v3.5.1 | 2026.11.17 | 多断点接入 `diagnose` (ADR-047): opt-in `breakpoint_mode='multiple'`; sup-F 确认存在性 + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 `'single'` 零变更; 新增 9 例 |
+| v3.5.2 | 2026.11.17 | 多断点路径 NaN 间隙守卫 (ADR-048): `multi_break_gap_min_run=2`; 标签相关边界跨缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; `detect_multiple` +5 键 (18), `diagnose` +6 键 (28); 默认 single 零变更; 新增 9 例 |
 
 ---
 

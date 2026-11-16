@@ -5,7 +5,7 @@
 > **更新规则**: 任何架构变更 (新增模块 / 接口重构 / 依赖调整) 必须同步更新本文档 + 对应 ADR
 > **关联文档**: [DECISIONS.md](../DECISIONS.md) | [CHANGELOG.md](../CHANGELOG.md) | [DEV_PROGRESS.md](DEV_PROGRESS.md) | [WORKFLOW_METHODOLOGY.md](WORKFLOW_METHODOLOGY.md)
 >
-> v1.1 同步: Layer 3 `BreakpointDetector` 新增多断点 (`detect_multiple`, ADR-046) 且 `FactorHealthDiagnoser.diagnose` 新增 opt-in 多断点标签路径 (ADR-047, v3.5.1); 默认单断点路径不变。
+> v1.1 同步: Layer 3 `BreakpointDetector` 新增多断点 (`detect_multiple`, ADR-046) 且 `FactorHealthDiagnoser.diagnose` 新增 opt-in 多断点标签路径 (ADR-047, v3.5.1); v3.5.2 增加 NaN 间隙守卫 (ADR-048): 标签相关边界跨缺失时 ES 降级 suspect; 默认单断点路径不变。
 
 ---
 
@@ -19,7 +19,7 @@
 - **因果性保证**: 插补与去极值禁止使用未来数据 (插补 lookahead_safe=True 默认; 去极值逐日横截面, fit 不存参数),通过截断不变性测试验证; 变换统一为逐日截面 rank→正态 (v3.3.4), 系数/参数只用前缀
 - **学术可验证**: 每个统计决策都有显著性检验支撑,关键算法有学术文献引用 (经独立验证,排除幻觉); 管道选择/采样频率写入 SpecificationLogger (opt-in), 结构突变监控 (sup-F/CUSUM) 只告警
 
-**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042) → v3.4.1 (2026-11-11, 非生产路径解耦器弃用 + ADR-043) → v3.4.2 (2026-11-12, 断点监控调度 + ADR-044) → v3.4.3 (2026-11-12, Dynamic 组件可分离性 + ADR-045) → v3.4.4 (2026-11-13, AblationRunner decoupler 消融臂 + ADR-045 实现补充) → v3.4.5–v3.4.13 (2026-11-13~16, 市值口径全层对齐 / 旋钮接线审计 / 消融 trivial 口径 / HAC NaN 过滤 / 面板 HAC 标准误 / 短样本断点退化) → v3.5.0 (2026-11-16, 多断点支持 Bai-Perron + ADR-046) → v3.5.1 (2026-11-17, 多断点接入 `diagnose` 两级门控 + ADR-047)
+**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042) → v3.4.1 (2026-11-11, 非生产路径解耦器弃用 + ADR-043) → v3.4.2 (2026-11-12, 断点监控调度 + ADR-044) → v3.4.3 (2026-11-12, Dynamic 组件可分离性 + ADR-045) → v3.4.4 (2026-11-13, AblationRunner decoupler 消融臂 + ADR-045 实现补充) → v3.4.5–v3.4.13 (2026-11-13~16, 市值口径全层对齐 / 旋钮接线审计 / 消融 trivial 口径 / HAC NaN 过滤 / 面板 HAC 标准误 / 短样本断点退化) → v3.5.0 (2026-11-16, 多断点支持 Bai-Perron + ADR-046) → v3.5.1 (2026-11-17, 多断点接入 `diagnose` 两级门控 + ADR-047) → v3.5.2 (2026-11-17, NaN 间隙守卫 + ADR-048)
 
 ---
 
@@ -83,7 +83,7 @@
 | `factor_neutralizer/` | 行业 + 风格中性化 | `FactorNeutralizer` | ADR-018 (fit/transform 语义重构) |
 | `factor_orthogonalizer/` | 多因子正交化 (对称为主) | `BaseOrthogonalizer`, `SymmetricOrthogonalizer`, `GramSchmidt`, `Cholesky`, `PCA`, `Ridge` | ADR-020 (v2.5.0) |
 | `factor_decoupler/` | 时序解耦 (AR / 差分 / HP) | `ARDecoupler`, `AROrderSelector`, `CompositeDecoupler`; 弃用: `TemporalDecoupler`, `decouple_*`, `Optimized*` | ADR-040 / ADR-043 (v3.4.1 弃用) |
-| `factor_health/` | Layer 3 溢价健康诊断 (单/多断点) | `PremiumEstimator`, `BreakpointDetector` (`detect` / `detect_multiple`), `FactorHealthDiagnoser` | ADR-028 (v3.3.0) / ADR-046 (v3.5.0) / ADR-047 (v3.5.1) |
+| `factor_health/` | Layer 3 溢价健康诊断 (单/多断点 + 间隙守卫) | `PremiumEstimator`, `BreakpointDetector` (`detect` / `detect_multiple`), `FactorHealthDiagnoser` | ADR-028 (v3.3.0) / ADR-046 (v3.5.0) / ADR-047 (v3.5.1) / ADR-048 (v3.5.2) |
 | `statistical_classifier/` | VR + DF τ 面板分类 (零 for 循环) | `StatisticalClassifier` | ADR-027 (v3.2.0) |
 | `endogeneity_check/` | 内生性诊断 (AET / IFE / Lewbel / Oster) | `EndogeneityDiagnosticOrchestrator`, `AetChecker`, `IfeChecker`, `LewbelIV`, `OsterDelta`, `ThreatAssessor`, `MissingnessChecker` | ADR-032 (v3.1.0, 2026-10 补记) |
 | `endogeneity_estimators/` | 内生性估计器 (IVX / Profile GMM / Regularized DOLS / PFGMM) | `IVXEstimator`, `ProfileGMMEstimator`, `RegularizedDOLSEstimator`, `PFGMMEstimator`, `EstimationMethodSelector` | ADR-035 (v3.1.0, 2026-10 补记) |

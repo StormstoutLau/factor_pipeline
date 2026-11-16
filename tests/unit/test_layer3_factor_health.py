@@ -811,3 +811,184 @@ class TestDiagnoseMultipleBreakpointMode:
         assert np.isfinite(res['mean_premium_post_bp'])
         assert res['mean_premium_pre_bp'] != res['mean_premium_post_bp']
         assert res['breakpoint_idx'] == 120
+
+
+class TestMultipleBreakpointGapGuard:
+    """G1-G9: 多断点路径 NaN 间隙守卫 (v3.5.2, ADR-048)"""
+
+    @staticmethod
+    def _series_with_gap(T=200, bp=120, gap=(118, 123)):
+        """beta_raw: 0.05 → 0.02, 在 gap 区间置 NaN。"""
+        y = np.r_[np.full(bp, 0.05), np.full(T - bp, 0.02)]
+        y[gap[0]:gap[1]] = np.nan
+        return y
+
+    @staticmethod
+    def _patch_estimator(diag, beta_raw):
+        """固定 beta_raw, 绕过真实 FM 估计。"""
+        smooth = np.nan_to_num(beta_raw, nan=0.03)
+        diag.estimator._beta_raw = beta_raw
+        diag.estimator.estimate = lambda f, r: smooth
+
+    def test_g1_detect_multiple_no_nan_keys(self):
+        """G1: 无 NaN → 连续性键全零, 断点列表对齐"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        np.random.seed(11)
+        y = np.r_[np.zeros(30), np.full(30, 1.0)] + np.random.randn(60) * 0.3
+        res = BreakpointDetector().detect_multiple(y, m_max=1)
+        assert res['n_nan'] == 0
+        assert res['n_gaps'] == 0
+        assert res['max_gap_run'] == 0
+        assert len(res['breakpoints_gap_missing']) == len(res['breakpoints'])
+        assert all(g == 0 for g in res['breakpoints_gap_missing'])
+        assert res['gap_missing_at_bp'] == (0 if res['breakpoints'] else None)
+
+    def test_g2_detect_multiple_gap_at_break(self):
+        """G2: 断点处 5 期缺失 → 连续性描述正确"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        np.random.seed(12)
+        y = np.r_[np.zeros(30), np.full(30, 1.0)] + np.random.randn(60) * 0.3
+        x = y.copy()
+        x[28:33] = np.nan
+        res = BreakpointDetector().detect_multiple(x, m_max=1)
+        assert res['n_nan'] == 5
+        assert res['n_gaps'] == 1
+        assert res['max_gap_run'] == 5
+        assert res['n_breaks'] == 1
+        assert res['breakpoints_gap_missing'][0] >= 2
+        assert res['gap_missing_at_bp'] >= 2
+
+    def test_g3_confirmed_break_at_gap_downgrades_to_suspect(
+            self, healthy_premium_panel, monkeypatch):
+        """G3: confirmed + 断点跨 5 期间隙 → gap_risk, ES 降级 suspect"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        beta = self._series_with_gap()
+        self._patch_estimator(diag, beta)
+        multi = _mock_multi(1, [0.05, 0.02], {0: 9.0, 1: 0.08}, [120])
+        monkeypatch.setattr(diag.detector, 'detect',
+                            lambda y: _mock_single(True, bp=120))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['breakpoint_confirmed'] is True
+        assert res['has_breakpoint'] is True
+        assert res['gap_missing_at_bp'] == 5
+        assert res['breakpoint_gap_risk'] is True
+        assert res['premium_health'] == 'suspect'
+        assert res['diagnosis'] == 'suspect'
+
+    def test_g4_isolated_nan_not_downgraded(
+            self, healthy_premium_panel, monkeypatch):
+        """G4: 断点跨孤立 1 点 NaN (gmin=2) → 不降级, ES 保留"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        beta = np.r_[np.full(120, 0.05), np.full(80, 0.02)]
+        beta[120] = np.nan
+        self._patch_estimator(diag, beta)
+        multi = _mock_multi(1, [0.05, 0.02], {0: 9.0, 1: 0.08}, [120])
+        monkeypatch.setattr(diag.detector, 'detect',
+                            lambda y: _mock_single(True, bp=120))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['gap_missing_at_bp'] == 1
+        assert res['breakpoint_gap_risk'] is False
+        assert res['premium_health'] == 'ES'
+
+    def test_g5_gap_away_from_break_not_downgraded(
+            self, healthy_premium_panel, monkeypatch):
+        """G5: 间隙远离断点 → 不降级, ES 保留"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        beta = self._series_with_gap(gap=(60, 65))
+        self._patch_estimator(diag, beta)
+        multi = _mock_multi(1, [0.05, 0.02], {0: 9.0, 1: 0.08}, [120])
+        monkeypatch.setattr(diag.detector, 'detect',
+                            lambda y: _mock_single(True, bp=120))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['gap_missing_at_bp'] == 0
+        assert res['breakpoint_gap_risk'] is False
+        assert res['premium_health'] == 'ES'
+
+    def test_g6_material_driver_at_gap_downgrades(
+            self, healthy_premium_panel, monkeypatch):
+        """G6: 未确认 + 材料性 1.5 且驱动边界跨间隙 → gap_risk, suspect"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        beta = self._series_with_gap()
+        self._patch_estimator(diag, beta)
+        multi = _mock_multi(1, [0.05, 0.02], {0: 9.0, 1: 0.08}, [120])
+        monkeypatch.setattr(diag.detector, 'detect',
+                            lambda y: _mock_single(False))
+        monkeypatch.setattr(diag.detector, 'detect_multiple',
+                            lambda y, m_max=None: multi)
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['breakpoint_confirmed'] is False
+        assert res['breakpoint_material'] is True
+        assert res['has_breakpoint'] is True
+        assert res['breakpoint_gap_risk'] is True
+        assert res['premium_health'] == 'suspect'
+
+    def test_g7_single_mode_gap_guard_disabled(
+            self, healthy_premium_panel, monkeypatch):
+        """G7: 默认 single 模式 → 守卫关闭, 标签不变, 描述键仍存在"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        factor, ret = healthy_premium_panel
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        beta = self._series_with_gap()
+        self._patch_estimator(diag, beta)
+        monkeypatch.setattr(diag.detector, 'detect',
+                            lambda y: _mock_single(True, bp=120))
+        monkeypatch.setattr(diag, '_detect_decay',
+                            lambda y: {'has_decay': False, 'half_life': None})
+        res = diag.diagnose(factor, ret, return_type='static')
+        assert res['breakpoint_mode'] == 'single'
+        assert res['breakpoint_gap_risk'] is False
+        assert res['gap_missing_at_bp'] == 5
+        assert res['premium_health'] == 'ES'
+
+    def test_g8_degenerate_inputs_keep_contract(self):
+        """G8: 全 NaN / T=20 → 不抛异常, risk False, 描述键合法"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        diag = FactorHealthDiagnoser(bandwidth=6, alpha=0.05)
+        all_nan = np.full(200, np.nan)
+        self._patch_estimator(diag, all_nan)
+        diag.detector.detect = lambda y: _mock_single(False)
+        diag.detector.detect_multiple = lambda y, m_max=None: _mock_multi(
+            0, [np.nan], {0: np.nan}, [])
+        diag._detect_decay = lambda y: {'has_decay': False, 'half_life': None}
+        df = pd.DataFrame(np.zeros((5, 3)))
+        res = diag.diagnose(df, df, return_type='static',
+                            breakpoint_mode='multiple')
+        assert res['n_nan'] == 200
+        assert res['n_gaps'] == 1
+        assert res['max_gap_run'] == 200
+        assert res['breakpoint_gap_risk'] is False
+        assert res['gap_missing_at_bp'] is None
+        assert res['breakpoints_gap_missing'] == []
+
+    def test_g9_gap_min_run_validation(self):
+        """G9: multi_break_gap_min_run < 1 → ValueError"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        with pytest.raises(ValueError):
+            FactorHealthDiagnoser(multi_break_gap_min_run=0)
+
