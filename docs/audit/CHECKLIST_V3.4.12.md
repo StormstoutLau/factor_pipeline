@@ -57,5 +57,5 @@
 
 - [x] F1 独立复审完成: F1 (P2, 已修复+测试) / F2 (P3, 已修复+测试) / F3 (信息, 不改)
 - [x] F2 Stata 18 对拍 L1-L3: 均值/beta_se/Ω_t 一致 (唯一系统差 = Stata df 修正 n/(n−k), 已声明)
-- [x] F3 L4 Monte Carlo: premium SE/sd=0.94; lambda SE/sd=0.83 (≈90% 覆盖 @95% 名义, 已声明限制)
+- [x] F3 L4 Monte Carlo (口径已自纠): 固定 β 路径 SE/sd=2.11 (premium) / 1.77 (λ̂) → 保守; 随机路径 0.90/0.81 为总波动口径
 - [x] F4 复审与验证记录: [2026-11-16-premium-hac-se-audit.md Phase 7](2026-11-16-premium-hac-se-audit.md) / [EXECUTION §9](../EXECUTION_V3.4.12_PREMIUM_HAC_SE.md) / [scripts/verify_hac_stata.py](../../scripts/verify_hac_stata.py)

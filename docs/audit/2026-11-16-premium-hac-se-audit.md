@@ -102,7 +102,7 @@ Red→Green 可复现; 无 P0/P1 缺陷; 全量回归 0 failed。
 | L1 | premium_mean / premium_mean_se | `newey beta, lag(4)` → `_b/_se[_cons]` | 均值 EXACT (ratio 0.9999999972); SE ratio = √(200/199) = 1.0025094 |
 | L2 | beta_se 全部 200 期 | `statsby by(t): regress r f` | EXACT (beta max dev 2.5e-7, se 6.9e-8 — CSV 往返精度内) |
 | L3 | Ω_t (λ̂ SE 成分, 5 窗口) | `newey u, lag(q_local)` → SE²×n | 全部恰为 n/(n−1): 35/34、49/48×3、34/33 — 与 L1 同一约定差 |
-| L4 | λ̂ SE 复合近似 √(Ω·Σw²) | (无对应命令) Monte Carlo 400 reps | premium SE/sd=0.9386; lambda SE/sd=0.8310 |
+| L4 | λ̂ SE 语义 | (无对应命令) Monte Carlo 400 reps | 固定 β 路径: premium SE/sd=2.11, λ̂ SE/sd=1.77 (**保守**); 随机 β 路径: 0.90 / 0.81 (总波动口径, 不用于覆盖解释) |
 
 **约定差识别**: 所有 L1/L3 偏差精确等于 Stata `newey` 默认的小样本自由度修正
 n/(n−k) (k=1 截距模型) — 剔除该常数因子后 Bartlett 核权重、1/n 自协方差归一化、
@@ -110,19 +110,21 @@ n/(n−k) (k=1 截距模型) — 剔除该常数因子后 Bartlett 核权重、1
 与仓内 `_newey_west_se` / `ledoit_wolf_hac_test` 同风格; 差异为 O(k/n) ≤ 0.5%,
 已在 `_hac_long_run_variance` docstring 注明。
 
-**L4 已知限制**: λ̂ SE 复合近似在 AR(1) β 场景下 SE/sd=0.83 → 名义 95% CI 实际
-覆盖 ≈90%。属 docstring 已声明的局部常数核近似性质; 需要更保守 CI 时可调大 alpha
-或后续引入 df/覆盖率修正 (范围外)。
+**L4 口径自纠**: 首版 MC 每轮重抽 β 真实路径, 经验 sd 混入参数漂移 (时变溢价本身),
+据此记为「≈90% 覆盖」属口径错误。固定 β 路径 (只重抽横截面噪声) 后 SE/sd=2.11 (premium) /
+1.77 (λ̂), (N,h) ∈ {50,100}×{12,24,36} 六组扫描 1.47–2.74 均 >1 → 当前 SE 对抽样误差**保守**,
+不是不足。机制: `Ω_t` 来自残差 `u_s = β_s − λ̂_s`, 含 β 路径被平滑滤掉后的窗口内残余波动,
+系统性大于纯抽样长期方差。因此不修改方差公式, 仅修正验证口径与文档 (详见 EXECUTION §9.3)。
 
 ### 7.3 Phase 7 结论
 
 F1/F2 已修复并有测试固化 (E8/E9); HAC 引擎经 Stata 三层精确对拍确认;
-λ̂ 复合近似定量有效 (≈90% 覆盖); Phase 6 的 PASS 维持, 附两项已声明限制
-(df 约定差 / 复合近似覆盖)。
+λ̂ SE 对抽样误差保守 (SE/sd=1.77); Phase 6 的 PASS 维持, 附两项已声明限制
+(Stata df 约定差 / CI 偏保守)。
 
 ## 最终审计结论
 
 **PASS**。纯增量 API (`estimate` / `diagnose` / `BreakpointDetector` 零变更) +
 复审修正 F1/F2 (均有测试固化); HAC 引擎经 Stata 18 三层对拍逐位一致
-(唯一系统差 = Stata 的 n/(n−k) df 约定, 已声明); λ̂ 复合近似 MC 定量 ≈90% 覆盖 @95% 名义;
-全量回归 0 failed; 缓存代际不变。
+(唯一系统差 = Stata 的 n/(n−k) df 约定, 已声明); λ̂ SE 经固定 β 路径 MC 确认为保守
+(SE/sd=1.77, 覆盖率 ≥95%); 全量回归 0 failed; 缓存代际不变。

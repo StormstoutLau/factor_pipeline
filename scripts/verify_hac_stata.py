@@ -180,44 +180,66 @@ def compare(work: Path, res, fx):
 
 
 def run_mc(n_reps=400, T=200, N=50, seed=11):
-    """L4: lambda_se 复合近似的有效性 — 经验波动 vs 平均 SE."""
+    """L4: SE 语义验证 — 双口径 Monte Carlo (固定 β 路径 vs 随机 β 路径).
+
+    固定 β: 经验 sd 只含横截面抽样误差, 是 CI (针对参数) 的正确对照口径;
+    随机 β: sd 额外混入参数漂移 (时变溢价本身), 仅作总波动参考, 不用于覆盖解释.
+    """
     rng = np.random.RandomState(seed)
     est = PremiumEstimator(bandwidth=24)
     idx = pd.date_range('2020-01-01', periods=T, freq='ME')
     cols = ['S%02d' % i for i in range(N)]
-    lam = np.full((n_reps, T), np.nan)
-    lse = np.full((n_reps, T), np.nan)
-    pm = np.full(n_reps, np.nan)
-    pse = np.full(n_reps, np.nan)
-    for m in range(n_reps):
-        u = 0.0
-        beta_true = np.empty(T)
-        for t in range(T):
-            u = 0.3 * u + 0.01 * rng.randn()  # AR(1) beta, rho=0.3
-            beta_true[t] = 0.02 + u
-        Fv = rng.randn(T, N)
-        Rv = beta_true[:, None] * Fv + 0.05 * rng.randn(T, N)
-        res = est.estimate_with_errors(
-            pd.DataFrame(Fv, index=idx, columns=cols),
-            pd.DataFrame(Rv, index=idx, columns=cols))
-        lam[m] = res['lambda_hat']
-        lse[m] = res['lambda_se']
-        pm[m] = res['premium_mean']
-        pse[m] = res['premium_mean_se']
-
     t0 = T // 2
-    sd_lam = float(np.nanstd(lam[:, t0]))
-    se_lam = float(np.nanmean(lse[:, t0]))
-    sd_pm = float(np.std(pm))
-    se_pm = float(np.mean(pse))
+
+    def _run(fixed_beta):
+        """fixed_beta=True 时固定真实路径: 经验 sd 只含横截面抽样误差.
+
+        CI 针对参数 beta_true_t, 故正确口径为 fixed_beta=True;
+        随机路径的 sd 混入参数漂移 (时变溢价本身), 不用于覆盖解释.
+        """
+        if fixed_beta:
+            rng_b = np.random.RandomState(seed + 1)
+            e, path_fixed = 0.0, np.empty(T)
+            for t in range(T):
+                e = 0.3 * e + 0.01 * rng_b.randn()
+                path_fixed[t] = 0.02 + e
+        lam = np.full(n_reps, np.nan)
+        lse = np.full(n_reps, np.nan)
+        pm = np.full(n_reps, np.nan)
+        pse = np.full(n_reps, np.nan)
+        for m in range(n_reps):
+            if fixed_beta:
+                path = path_fixed
+            else:
+                e, path = 0.0, np.empty(T)
+                for t in range(T):
+                    e = 0.3 * e + 0.01 * rng.randn()
+                    path[t] = 0.02 + e
+            Fv = rng.randn(T, N)
+            Rv = path[:, None] * Fv + 0.05 * rng.randn(T, N)
+            res = est.estimate_with_errors(
+                pd.DataFrame(Fv, index=idx, columns=cols),
+                pd.DataFrame(Rv, index=idx, columns=cols))
+            lam[m] = res['lambda_hat'][t0]
+            lse[m] = res['lambda_se'][t0]
+            pm[m] = res['premium_mean']
+            pse[m] = res['premium_mean_se']
+        return (float(np.nanstd(lam)), float(np.nanmean(lse)),
+                float(np.std(pm)), float(np.mean(pse)))
+
     print('=' * 78)
     print('L4  Monte Carlo (%d reps, AR(1) rho=0.3, T=%d, N=%d)' % (n_reps, T, N))
     print('=' * 78)
-    print('  premium_mean   经验sd=%.6g  平均SE=%.6g  SE/sd=%.4f' % (
-        sd_pm, se_pm, se_pm / sd_pm))
-    print('  lambda_hat[%d]  经验sd=%.6g  平均SE=%.6g  SE/sd=%.4f' % (
-        t0, sd_lam, se_lam, se_lam / sd_lam))
-    print('  (SE/sd ≈ 1 → SE 口径正确; lambda 的复合近似在 0.8–1.25 内即视为可用)')
+    for label, fixed in (('固定 beta 路径 (抽样误差口径; CI 应覆盖)', True),
+                         ('随机 beta 路径 (含参数漂移; 总波动口径)', False)):
+        sd_l, se_l, sd_p, se_p = _run(fixed)
+        print('  [%s]' % label)
+        print('    premium_mean   经验sd=%.6g  平均SE=%.6g  SE/sd=%.4f'
+              % (sd_p, se_p, se_p / sd_p))
+        print('    lambda_hat[%d]  经验sd=%.6g  平均SE=%.6g  SE/sd=%.4f'
+              % (t0, sd_l, se_l, se_l / sd_l))
+    print('  语义: CI 针对参数 beta_true_t; 正确口径为固定 beta 路径 (SE/sd>=1 即保守, 覆盖>=名义).')
+    print('        随机路径的 sd 混入参数漂移 (时变溢价), 其 SE/sd<1 不表示 CI 失效.')
 
 
 def main():

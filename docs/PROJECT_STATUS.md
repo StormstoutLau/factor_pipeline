@@ -130,7 +130,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 | — | 多断点支持 (Bai-Perron LWZ) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.2 |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
 | — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
-| — | Anderson-Rubin 后验检验 (中性化质量监控) | [ ] | v3.2.0 Step 8 |
+| — | Anderson-Rubin 后验检验 (中性化质量监控) | ✅ v3.2.0 (`enable_ar_check`, 默认关闭) | v3.2.0 Step 8 |
 
 ---
 

@@ -23,8 +23,9 @@
   `max(n_valid−2, 1)` 守卫极小横截面; 新增 E8/E9
 - **Stata 18 对拍** ([scripts/verify_hac_stata.py](scripts/verify_hac_stata.py)):
   premium_mean / beta_se / Ω_t 与 `newey` 逐位一致, 唯一系统差 = Stata 默认
-  n/(n−k) 自由度修正 (本实现保持 NW(1987) 渐近形式); L4 Monte Carlo:
-  premium SE/sd=0.94, λ̂ SE/sd=0.83 (≈90% 覆盖 @95% 名义, 已声明近似限制)
+  n/(n−k) 自由度修正 (本实现保持 NW(1987) 渐近形式); L4 Monte Carlo 口径自纠:
+  固定 β 路径 (抽样误差口径) premium SE/sd=2.11, λ̂ SE/sd=1.77 → **保守**;
+  随机 β 路径 0.90/0.81 为含参数漂移的总波动口径, 不用于 CI 覆盖解释
 - 项目版本 **3.4.12** (6 处锚点); 缓存代际不变 **`v2.3.0-cache`**
 
 ### 变更文件
