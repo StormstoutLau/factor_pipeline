@@ -274,6 +274,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 | 日期 | Commit | 内容 |
 |------|--------|------|
+| 2026-11-17 | 5341514 | feat(v3.5.2): 多断点路径 NaN 间隙守卫 (ADR-048); 全量 1786 passed |
 | 2026-11-17 | 35790e8 | feat(v3.5.1): 多断点接入 diagnose 标签路径 (ADR-047) + 异构复审修正; 全量 1777 passed |
 | 2026-11-16 | 23e0f33 | feat(v3.5.0): 多断点支持 Bai-Perron + Stata 46/46 对拍 (ADR-046); 全量 1768 passed |
 | 2026-11-16 | 7f3b3d4 | fix(v3.4.9): L1/L2 消融臂 trivial 口径清扫 (`L2_unified` / `L1_orthogonalizer_off` 退出 BH 分母 + module_enabled 合并覆盖) |
