@@ -100,7 +100,7 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持              
 
 | # | 任务 | 状态 | 依据 |
 |---|------|------|------|
-| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ⏸ 部分完成 (v3.4.0 A/B: 2 因子/2023; v3.4.12: 4 因子/2020-2026; 2026-11-16: 12 因子 × 三分段 + Barra 中性化 40 月, 5/12 BH / 3/12 Bonferroni; **组合层 IC/Sharpe 回测待做**) | ADR-040 风险段 + [v3.4.0 实证报告](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) + [多因子×多年验证](analysis/MULTIFACTOR_MULTIYEAR_VERIFICATION.md) |
+| 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ✅ **完成** (v3.4.0 A/B: 2 因子/2023; v3.4.12: 4 因子/2020-2026; 2026-11-16: 12 因子 × 三分段 + Barra 中性化 40 月, 5/12 BH / 3/12 Bonferroni; **组合层: 4 因子 + 复合 × 2 池 × 4 费率 — 全市场多空 SR 0.77-1.05 / NW t 2.4-3.0, 复合 SR 0.94 / t 3.04; 但多头超额 ≈0 (t≤0.48) → 收益来自空头端; 沪深300 内失效**) | [v3.4.0 实证](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) + [多因子×多年验证](analysis/MULTIFACTOR_MULTIYEAR_VERIFICATION.md) + [组合层回测](analysis/PORTFOLIO_BACKTEST_VERIFICATION.md) |
 | 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | ✅ 实验完成 — 结论**不切换默认**, MAD 保留为可选项 | [实验报告](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) (ADR-042 已知遗留; O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
 | 3 | `BreakpointDetector.detect` T<30 → `_no_breakpoint_result` 缺失 (AttributeError) | ✅ v3.4.13 修复 (退化 6 键结果 + E1-E5 边界测试; 正常路径零改动) | [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) + [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md) |
 
