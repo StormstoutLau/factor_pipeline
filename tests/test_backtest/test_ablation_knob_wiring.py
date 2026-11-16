@@ -11,6 +11,7 @@
 """
 
 import copy
+import logging
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,7 @@ import pytest
 from unittest.mock import patch
 
 from factor_pipeline.backtest.ablation_runner import (
-    AblationRunner, AblationConfig,
+    AblationRunner, AblationConfig, AblationResult,
 )
 from factor_pipeline.backtest.multiple_testing import apply_bh_fdr
 
@@ -135,7 +136,7 @@ class TestRunL4ArmSet:
                 == 'winsorize_5pct')
 
     def test_l4_trivial_count(self, monkeypatch):
-        """E6: 不传市值 → 2 trivial + 6 non-trivial."""
+        """E6: 不传市值 → 3 trivial + 5 non-trivial (v3.4.8 实跑口径)."""
         runner = _runner()
         factor_data, fwd_returns, industry = _data()
         captured = _capture_run_single(monkeypatch, runner)
@@ -145,11 +146,96 @@ class TestRunL4ArmSet:
         l4 = [c['config'] for c in captured if c['config'].layer == 'L4']
         trivial = [c for c in l4 if c._is_trivial]
         assert len(l4) == 8
-        assert len(trivial) == 2
+        assert len(trivial) == 3
         assert {c.name for c in trivial} == {
             'L4_outlier_method_winsorize_1pct',
             'L4_neutralization_industry',
+            'L4_neutralization_industry+mktcap',
         }
+
+
+class TestL4TrivialCaliber:
+    """v3.4.8: trivial 按实跑口径判定 (无市值时 industry+mktcap 退化)."""
+
+    _TRIVIAL_NO_MKTCAP = {
+        'L4_outlier_method_winsorize_1pct',
+        'L4_neutralization_industry',
+        'L4_neutralization_industry+mktcap',
+    }
+    _TRIVIAL_WITH_MKTCAP = {
+        'L4_outlier_method_winsorize_1pct',
+        'L4_neutralization_industry+mktcap',
+    }
+
+    def test_no_mktcap_marks_mktcap_arm_trivial(self, monkeypatch):
+        """T1: 无市值 → 退化臂计入 trivial 集合."""
+        runner = _runner()
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+
+        runner.run_l4_oat(factor_data, fwd_returns, industry)
+
+        trivial = {c['config'].name for c in captured
+                   if c['config'].layer == 'L4' and c['config']._is_trivial}
+        assert trivial == self._TRIVIAL_NO_MKTCAP
+
+    def test_no_mktcap_emits_degradation_warning(self, monkeypatch, caplog):
+        """T2: 无市值 → 恰 1 条退化告警."""
+        runner = _runner()
+        factor_data, fwd_returns, industry = _data()
+        _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+
+        runner.run_l4_oat(factor_data, fwd_returns, industry)
+
+        hits = [r for r in caplog.records if '退化为仅行业' in r.getMessage()]
+        assert len(hits) == 1
+
+    def test_with_mktcap_trivial_set_unchanged(self, monkeypatch, caplog):
+        """T3: 传市值 → trivial 集合不变 (2 个) 且无退化告警."""
+        runner = _runner()
+        factor_data, fwd_returns, industry = _data()
+        market_cap = _make_market_cap(factor_data['factor_0'].index,
+                                      factor_data['factor_0'].columns)
+        captured = _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+
+        runner.run_l4_oat(factor_data, fwd_returns, industry,
+                          market_cap_data=market_cap)
+
+        trivial = {c['config'].name for c in captured
+                   if c['config'].layer == 'L4' and c['config']._is_trivial}
+        assert trivial == self._TRIVIAL_WITH_MKTCAP
+        assert not any('退化为仅行业' in r.getMessage() for r in caplog.records)
+
+    def test_external_b3_without_mktcap_emits_caliber_hint(self, monkeypatch, caplog):
+        """T4: 外部 B3 + 无市值 → 追加一条口径未校验提示, trivial 判定不变."""
+        runner = _runner()
+        factor_data, fwd_returns, industry = _data()
+        captured = _capture_run_single(monkeypatch, runner)
+        caplog.set_level(logging.WARNING,
+                        logger='factor_pipeline.backtest.ablation_runner')
+        external_b3 = AblationResult(
+            config=AblationConfig(
+                name='B3_full', layer='baseline', baseline_level='B3'),
+            metrics={}, ic_series=np.array([]), ls_return_series=np.array([]),
+            rho_step={}, ortho_diagnostics={},
+            n_factors=1, n_periods=12, runtime_sec=0.0,
+        )
+
+        results = runner.run_l4_oat(factor_data, fwd_returns, industry,
+                                    b3_full_result=external_b3)
+
+        assert results[0] is external_b3
+        assert len([r for r in caplog.records
+                    if '外部 B3 口径未校验' in r.getMessage()]) == 1
+        assert len([r for r in caplog.records
+                    if '退化为仅行业' in r.getMessage()]) == 1
+        trivial = [c['config'] for c in captured
+                   if c['config'].layer == 'L4' and c['config']._is_trivial]
+        assert {c.name for c in trivial} == self._TRIVIAL_NO_MKTCAP
 
 
 # =============================================================================

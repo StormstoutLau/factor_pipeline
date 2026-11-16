@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-11-13
+> **更新日期**: 2026-11-15
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -47,14 +47,15 @@ v3.4.4 (2026-11-13) AblationRunner decoupler 消融臂 — dynamic_ab 内 AR 开
 v3.4.5 (2026-11-13) run_l2 / run_baselines 市值转发断链修复                      [x]
 v3.4.6 (2026-11-13) run_l3 / run_l4_oat 市值口径对齐                           [x]
 v3.4.7 (2026-11-15) L3/L4 旋钮接线审计 (去极值参数化 + 臂集合收敛)              [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.7
+v3.4.8 (2026-11-15) 消融 trivial 判定按实跑口径 (退化臂排除 BH 分母)            [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.4.8
 v3.4.x (候选)     非生产路径解耦器数值修复 (可选, 当前仅告警)                  [ ]
 v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳健估计               [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.4.3 完成后)
+## §2. 当前待办 (v3.4.8 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -62,10 +63,11 @@ v3.5.0 (远期)     内生性-溢价诊断交互 + 多断点支持 + 面板稳�
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 (v3.4.0 – v3.4.7)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 (v3.4.0 – v3.4.8)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.4.8 | 消融 trivial 判定按实跑口径 | `run_l4_oat`: 无市值时 `industry+mktcap` 臂 `effective_option` 归一为 `industry` 后判定 trivial (退出 BH-FDR 分母 6→5) + 循环外一次退化告警 + 外部 `b3_full_result` 口径未校验提示; 臂数/臂名/生产管线零改动 | ADR-036 消融归因前提 | 新增 4 passed (T1-T4); 定向回归 113 passed; `tests/test_backtest` 580 passed / 8 skipped; 版本统一 7 passed + 手工 6/6; 全量回归 1728 passed / 15 skipped / 0 failed |
 | v3.4.7 | L3/L4 旋钮接线审计 | `PipelineV2Config` / `StaticFactorPipeline` 去极值参数化; `run_l4_oat` 20→9 (outlier 4 / missing drop 1 / neutralization 3); `run_l3` 25→7 (CUSUM 诊断臂全 trivial); 新增 `_wiring_status` + 报告 `Wiring` 列 | ADR-036 消融归因前提 | 全量 1723 passed / 15 skipped; 定向 576 passed; 默认行为零变更 |
 | v3.4.6 | L3/L4 市值口径对齐 | `run_l3` (B3 + 24 臂) / `run_l4_oat` (B3 + 18 臂, `industry` 臂跳过) 补齐 `market_cap_data`; L4 默认口径随数据可用性在 `industry` / `industry+mktcap` 间切换 | ADR-036 消融归因前提 | 新增 8 passed; 定向回归 113 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1715 passed / 15 skipped / 0 failed |
 | v3.4.5 | 市值转发断链修复 | `run_l2` (2 臂) 与 `run_baselines` (B0-B3) 补齐 `market_cap_data` 转发 (仅非 None 注入); 新增 D12/D13 | ADR-042 观察项收口 | 新增 2 passed; 定向回归 115 passed; 版本统一 7 passed + 手工 5/5; 全量回归 1707 passed / 15 skipped / 0 failed |

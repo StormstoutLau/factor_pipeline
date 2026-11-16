@@ -1096,9 +1096,27 @@ class AblationRunner:
         results = []
 
         # v3.4.6: 统一转发市值 (仅非 None 注入, 保持既有 monkeypatch 签名兼容)
+        market_cap_available = market_cap_data is not None
         extra_kwargs = {}
-        if market_cap_data is not None:
+        if market_cap_available:
             extra_kwargs['market_cap_data'] = market_cap_data
+
+        # v3.4.8: 无市值时 'industry+mktcap' 臂退化为仅行业中性化,
+        # 与无市值默认口径一致 — 明确告警, 避免使用者误读为「该自由度无效应」.
+        if not market_cap_available:
+            logger.warning(
+                "run_l4_oat: 未提供 market_cap_data — "
+                "L4_neutralization_industry+mktcap 臂退化为仅行业中性化 "
+                "(与无市值默认口径一致), 已标记为 trivial")
+            # v3.4.8: 外部 B3 口径由调用方负责 (v3.4.6 O3), runner 无法反推.
+            # 若外部 B3 按市值口径计算, 该臂相对 B3 存在真实差异, trivial 标记
+            # 会把这一比较排除出 BH-FDR 分母 — 显式提示调用方对齐口径.
+            if b3_full_result is not None:
+                logger.warning(
+                    "run_l4_oat: 传入外部 b3_full_result 且未提供 market_cap_data — "
+                    "外部 B3 口径未校验 (由调用方负责); 若其按市值口径计算, "
+                    "trivial 判定会把真实差异排除出 BH-FDR 分母, "
+                    "请同时传入 market_cap_data 以对齐口径")
 
         # B3_full 参照
         if b3_full_result is not None:
@@ -1134,7 +1152,15 @@ class AblationRunner:
 
         for param_name, options in oat_specs:
             for option in options:
-                is_trivial = (option == defaults.get(param_name))
+                # v3.4.8: trivial 按**实跑口径**判定 —
+                # 无市值时 'industry+mktcap' 臂不注入市值, 管线回落至仅行业,
+                # 与无市值默认口径一致, 必须从 BH-FDR 分母中排除.
+                effective_option = option
+                if (param_name == 'neutralization'
+                        and option == 'industry+mktcap'
+                        and not market_cap_available):
+                    effective_option = 'industry'
+                is_trivial = (effective_option == defaults.get(param_name))
                 config = AblationConfig(
                     name=f'L4_{param_name}_{option}',
                     layer='L4',

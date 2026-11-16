@@ -1325,32 +1325,34 @@ class TestL4OAT:
         assert "L4_outlier_method_3sigma" in report
 
     def test_l4_oat_marks_trivial_configs(self, monkeypatch):
-        """v3.4.7: 按实跑口径标记 trivial — 2 trivial + 6 非平凡.
+        """v3.4.8: 按实跑口径标记 trivial — 3 trivial + 5 非平凡.
 
         - outlier_method='winsorize_1pct' 与默认 percentile 1/99 等价;
-        - 不传市值时 neutralization='industry' 为默认口径.
+        - 不传市值时 neutralization='industry' 为默认口径;
+        - 不传市值时 'industry+mktcap' 退化为仅行业, 同为默认口径.
         """
         captured = self._run_l4_and_capture(monkeypatch)
         trivial_configs = [c for c in captured
                            if getattr(c['config'], '_is_trivial', False)]
-        assert len(trivial_configs) == 2, (
-            f"Expected 2 trivial configs, got {len(trivial_configs)}"
+        assert len(trivial_configs) == 3, (
+            f"Expected 3 trivial configs, got {len(trivial_configs)}"
         )
         assert {c['config'].name for c in trivial_configs} == {
             'L4_outlier_method_winsorize_1pct',
             'L4_neutralization_industry',
+            'L4_neutralization_industry+mktcap',
         }
         non_trivial_l4 = [c for c in captured
                           if c['config'].layer == 'L4'
                           and not getattr(c['config'], '_is_trivial', False)]
-        assert len(non_trivial_l4) == 6, (
-            f"Expected 6 non-trivial L4 configs, got {len(non_trivial_l4)}"
+        assert len(non_trivial_l4) == 5, (
+            f"Expected 5 non-trivial L4 configs, got {len(non_trivial_l4)}"
         )
 
     def test_l4_trivial_comparisons_excluded_from_bh_fdr(self):
-        """v3.4.7: compare_all 排除 _is_trivial 比较不参与 BH-FDR.
+        """compare_all 排除 _is_trivial 比较不参与 BH-FDR (合成用例).
 
-        8 个 L4 结果 = 2 trivial + 6 non-trivial; BH-FDR 只看到 6 个 p 值.
+        2 trivial + 6 non-trivial; BH-FDR 只看到 6 个 p 值.
         trivial 比较仍保留在结果列表中, 但 _is_trivial=True 且不占额度.
         """
         from factor_pipeline.pipelines_v2 import PipelineV2Config

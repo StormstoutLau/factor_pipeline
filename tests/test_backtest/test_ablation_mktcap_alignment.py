@@ -183,8 +183,9 @@ class TestRunL4MarketCap:
         assert by_name['L4_neutralization_industry'][
             'config']._is_trivial is False
 
-    def test_run_l4_without_market_cap_keeps_legacy_defaults(self, monkeypatch):
-        """E6: 不传市值 → 行为与 v3.4.5 一致 (默认 industry trivial)."""
+    def test_run_l4_without_market_cap_marks_degraded_arm_trivial(
+            self, monkeypatch):
+        """E6: 不传市值 → 'industry+mktcap' 退化为仅行业, 标记为 trivial."""
         runner = _runner()
         factor_data, fwd_returns, industry = _data()
 
@@ -195,7 +196,7 @@ class TestRunL4MarketCap:
         by_name = {c['config'].name: c for c in captured}
         assert by_name['L4_neutralization_industry']['config']._is_trivial is True
         assert by_name['L4_neutralization_industry+mktcap'][
-            'config']._is_trivial is False
+            'config']._is_trivial is True
 
     def test_run_l4_b3_reference_receives_market_cap(self, monkeypatch):
         """E7b: L4 的 B3 参照同样带市值."""

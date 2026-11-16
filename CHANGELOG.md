@@ -1,5 +1,64 @@
 # 开发日志 (Changelog)
 
+## v3.4.8 — 消融臂 trivial 判定按实跑口径 (已实施, 2026-11-15)
+
+### 概览
+
+v3.4.7 审计遗留的 P2-1: `run_l4_oat` 在未传 `market_cap_data` 时,
+`L4_neutralization_industry+mktcap` 臂不注入市值 → 管线回落至仅行业中性化
+(`pipelines_v2.py` `_build_neutralizer_params`), **实跑口径与 B3 完全相同**,
+但 trivial 判定只比较选项名, 该臂被当作非平凡计入 BH-FDR 分母。
+
+后果: 无市值场景 9 个比较中实际只有 5 个非平凡, 分母却按 6 计; 该臂 p 值退化在 1 附近,
+单向收紧其余臂的 BH 阈值, 降低检测力, 且与 `_is_trivial`「与 baseline 同口径」的既有语义矛盾。
+
+### 核心产出
+
+- `run_l4_oat`: 引入 `market_cap_available` 单点判据 (与市值注入条件同源)
+- trivial 判定改为**实跑口径**: 无市值时 `industry+mktcap` 归一为 `industry` 后比较默认值
+- 退化时输出**一次** `logger.warning` (文案含「退化为仅行业」), 避免误读为「该自由度无效应」
+- 外部传入 `b3_full_result` 且未传市值时, 追加一条「外部 B3 口径未校验」提示
+  (B3 口径由调用方负责, runner 无法反推; 若其按市值口径计算, trivial 判定会漏掉真实差异)
+- 臂数与臂名不变 (仍 9 结果 / 8 个 L4 臂); `config.neutralization` 保留原值
+- 生产管线 (`pipelines_v2.py`) 零改动; 缓存代际不变 **`v2.3.0-cache`**
+- 项目版本 **3.4.8** (6 处锚点)
+- 测试: 新增 4 例 (T1 无市值 trivial 集合 / T2 退化告警 / T3 有市值不变 / T4 外部 B3 口径提示), 更新 3 例既有断言
+
+### 测线口径 (trivial) 变化
+
+| 场景 | v3.4.7 | v3.4.8 |
+|------|--------|--------|
+| 传市值 | 2 trivial (`winsorize_1pct` / `industry+mktcap`) + 6 非平凡 | **不变** |
+| 不传市值 | 2 trivial (`winsorize_1pct` / `industry`) + 6 非平凡 | 3 trivial (增 `industry+mktcap`) + **5 非平凡** |
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `backtest/ablation_runner.py` | `run_l4_oat`: `market_cap_available` / 实跑口径 trivial / 退化告警 + 外部 B3 口径提示 |
+| `tests/test_backtest/test_ablation_knob_wiring.py` | 新增 `TestL4TrivialCaliber` (T1-T4); `test_l4_trivial_count` 改 3/5 |
+| `tests/test_backtest/test_ablation_runner.py` | `test_l4_oat_marks_trivial_configs` 改 3/5 |
+| `tests/test_backtest/test_ablation_mktcap_alignment.py` | 无市值用例更名并断言退化臂 trivial |
+| 6 处版本锚点 | `__init__.py` / `pyproject.toml` / `config_v2.py` / `reporting.py` / `test_fix3_version_unification.py` / `verify_fix3_manual.py` |
+| `docs/` | RESEARCH / EXECUTION / CHECKLIST / CONSISTENCY_REVIEW / audit / PROJECT_STATUS / DEV_PROGRESS |
+| `CODE_WIKI.md` | 头部版本 + `run_l4_oat` 描述 |
+
+### 实测矩阵
+
+| 层级 | 对象 | 结果 |
+|------|------|------|
+| unit | T1-T4 (trivial 口径 + 退化告警 + 外部 B3 提示) | **4 passed** (Red: 5 failed / 107 passed → Green: 112 passed; T4 于独立复审后追加) |
+| 定向回归 | 3 个消融测试文件 (复审后复跑) | **113 passed** (6.05s) |
+| 定向回归 | `tests/test_backtest` | **580 passed / 8 skipped** (1338.27s) |
+| 版本统一 | `test_fix3_version_unification.py` + 手工校验 | **7 passed** + 手工 **6/6** |
+| 全量回归 | `pytest` | **1728 passed / 15 skipped / 0 failed** (2143.86s, T4 追加后复跑) |
+
+### 兼容性
+
+- **有市值**: 行为逐位不变;
+- **无市值**: BH-FDR 分母 6→5, 其余臂 q 值可能变小 (更易检出) — 属口径修正, 非回归;
+- 公共接口、`AblationConfig` 字段、臂名、报告列均不变。
+
 ## v3.4.7 — L3/L4 旋钮接线审计 (已实施, 2026-11-15)
 
 ### 概览
