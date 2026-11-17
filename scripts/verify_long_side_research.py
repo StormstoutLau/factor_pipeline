@@ -82,7 +82,9 @@ def load_implementability(root, close):
     name = pd.read_pickle(md / 'stock_name.pkl')
     name.index = pd.to_datetime(name.index)
     name = name.reindex(index=dates, columns=cols)
-    is_st = name.apply(lambda s: s.fillna('').str.contains('ST'))
+    # ST / *ST / 退市整理期 (异构复审 P3: 名称含'退'非'ST' 月均 29 只)
+    is_st = name.apply(
+        lambda s: s.fillna('').str.contains('ST|退', regex=True))
 
     raw_ret = pd.read_pickle(md / 'stock_return.pkl')
     raw_ret.index = pd.to_datetime(raw_ret.index)
@@ -91,17 +93,21 @@ def load_implementability(root, close):
     high.index = pd.to_datetime(high.index)
     high = high.reindex(index=dates, columns=cols)
 
-    # 涨停阈值: 主板 10%, 创业板 2020-08-24 起 20%, 科创板 20%, 北交所 30%
+    # 涨停阈值: 主板/B股 10%, 创业板 2020-08-24 起 20%, 科创板 20%, 北交所 30%
+    # (复审 P3: 面板无 B 股; 北交所前缀 43/83/87/92 — 精确映射替代旧 '4'/'8'/'9' 一刀切)
     thr = np.full((len(dates), len(cols)), 10.0)
     early = np.asarray(dates < CHINEXT_REFORM)
     for j, code in enumerate(cols):
-        if code.startswith('688'):
+        p2 = code[:2]
+        if p2 in ('43', '83', '87', '92'):
+            thr[:, j] = 30.0
+        elif p2 in ('90', '20'):
+            thr[:, j] = 10.0
+        elif p2 == '68':
             thr[:, j] = 20.0
-        elif code.startswith('30'):
+        elif p2 == '30':
             thr[early, j] = 10.0
             thr[~early, j] = 20.0
-        elif code[:1] in ('4', '8', '9'):
-            thr[:, j] = 30.0
     thr = pd.DataFrame(thr, index=dates, columns=cols)
     # 收盘钉在最高价 + 涨幅达阈值附近 → 视为涨停买不进
     is_lu = (raw_ret >= thr - 0.3) & (close >= high * 0.999)
