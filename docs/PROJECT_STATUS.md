@@ -104,6 +104,8 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 > 当前缺陷登记: **无未修复缺陷**。DEFECT-1 (`BreakpointDetector.detect` T<30 → 调用不存在的 `_no_breakpoint_result` → AttributeError) 已于 **v3.4.13** 修复: 补 `_no_breakpoint_result(T)` 退化结果 + 5 例边界测试 (T=10/有效29/有效30/diagnose T=20/全 NaN), 正常路径与 `diagnose` 零改动。见 [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) / [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md)。无 known-xfail; 历史因果性修复链 (v3.3.1–v3.3.7) 全部闭环。
 
+> ⚠️ **已知数据限制** (2026-11-17 诊断, 见 [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md)): `market_value.csv` 止于 **2026-01-23** (独立导出批次 01-27 后停更; 仅致末月 `turnover_1m` 分母 stale, 中位偏差 3.6%、秩相关 0.997, 且末月不进入绩效); `barra_df_tl.pkl` 止于 **2023-05-31**、`stock_ind.pkl` 止于 **2023-06-13** (均 2023-07-31 后停更) — **2023-06 之后无法做风格/行业中性化**。
+
 ### 🟠 P1 — 下一任务 (先后顺序)
 
 | # | 任务 | 状态 | 依据 |
@@ -143,6 +145,8 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | — | 多断点路径 NaN 间隙守卫 | ✅ v3.5.2 (连续性描述键 + 边界跨缺失 → ES 降级 suspect, ADR-048) | v3.5.0 H7 / v3.5.1 H5 |
 | — | sup-F 自相关稳健临界值 | ✅ v3.5.3 (AR(1) sieve bootstrap, opt-in; φ=0.5 size 50%→5.3%, ADR-049) | v3.5.2 H4 / RESEARCH_V3.5.2_NAN_GAP_GUARD §8 |
 | — | 组合层容量 / 冲击成本压力测试 | ✅ 2026-11-17 (exQ1 ~90-100 亿 / 上限 200 亿; Q5 5-11 亿不可产品化; 已异构复审 PASS_WITH_FIXES) | 多头端研究 §7 落地缺口 + [复审审计](audit/2026-11-17-capacity-impact-stress-audit.md) |
+| — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − 5 交易日) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 |
+| — | mv 重新导出至 2026-01-30 / barra+行业换源 (2024+) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
 | — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
 | — | Anderson-Rubin 后验检验 (中性化质量监控) | ✅ v3.2.0 (`enable_ar_check`, 默认关闭) | v3.2.0 Step 8 |
