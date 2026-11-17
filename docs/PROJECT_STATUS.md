@@ -128,10 +128,26 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 | # | 任务 | 可交付物 | 验收标准 | 依赖 |
 |---|------|---------|---------|------|
-| GR-1 | `GovernanceRecord` + 存储 | `backtest/governance.py`（`GovernanceRecord` / `GovernanceStore`, DuckDB/JSONL；emit 钩子与 SpecificationLogger 解耦） | 往返序列化一致; `record_id` 确定性; 缺字段/schema 版本校验; 口径强制项（benchmark/return/tradable/cost/sign/split）必填; append-only; 不传 store 时默认零变更 | — |
+| GR-1 | `GovernanceRecord` + 存储 | `backtest/governance.py`（`GovernanceRecord` / `GovernanceStore`, DuckDB/JSONL；emit 钩子与 SpecificationLogger 解耦） | 往返序列化一致; `record_id` 确定性; 缺字段/schema 版本校验; 口径强制项（benchmark/return/tradable/cost/sign/split）与 batch_id/experiment_id/construction_code_hash/holdout_locked_at/mode 必填（effect_size/ci 在 S3 及以后必填; 组合/复检 record 的 parent_id 必填）; append-only; 不传 store 时默认零变更 | — |
 | GR-2 | 数据契约守卫 | `backtest/data_contract.py`（`check_data_contract(..., max_lag=1)`, strict 默认关/warn） | 当前 mv 5 日缺口（2026-01-23 vs 01-30）**必须被拦截**; 正常数据通过且零误报; 接入容量/多头端脚本前置 | — |
 | GR-3 | Golden master 回归基线 | `backtest/golden_master.py` + `tests/golden/` | 默认路径 1e-10 零差异; 故意改参（如 percentile 2/98）→ 必须报差异; 禁跨环境 bitwise 断言 | GR-1（记录 hash） |
-| GR-4 | 多重检验台账 | `backtest/multiple_testing_ledger.py` | BH 与参考实现 q/掩码 ≤1e-12; Romano-Wolf/White RC 等按各自校正 p 口径; `family_id` 预注册分组、`n_trials` 含全部已执行试验; 未登记变体不得进结论 | GR-1 |
+| GR-4 | 多重检验台账 | `backtest/multiple_testing_ledger.py` | BH 与参考实现 q/掩码 ≤1e-12; Romano-Wolf/White RC 等按各自校正 p 口径; `family_id` 预注册分组（S0 登记时定稿, 早于数据观察; 同批同 family 或显式子 family 依据）、`n_trials` 含全部已执行试验; 未登记变体不得进结论 | GR-1 |
+
+### 🟠 P1-B — 数据层治理与 A 股偏差（专项 A/B，数据层复审）
+
+> 方案: [数据层治理复审](analysis/DATA_LAYER_GOVERNANCE_REVIEW.md) §4; 契约词汇/枚举并入 GR-2（DESIGN §5.7）
+> 版本暂定（复审 H8）; 专项 A 数据多已存在可先行, 不被专项 B 阻塞（复审 H1 深化）
+
+| # | 任务 | 可交付物 | 验收标准 | 依赖 |
+|---|------|---------|---------|------|
+| DL-1 (专项 A) | 数据接入层 DataPortal | 统一数据入口 + 多格式 reader + 字段字典/单位/代码格式 + lineage | 接入已存在的 volume/open/high/low/return/suspend/name; 重建逐日停牌状态('S'/'R' 事件表); 推导历史 ST 代理(披露口径); 接入交易日历 all_dates; 字段映射/单位/时区对账 | GR-2 契约 |
+| DL-2 (专项 A) | adj 数据质量修复 | adj 与 close 行数对齐 + 显著回落个案核验 | 81 日缺失根因定位并修复; 复权因子定义/配股处理核验; hfq 口径锁定(禁 qfq 防回归) | — |
+| DA-1 (专项 B) | barra/行业换源 | 2023-06 后风格/行业数据 | 换源后中性化可用; **唯一阻塞 P1 风格/行业中性化项** | 外部采购 |
+| DA-2 (专项 B) | 历史成分/公告日/退市覆盖 | 历史指数成分 + 公告日/生效日 + 退市覆盖完整性核验 | PIT 严格校验可用; 幸存者偏差披露可根治(契约只能披露不可检测) | 外部采购 |
+
+> ⚠️ **数据质量新发现（数据层复审 H3）**: `stock_adj`(1394 行) 与 `stock_close`(1475 行) **行数不对齐, 81 个交易日缺失**;
+> adj 实测为 hfq, "非单调"主要是微小数值噪声(4578 列 <0.1% 相对回落), 仅 21 列显著回落(>0.1%)需个案核验。列入 DL-2。
+> 停牌/ST/退市/日历数据**已存在**（`stock_suspend`/`stock_name`/`all_dates`/list_date 覆盖 5797 只），属接入非缺口（复审 H1）。
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
@@ -164,7 +180,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | — | 多断点路径 NaN 间隙守卫 | ✅ v3.5.2 (连续性描述键 + 边界跨缺失 → ES 降级 suspect, ADR-048) | v3.5.0 H7 / v3.5.1 H5 |
 | — | sup-F 自相关稳健临界值 | ✅ v3.5.3 (AR(1) sieve bootstrap, opt-in; φ=0.5 size 50%→5.3%, ADR-049) | v3.5.2 H4 / RESEARCH_V3.5.2_NAN_GAP_GUARD §8 |
 | — | 组合层容量 / 冲击成本压力测试 | ✅ 2026-11-17 (exQ1 ~90-100 亿 / 上限 200 亿; Q5 5-11 亿不可产品化; 已异构复审 PASS_WITH_FIXES) | 多头端研究 §7 落地缺口 + [复审审计](audit/2026-11-17-capacity-impact-stress-audit.md) |
-| — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − 5 交易日) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 |
+| — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − N 交易日, **默认 N=1**, 按字段可配; 原 −5 口径恰好放过 mv 5 日缺口, 以路线图 §5 P0-2 为准) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 / [路线图 P0-2](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) |
 | — | mv 重新导出至 2026-01-30 / barra+行业换源 (2024+) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
 | — | 复合因子池扩展 (4 因子 → 更多因子 / ML 组合) 的容量与可实施性 | [ ] 可选 | [多头端研究 §11 因子范围](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
