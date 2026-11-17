@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.5.2 的"**多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 因子路由统一化治理**"（ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.5.3 的"**多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 自相关稳健断点 + 因子路由统一化治理**"（ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-049：sup-F AR(1) sieve bootstrap — 自相关下 size 从 50% 回到 5%；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫 + 自相关稳健临界值)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**与**规格日志 (opt-in)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -40,6 +40,26 @@
 ---
 
 ## 版本更新摘要
+
+### v3.5.3 sup-F 自相关稳健临界值 (2026.11, 已实施)
+
+> **状态**: 已实施, 新增 11 passed (F1-F11); layer3 60 passed; 全量回归 1797 passed / 15 skipped / 0 failed; 异构复审 PASS_WITH_FIXES (5 视角 × 8 探针)
+> **文档**: [ADR-049](DECISIONS.md) / [调研](docs/research/RESEARCH_V3.5.3_AUTOCORR_ROBUST_BREAKPOINT.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.5.3_AUTOCORR_ROBUST_BREAKPOINT.md) / [审计](docs/audit/2026-11-17-v3.5.3-autocorr-robust-breakpoint-audit.md)
+> **版本 / 缓存**: 3.5.3 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: Andrews (1993) sup-F 渐近临界值假设无序列相关；β_t 存在 AR(1) 时默认路径严重过度拒绝（φ=0.5 名义 5% → 实测 50%）。既有 `sup_f_method='bootstrap'` 实为 iid 高斯重采样，与 docstring 声称的自相关保留不一致。
+
+**决策**: 将 bootstrap 路径重写为 **AR(1) sieve 残差自助**（OLS 估 φ → 中心化残差有放回重采样 → burn-in 50 递归生成 → sup-F* 分位），作为 opt-in `sup_f_method='bootstrap'`；`FactorHealthDiagnoser` 透传三参数并新增 `chow_critical` / `breakpoint_sup_f_method` 两键；默认 `'asymptotic'` 路径逐位不变。
+
+| 项 | 实测 (T=240, 300 次重复) |
+|---|---|
+| φ=0 size | 渐近 4.7% / AR(1) 5.3% |
+| φ=0.5 size | 渐近 50.0% / 旧 iid 49.0% / **AR(1) 5.3%** |
+| φ=0.8 size | 渐近 93.3% / **AR(1) 8.7%** |
+| φ=0.5 power (Δ=1σ) | **AR(1) 93.7%** / 渐近 100% |
+| 实现口径复核 | φ=0.5 size 48.7% → 4.7%, power 96.0% |
+| 真实 β_t (4 因子) | \|φ̂\| ≤ 0.21, sup-F 1.74-3.08 < 全部临界值 → 标签不变 |
+| 版本统一 | 7 passed + 手工 5/5 |
 
 ### v3.5.2 多断点路径 NaN 间隙守卫 (2026.11, 已实施)
 
@@ -1198,13 +1218,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.5.2 (多断点路径 NaN 间隙守卫, ADR-048; 含 v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
+- **Pipeline 版本**: v3.5.3 (sup-F AR(1) sieve bootstrap, ADR-049; 含 v3.5.2 NaN 间隙守卫 ADR-048; v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: **全量回归 1786 passed / 15 skipped / 0 failed** (1160.73s, 2026-11-17, v3.5.2; = v3.5.1 基线 1777 + v3.5.2 新增 9); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 5/5; 性能门禁 ratio 1.0092 ≤ 1.05 (v3.4.4 实测, 本版未重测)
+- **测试基线**: **全量回归 1797 passed / 15 skipped / 0 failed** (1027.28s, 2026-11-17, v3.5.3; = v3.5.2 基线 1786 + v3.5.3 新增 11); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 5/5; 性能门禁 ratio 1.0092 ≤ 1.05 (v3.4.4 实测, 本版未重测)
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.17 (v3.5.2 NaN 间隙守卫)
-- **状态**: STABLE (v3.5.2, 10 步 spec 工作流 §13.8 小任务裁剪)
+- **构建日期**: 2026.11.17 (v3.5.3 自相关稳健断点)
+- **状态**: STABLE (v3.5.3, 10 步 spec 工作流 §13.8 小任务裁剪)
 
 ### 版本历史
 
@@ -1244,6 +1264,7 @@ factor_pipeline/
 | v3.5.0 | 2026.11.16 | 多断点支持 (ADR-046): `BreakpointDetector.detect_multiple()` — 动态规划全局最小 SSR (Bai-Perron 1998) + BIC/LWZ 选段数, 13 键输出; 不硬编码临界值表; T<30 退化; Stata 18.0 MP 官方 `regress` 对拍 46/46 PASS |
 | v3.5.1 | 2026.11.17 | 多断点接入 `diagnose` (ADR-047): opt-in `breakpoint_mode='multiple'`; sup-F 确认存在性 + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 `'single'` 零变更; 新增 9 例 |
 | v3.5.2 | 2026.11.17 | 多断点路径 NaN 间隙守卫 (ADR-048): `multi_break_gap_min_run=2`; 标签相关边界跨缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; `detect_multiple` +5 键 (18), `diagnose` +6 键 (28); 默认 single 零变更; 新增 9 例 |
+| v3.5.3 | 2026.11.17 | sup-F 自相关稳健临界值 (ADR-049): `sup_f_method='bootstrap'` 重写为 AR(1) sieve 残差自助 (旧实现为 iid 高斯, 文档-实现不一致); `n_bootstrap=1000` / `random_state=42`; `detect` +`critical_method`; `FactorHealthDiagnoser` 透传 + `diagnose` +2 键 (30); φ=0.5 size 50%→5.3%, power 93.7%; 默认 asymptotic 逐位不变; 新增 11 例 |
 
 ---
 

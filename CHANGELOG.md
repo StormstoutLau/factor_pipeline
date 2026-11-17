@@ -1,5 +1,107 @@
 # 开发日志 (Changelog)
 
+## v3.5.3 — sup-F 自相关稳健临界值: AR(1) sieve bootstrap (已实施, 2026-11-17)
+
+### 概览
+
+Andrews (1993) sup-F 的渐近临界值假设**无序列相关**。`BreakpointDetector`
+默认 `sup_f_method='asymptotic'` 直接在 raw β_t 上做网格 Chow 检验, 当 β_t 存在
+AR(1) 自相关时严重过度拒绝: 名义 5% 下 φ=0.2 / 0.5 / 0.8 的实测拒绝率为
+**14.0% / 50.0% / 93.3%** (T=240, 300 次重复)。
+
+既有 `sup_f_method='bootstrap'` 的实现是 `rng.randn(B, T)` 的 **iid 高斯**序列,
+并不保留自相关, 与 docstring 声称的「保留序列相关」不一致 (文档-实现不一致缺陷);
+且 `FactorHealthDiagnoser` 固定构造默认 asymptotic 检测器, 无法 opt-in。
+
+v3.5.3 把 bootstrap 路径重写为 **AR(1) sieve 残差自助** (与
+`StructuralBreakMonitor._bootstrap_pvalue` 的设计 m10 同源), 作为 opt-in;
+**默认渐近路径逐位不变**。
+
+### 核心产出
+
+- `BreakpointDetector.__init__(..., sup_f_method='asymptotic'|'bootstrap',
+  n_bootstrap=1000, random_state=42)`; 非法方法 → `ValueError`;
+  bootstrap 且 `n_bootstrap < 50` → `ValueError`
+- `detect` 将观测序列 `y` 传入临界值计算; 输出新增 `critical_method`
+  (有断点时 8 键 / 无断点或退化路径 7 键, 原键逐位不变)
+- `_bootstrap_sup_f_crit` 重写: OLS 估计 `y_t = c + φ y_{t-1} + e_t`,
+  φ clip ±0.99, 残差中心化后有放回重采样, burn-in 50 递归生成 B 条伪序列,
+  取 sup-F* 的 `1-α` 分位
+- 新增 `_sup_f_batch(Y, ε)`: 累积和向量化, O(B·T) 而非 O(B·T²)
+- `FactorHealthDiagnoser.__init__(..., sup_f_method, n_bootstrap, random_state)`
+  透传; `diagnose` 输出新增 `chow_critical` / `breakpoint_sup_f_method`
+  (28 → 30 键), `breakpoint_sup_f_method` 明确当前生效方法
+- 版本 **3.5.3** (6 锚点); 缓存代际不变 `v2.3.0-cache`; 无新依赖
+
+### 选型证据 (T=240, B=300, α=5%, 300 次重复)
+
+**Size (H0 下拒绝率)**
+
+| 方法 | φ=0 | φ=0.2 | φ=0.5 | φ=0.8 |
+|------|-----|-------|-------|-------|
+| asymptotic | 4.7% | 14.0% | 50.0% | 93.3% |
+| iid bootstrap (旧) | 5.3% | 18.7% | 49.0% | 93.3% |
+| **AR(1) sieve (新)** | **5.3%** | **5.7%** | **5.3%** | **8.7%** |
+| AR(p) sieve (BIC) | 5.3% | 4.7% | 5.0% | 7.7% |
+| moving-block bootstrap | 4.0% | 6.0% | 13.7% | 35.3% |
+
+**Power (Δ=1σ 均值断点)**
+
+| 方法 | φ=0.5 | φ=0.8 |
+|------|-------|-------|
+| asymptotic | 100% | 99.7% |
+| **AR(1) sieve** | **93.7%** | 44.0% |
+| moving-block | 97.3% | 87.0% |
+
+> φ=0.8 处 AR(1) sieve 的 power 明显下降, 是「以 size 换 power」的代价;
+> 本项目 β_t 实测 |φ| ≤ 0.21, 处于 AR(1) sieve 的稳健区间。
+> 短样本 T=120: φ=0.5 power 63.7% (渐近 97.0% 但 size 43%), φ=0.8 power 25.0% —
+> 高自相关 + 短样本时不建议依赖 bootstrap 判定「无断点」。
+
+**实现口径复核 (T=240, B=300, 150 次重复)**
+
+| 场景 | 渐近 | 实现 AR(1) sieve |
+|------|------|------------------|
+| φ=0 size | 4.7% | 4.0% |
+| φ=0.5 size | 48.7% | **4.7%** |
+| φ=0.5 power | 100% | **96.0%** |
+
+**真实 β_t (4 因子, T=68-70)**
+
+| 因子 | φ̂ | sup-F | 渐近临界 | AR(1) 临界 | 标签 |
+|------|-----|-------|---------|-----------|------|
+| momentum_1m | -0.070 | 1.74 | 8.85 | 7.94 | 无断点 |
+| reversal_1w | -0.069 | 1.82 | 8.85 | 7.43 | 无断点 |
+| volatility_1m | -0.141 | 3.08 | 8.85 | 6.10 | 无断点 |
+| amihud_1m | +0.208 | 2.67 | 8.85 | 12.22 | 无断点 |
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `modules/factor_health/__init__.py` | `BreakpointDetector` 构造 + 参数校验; `detect` 传 `y` + `critical_method`; `_sup_f_critical_value` 新签名; `_bootstrap_sup_f_crit` 重写; 新增 `_sup_f_batch`; `FactorHealthDiagnoser` 透传 + `diagnose` +2 键 |
+| `tests/unit/test_layer3_factor_health.py` | 新增 `TestAutocorrRobustSupF` (F1-F11, +11 passed; layer3 60 passed) |
+| 6 处版本锚点 | 3.5.2 → 3.5.3 |
+| `DECISIONS.md` | ADR-049 |
+| `docs/` | RESEARCH / DESIGN(private) / EXECUTION / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI / ARCHITECTURE |
+
+### 局限
+
+- AR(1) sieve 只修正**一阶**自相关; 高阶或长记忆序列仍可能过度拒绝
+  (AR(p) 探针在 φ=0.8 略优, 但短样本易过拟合, 未采纳);
+- φ=0.8 时 power 44.0% (T=240) / 25.0% (T=120), 高自相关下「不拒绝」证据弱;
+- 默认为 `'asymptotic'`, bootstrap 为 opt-in; 真实 4 因子标签在本版前后不变,
+  故生产默认路径无行为变化;
+- `n_bootstrap` 越大越稳定, 默认 1000 在大 T 下临界值仍是重采样噪声的单调函数,
+  跨 seed 波动约 <15% (F6);
+- **确定性趋势不在 AR(1) 代理内** (复审 P4): β_t 含线性趋势时 asymptotic 与
+  bootstrap 均以 ~100% 拒绝 — 属 sup-F「H0 = 常数均值」的既有语义 (趋势会被
+  报告为断点), 非本版引入;
+- **近单位根检验失效** (复审 P3): φ̂≈0.97 时 bootstrap 临界值 >430 (发散),
+  任何 sup-F 都不拒绝; OLS φ̂ 下偏 ≈ −(1+3φ)/T, clip ±0.99 在 T=240 实际难触发;
+- `critical_method` 报告**配置**方法 (复审 P6): 常数序列 / 全 NaN / T<5 的
+  退化回退按渐近值或 NaN 计算, 但标签不变 — `has_breakpoint` 判定不受影响。
+
 ## v3.5.2 — 多断点路径 NaN 间隙守卫 (已实施, 2026-11-17)
 
 ### 概览

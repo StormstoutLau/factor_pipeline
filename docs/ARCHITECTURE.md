@@ -5,7 +5,7 @@
 > **更新规则**: 任何架构变更 (新增模块 / 接口重构 / 依赖调整) 必须同步更新本文档 + 对应 ADR
 > **关联文档**: [DECISIONS.md](../DECISIONS.md) | [CHANGELOG.md](../CHANGELOG.md) | [DEV_PROGRESS.md](DEV_PROGRESS.md) | [WORKFLOW_METHODOLOGY.md](WORKFLOW_METHODOLOGY.md)
 >
-> v1.1 同步: Layer 3 `BreakpointDetector` 新增多断点 (`detect_multiple`, ADR-046) 且 `FactorHealthDiagnoser.diagnose` 新增 opt-in 多断点标签路径 (ADR-047, v3.5.1); v3.5.2 增加 NaN 间隙守卫 (ADR-048): 标签相关边界跨缺失时 ES 降级 suspect; 默认单断点路径不变。
+> v1.1 同步: Layer 3 `BreakpointDetector` 新增多断点 (`detect_multiple`, ADR-046) 且 `FactorHealthDiagnoser.diagnose` 新增 opt-in 多断点标签路径 (ADR-047, v3.5.1); v3.5.2 增加 NaN 间隙守卫 (ADR-048): 标签相关边界跨缺失时 ES 降级 suspect; v3.5.3 增加自相关稳健临界值 (ADR-049): `sup_f_method='bootstrap'` 重写为 AR(1) sieve 残差自助, 默认 asymptotic 路径不变。
 
 ---
 
@@ -83,7 +83,7 @@
 | `factor_neutralizer/` | 行业 + 风格中性化 | `FactorNeutralizer` | ADR-018 (fit/transform 语义重构) |
 | `factor_orthogonalizer/` | 多因子正交化 (对称为主) | `BaseOrthogonalizer`, `SymmetricOrthogonalizer`, `GramSchmidt`, `Cholesky`, `PCA`, `Ridge` | ADR-020 (v2.5.0) |
 | `factor_decoupler/` | 时序解耦 (AR / 差分 / HP) | `ARDecoupler`, `AROrderSelector`, `CompositeDecoupler`; 弃用: `TemporalDecoupler`, `decouple_*`, `Optimized*` | ADR-040 / ADR-043 (v3.4.1 弃用) |
-| `factor_health/` | Layer 3 溢价健康诊断 (单/多断点 + 间隙守卫) | `PremiumEstimator`, `BreakpointDetector` (`detect` / `detect_multiple`), `FactorHealthDiagnoser` | ADR-028 (v3.3.0) / ADR-046 (v3.5.0) / ADR-047 (v3.5.1) / ADR-048 (v3.5.2) |
+| `factor_health/` | Layer 3 溢价健康诊断 (单/多断点 + 间隙守卫 + 自相关稳健临界值) | `PremiumEstimator`, `BreakpointDetector` (`detect` / `detect_multiple`, `sup_f_method`), `FactorHealthDiagnoser` | ADR-028 (v3.3.0) / ADR-046 (v3.5.0) / ADR-047 (v3.5.1) / ADR-048 (v3.5.2) / ADR-049 (v3.5.3) |
 | `statistical_classifier/` | VR + DF τ 面板分类 (零 for 循环) | `StatisticalClassifier` | ADR-027 (v3.2.0) |
 | `endogeneity_check/` | 内生性诊断 (AET / IFE / Lewbel / Oster) | `EndogeneityDiagnosticOrchestrator`, `AetChecker`, `IfeChecker`, `LewbelIV`, `OsterDelta`, `ThreatAssessor`, `MissingnessChecker` | ADR-032 (v3.1.0, 2026-10 补记) |
 | `endogeneity_estimators/` | 内生性估计器 (IVX / Profile GMM / Regularized DOLS / PFGMM) | `IVXEstimator`, `ProfileGMMEstimator`, `RegularizedDOLSEstimator`, `PFGMMEstimator`, `EstimationMethodSelector` | ADR-035 (v3.1.0, 2026-10 补记) |
@@ -203,6 +203,7 @@
         ▼
 ┌────────────────────┐
 │ BreakpointDetector  │  → 单断点: Chow F-test grid search → 断点位置
+│                    │     sup-F 临界值: Andrews 渐近 (默认) / AR(1) sieve bootstrap (v3.5.3)
 │                    │     多断点 (v3.5.0): detect_multiple → Bai-Perron DP + BIC/LWZ 选段数
 └────────────────────┘
         │

@@ -1,6 +1,6 @@
 # 开发进度总览 (版本 × 模块双维度)
 
-> **版本**: v1.4 (2026-11-13; v1.3 = 2026-11-12; v1.2 = 2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
+> **版本**: v1.5 (2026-11-17; v1.4 = 2026-11-13; v1.3 = 2026-11-12; v1.2 = 2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
 > **范围**: 跨会话单一真相源,记录每个版本每个模块的完成状态
 > **更新规则**: 每次发版 / 完成任务后更新对应单元格;新增版本时追加列
 > **关联文档**: [ARCHITECTURE.md](ARCHITECTURE.md) | [PROJECT_STATUS.md](PROJECT_STATUS.md) | [../CHANGELOG.md](../CHANGELOG.md)
@@ -46,7 +46,9 @@ v3.4.12 (2026-11-16) 面板 HAC / Premium 标准误 (estimate_with_errors), 缓�
 v3.4.13 (2026-11-16) DEFECT-1: BreakpointDetector 短样本退化 (T<30 → 无断点结果), 缓存代际不变
 v3.5.0 (2026-11-16) 多断点支持 (Bai-Perron DP + BIC/LWZ + Stata 46/46 对拍, ADR-046), 缓存代际不变
 v3.5.1 (2026-11-17) 多断点接入 diagnose 标签路径 (opt-in + sup-F 确认 + 材料性 suspect, ADR-047), 缓存代际不变
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.5.1
+v3.5.2 (2026-11-17) 多断点路径 NaN 间隙守卫 (连续性描述 + ES 降级 suspect, ADR-048), 缓存代际不变
+v3.5.3 (2026-11-17) sup-F 自相关稳健临界值 (AR(1) sieve bootstrap, ADR-049), 缓存代际不变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前 v3.5.3
 v3.5.x (远期)       内生性-溢价诊断交互
 ```
 
@@ -83,6 +85,8 @@ v3.5.x (远期)       内生性-溢价诊断交互
 
 > v3.5.2 模块影响: `modules/factor_health/__init__.py` `BreakpointDetector` 新增 `_gap_runs` / `_gap_missing_at` (静态), `detect_multiple` 新增 5 个连续性描述键 (13→18); `FactorHealthDiagnoser.__init__` 新增 `multi_break_gap_min_run=2`, `_multi_break_materiality` 返回最大位移边界 `driver_k`, `_classify_premium_health` 增加 gap 分支 (ES/ES+TD → suspect), `diagnose` 新增 6 键 (22→28); 默认 single 标签零变更; 分段算法/`detect` 零改动; 缓存代际不变。
 
+> v3.5.3 模块影响: `modules/factor_health/__init__.py` `BreakpointDetector.__init__` 新增 `sup_f_method` / `n_bootstrap` / `random_state`; `_bootstrap_sup_f_crit` 重写为 AR(1) sieve 残差自助 (旧实现为 iid 高斯); 新增 `_sup_f_batch` 向量化; `detect` 传 `y` 并新增 `critical_method` (8 键); `FactorHealthDiagnoser.__init__` 透传三参数, `diagnose` 新增 `chow_critical` / `breakpoint_sup_f_method` (28→30); 默认 asymptotic 路径逐位不变; 缓存代际不变。
+
 ### §2.1 核心编排层
 
 | 模块 / 文件 | v1.0 | v2.0 | v2.1 | v2.2 | v2.3-2.6 | v3.0 | v3.1 | v3.2 | v3.3 | v3.3.1 |
@@ -112,7 +116,7 @@ v3.5.x (远期)       内生性-溢价诊断交互
 |---|---|---|---|---|
 | `factor_fingerprint/` | ✅ 8 维 | ✅ 21 维 | ✅ | ✅ |
 | `statistical_classifier/` | — | — | ✅ VR+DF τ 零循环 | ✅ |
-| `factor_health/` | — | — | — | ✅ PremiumEstimator + BreakpointDetector + Diagnoser; v3.4.12 HAC SE (`estimate_with_errors`) |
+| `factor_health/` | — | — | — | ✅ PremiumEstimator + BreakpointDetector + Diagnoser; v3.4.12 HAC SE (`estimate_with_errors`); v3.5.0-3 多断点 / 间隙守卫 / AR(1) sieve bootstrap |
 
 ### §2.4 内生性 (v3.1)
 

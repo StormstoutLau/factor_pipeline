@@ -992,3 +992,134 @@ class TestMultipleBreakpointGapGuard:
         with pytest.raises(ValueError):
             FactorHealthDiagnoser(multi_break_gap_min_run=0)
 
+
+class TestAutocorrRobustSupF:
+    """F1-F11: AR(1) sieve 自相关稳健 sup-F 临界值 (v3.5.3)."""
+
+    @staticmethod
+    def _ar1(phi, T, seed, delta=0.0, burn=100):
+        rng = np.random.RandomState(seed)
+        n = T + burn
+        e = rng.randn(n) * np.sqrt(1 - phi ** 2)
+        y = np.zeros(n)
+        for t in range(1, n):
+            y[t] = phi * y[t - 1] + e[t]
+        y = y[burn:]
+        if delta:
+            y[T // 2:] += delta
+        return y
+
+    @staticmethod
+    def _patch_estimator(diag, beta_raw):
+        smooth = np.nan_to_num(beta_raw, nan=0.03)
+        diag.estimator._beta_raw = beta_raw
+        diag.estimator.estimate = lambda f, r: smooth
+
+    def test_f1_default_asymptotic_unchanged(self):
+        """F1: 默认 asymptotic → critical 8.85, 新键标注方法"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.3, 120, 1)
+        res = BreakpointDetector().detect(y)
+        assert res['critical_method'] == 'asymptotic'
+        assert res['critical'] == pytest.approx(8.85)
+        assert BreakpointDetector()._sup_f_critical_value(
+            120, 0.15, 0.05) == pytest.approx(8.85)
+
+    def test_f2_bootstrap_inflates_critical_under_ar1(self):
+        """F2: φ=0.5 → AR(1) sieve 临界值显著高于渐近值"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.5, 240, 2)
+        asym = BreakpointDetector()._sup_f_critical_value(240, 0.15, 0.05)
+        boot = BreakpointDetector(
+            sup_f_method='bootstrap', n_bootstrap=300, random_state=42)
+        crit = boot._sup_f_critical_value(240, 0.15, 0.05, y=y)
+        assert crit > 1.15 * asym
+
+    def test_f3_bootstrap_matches_asymptotic_under_iid(self):
+        """F3: φ=0 → bootstrap 临界值与渐近值同阶 (±20%)"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.0, 240, 3)
+        boot = BreakpointDetector(
+            sup_f_method='bootstrap', n_bootstrap=300, random_state=42)
+        crit = boot._sup_f_critical_value(240, 0.15, 0.05, y=y)
+        assert crit == pytest.approx(8.85, rel=0.20)
+
+    def test_f4_bootstrap_detects_true_break(self):
+        """F4: φ=0.3 + 真实 2σ 断点 → has_breakpoint=True"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.3, 240, 4, delta=2.0)
+        det = BreakpointDetector(
+            sup_f_method='bootstrap', n_bootstrap=300, random_state=42)
+        assert det.detect(y)['has_breakpoint'] is True
+
+    def test_f5_reproducible_same_seed(self):
+        """F5: 同 random_state 同输入 → 临界值逐位相等"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.5, 120, 5)
+        kw = dict(sup_f_method='bootstrap', n_bootstrap=200, random_state=7)
+        c1 = BreakpointDetector(**kw)._sup_f_critical_value(120, 0.15, 0.05, y=y)
+        c2 = BreakpointDetector(**kw)._sup_f_critical_value(120, 0.15, 0.05, y=y)
+        assert c1 == c2
+
+    def test_f6_seed_robustness(self):
+        """F6: 不同 seed → 临界值差异 < 15%"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.5, 120, 6)
+        c1 = BreakpointDetector(
+            sup_f_method='bootstrap', n_bootstrap=200,
+            random_state=1)._sup_f_critical_value(120, 0.15, 0.05, y=y)
+        c2 = BreakpointDetector(
+            sup_f_method='bootstrap', n_bootstrap=200,
+            random_state=2)._sup_f_critical_value(120, 0.15, 0.05, y=y)
+        assert abs(c1 - c2) / c1 < 0.15
+
+    def test_f7_diagnoser_passthrough_and_keys(self):
+        """F7: diagnoser 透传 bootstrap; diagnose 暴露方法与临界值"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        diag = FactorHealthDiagnoser(
+            bandwidth=24, alpha=0.05, sup_f_method='bootstrap',
+            n_bootstrap=200, random_state=3)
+        assert diag.detector.sup_f_method == 'bootstrap'
+        assert diag.detector.n_bootstrap == 200
+        y = self._ar1(0.3, 200, 7, delta=2.0)
+        self._patch_estimator(diag, y)
+        df = pd.DataFrame(np.zeros((5, 3)))
+        res = diag.diagnose(df, df, return_type='static')
+        assert res['breakpoint_sup_f_method'] == 'bootstrap'
+        assert np.isfinite(res['chow_critical'])
+
+    def test_f8_default_diagnose_contract(self):
+        """F8: 默认 diagnose → asymptotic + 30 键, chow_critical=8.85"""
+        from factor_pipeline.modules.factor_health import FactorHealthDiagnoser
+        diag = FactorHealthDiagnoser(bandwidth=24, alpha=0.05)
+        y = self._ar1(0.3, 200, 8, delta=2.0)
+        self._patch_estimator(diag, y)
+        df = pd.DataFrame(np.zeros((5, 3)))
+        res = diag.diagnose(df, df, return_type='static')
+        assert res['breakpoint_sup_f_method'] == 'asymptotic'
+        assert res['chow_critical'] == pytest.approx(8.85)
+        assert len(res) == 30
+
+    def test_f9_validation(self):
+        """F9: 未知方法 / bootstrap 下 n_bootstrap < 50 → ValueError"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        with pytest.raises(ValueError):
+            BreakpointDetector(sup_f_method='bad')
+        with pytest.raises(ValueError):
+            BreakpointDetector(sup_f_method='bootstrap', n_bootstrap=10)
+
+    def test_f10_short_sample_degenerate(self):
+        """F10: T<30 退化路径含 critical_method, critical=NaN"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        res = BreakpointDetector().detect(np.linspace(0.1, 0.2, 20))
+        assert res['critical_method'] == 'asymptotic'
+        assert np.isnan(res['critical'])
+
+    def test_f11_batch_matches_scalar(self):
+        """F11: 向量化 sup-F 与标量 detect 的 chow_max_stat 一致"""
+        from factor_pipeline.modules.factor_health import BreakpointDetector
+        y = self._ar1(0.5, 120, 9)
+        batch = BreakpointDetector._sup_f_batch(y[None, :], 0.15)[0]
+        scalar = BreakpointDetector().detect(y)['chow_max_stat']
+        assert batch == pytest.approx(scalar)
+

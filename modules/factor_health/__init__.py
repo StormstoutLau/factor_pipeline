@@ -273,18 +273,34 @@ class BreakpointDetector:
         Minimum segment length fraction. Default 0.15.
     sup_f_method : str
         'asymptotic' (Andrews 1993 Table 1, default) or 'bootstrap'.
+        v3.5.3: 'bootstrap' 修正为 AR(1) sieve 残差自助 (原实现为 iid 高斯,
+        未保留自相关, 与文档不符)。
     n_bootstrap : int
-        Bootstrap iterations (only for method='bootstrap').
+        Bootstrap iterations (only for method='bootstrap'); must be >= 50.
+    random_state : int
+        RNG seed for the bootstrap (only for method='bootstrap').
     """
 
     def __init__(
         self, alpha: float = 0.05, min_segment: float = 0.15,
-        sup_f_method: str = 'asymptotic', n_bootstrap: int = 1000
+        sup_f_method: str = 'asymptotic', n_bootstrap: int = 1000,
+        random_state: int = 42,
     ):
+        if sup_f_method not in ('asymptotic', 'bootstrap'):
+            raise ValueError(
+                "sup_f_method must be 'asymptotic' or 'bootstrap', "
+                f"got {sup_f_method!r}"
+            )
+        if sup_f_method == 'bootstrap' and int(n_bootstrap) < 50:
+            raise ValueError(
+                "n_bootstrap must be >= 50 when sup_f_method='bootstrap', "
+                f"got {n_bootstrap!r}"
+            )
         self.alpha = alpha
         self.min_segment = min_segment
         self.sup_f_method = sup_f_method
-        self.n_bootstrap = n_bootstrap
+        self.n_bootstrap = int(n_bootstrap)
+        self.random_state = int(random_state)
 
     def detect(self, lambda_hat: np.ndarray) -> Dict:
         valid = ~np.isnan(lambda_hat)
@@ -312,13 +328,16 @@ class BreakpointDetector:
                 best_f, best_bp = f_val, bp
 
         # Andrews (1993) sup-F critical value, NOT pointwise fdist.ppf
-        f_crit = self._sup_f_critical_value(T, self.min_segment, self.alpha)
+        # (v3.5.3: bootstrap 路径需要观测序列 y 估计 AR(1))
+        f_crit = self._sup_f_critical_value(
+            T, self.min_segment, self.alpha, y=y)
         has_bp = best_f > f_crit and best_bp is not None
 
         result = {
             'has_breakpoint': has_bp,
             'chow_max_stat': float(best_f),
             'critical': float(f_crit),
+            'critical_method': self.sup_f_method,
             'cusum_path': cusum,
             'pre_mean': float('nan'),
             'post_mean': float('nan'),
@@ -336,7 +355,7 @@ class BreakpointDetector:
         """有效点 <30 的退化结果: 不做 sup-F 网格搜索, 直接判无断点。
 
         T<30 时 `min_segment` 允许的候选切分过少, Andrews (1993) sup-F 渐近
-        临界值不适用, 检验无意义; 返回与正常路径同构的 6 键结果 (cusum 全 NaN,
+        临界值不适用, 检验无意义; 返回与正常路径同构的 7 键结果 (cusum 全 NaN,
         不含 `breakpoint_idx`), 供 `diagnose` 与下游安全消费。
 
         注: v3.4.12 及之前该分支调用未定义的方法 → AttributeError (DEFECT-1),
@@ -347,6 +366,7 @@ class BreakpointDetector:
             'has_breakpoint': False,
             'chow_max_stat': 0.0,
             'critical': float('nan'),
+            'critical_method': self.sup_f_method,
             'cusum_path': np.full(n, np.nan),
             'pre_mean': float('nan'),
             'post_mean': float('nan'),
@@ -572,24 +592,27 @@ class BreakpointDetector:
         }
 
     def _sup_f_critical_value(
-        self, T: int, epsilon: float, alpha: float
+        self, T: int, epsilon: float, alpha: float,
+        y: Optional[np.ndarray] = None,
     ) -> float:
-        """Andrews (1993) sup-F asymptotic critical value.
+        """sup-F critical value.
 
         For method='asymptotic': Andrews (1993) Table 1, interpolated by ε.
-        For method='bootstrap': parametric bootstrap (residual-based).
+        For method='bootstrap': AR(1) sieve residual bootstrap (v3.5.3);
+        requires the observed NaN-free series `y`.
 
         Args:
             T: sample size.
             epsilon: trimming fraction.
             alpha: significance level.
+            y: observed series (required for method='bootstrap').
         """
         if self.sup_f_method == 'asymptotic':
             return self._andrews_quantile(epsilon, alpha)
-        elif self.sup_f_method == 'bootstrap':
-            return self._bootstrap_sup_f_crit(T, epsilon, alpha)
-        else:
-            raise ValueError(f"Unknown sup_f_method: {self.sup_f_method}")
+        if y is None:
+            raise ValueError(
+                "sup_f_method='bootstrap' requires the observed series y")
+        return self._bootstrap_sup_f_crit(y, epsilon, alpha)
 
     @staticmethod
     def _andrews_quantile(epsilon: float, alpha: float = 0.05) -> float:
@@ -628,51 +651,81 @@ class BreakpointDetector:
         return 8.85  # fallback
 
     def _bootstrap_sup_f_crit(
-        self, T: int, epsilon: float, alpha: float
+        self, y: np.ndarray, epsilon: float, alpha: float
     ) -> float:
-        """Residual-based bootstrap for sup-F critical value.
+        """AR(1) sieve residual bootstrap for the sup-F critical value.
 
-        Optimized: uses cumulative sums to avoid O(T) per breakpoint.
-        Complexity: O(n_bootstrap × T) vs O(n_bootstrap × T²) naive.
+        H0: y_t = c + φ y_{t-1} + e_t (no mean break). OLS estimates (c, φ);
+        centered residuals are resampled with replacement and used to
+        recursively generate B pseudo-series (burn-in 50 discarded). The
+        (1-alpha) quantile of the simulated sup-F distribution is returned.
 
-        H₀: y_t = μ + ε_t (no breakpoint).
-        Bootstrap: resample residuals ε̂_t = y_t - ȳ, construct y*_t = ȳ + ε̂*_t.
-        This preserves the empirical autocorrelation structure.
+        This preserves first-order autocorrelation. The previous
+        implementation drew iid N(0,1) series and therefore did not correct
+        the AR(1) over-rejection it claimed to handle (fixed in v3.5.3).
+        Same AR(1) proxy bootstrap as `StructuralBreakMonitor`
+        (设计 m10), with identical φ clipping and burn-in conventions.
+
+        Complexity: O(n_bootstrap × T).
+        References: Andrews (1993); MacKinnon (2002) bootstrap sup-F.
         """
-        rng = np.random.RandomState(42)
+        y = np.asarray(y, dtype=float).ravel()
+        T = len(y)
+        if T < 5:
+            return self._andrews_quantile(epsilon, alpha)
+
+        # OLS: y_t = c + φ y_{t-1} + e_t
+        y_lag, y_cur = y[:-1], y[1:]
+        X = np.column_stack([np.ones(len(y_lag)), y_lag])
+        try:
+            beta, *_ = np.linalg.lstsq(X, y_cur, rcond=None)
+        except np.linalg.LinAlgError:
+            beta = np.array([float(np.mean(y)), 0.0])
+        c, phi = float(beta[0]), float(beta[1])
+        phi = float(np.clip(phi, -0.99, 0.99))
+        resid = y_cur - (c + phi * y_lag)
+        resid = resid - float(np.mean(resid))
+        if len(resid) < 2 or float(np.std(resid)) <= 0.0:
+            return self._andrews_quantile(epsilon, alpha)
+
+        rng = np.random.default_rng(self.random_state)
+        burn = 50
+        n = T + burn
+        U = resid[rng.integers(0, len(resid), size=(self.n_bootstrap, n))]
+        E = np.zeros((self.n_bootstrap, n))
+        E[:, 0] = c / max(1.0 - phi, 1e-6) + U[:, 0]
+        for t in range(1, n):
+            E[:, t] = c + phi * E[:, t - 1] + U[:, t]
+
+        sup_f = self._sup_f_batch(E[:, burn:], epsilon)
+        return float(np.percentile(sup_f, 100.0 * (1.0 - alpha)))
+
+    @staticmethod
+    def _sup_f_batch(Y: np.ndarray, epsilon: float) -> np.ndarray:
+        """Vectorized sup-F statistics for a batch of series, shape (B, T).
+
+        Uses cumulative sums: O(B × T) instead of O(B × T²).
+        """
+        Bn, T = Y.shape
         min_seg = max(5, int(T * epsilon))
-        n_breaks = T - 2 * min_seg
-        if n_breaks <= 0:
-            return 3.84
+        if T - 2 * min_seg <= 0:
+            return np.zeros(Bn)
 
-        # Generate all bootstrap samples at once: (n_bootstrap, T)
-        Y = rng.randn(self.n_bootstrap, T)
-
-        # H₀: no breakpoint → subtract global mean
-        Y_centered = Y - Y.mean(axis=1, keepdims=True)
-        ssr_full = np.sum(Y_centered ** 2, axis=1)  # (n_bootstrap,)
-
-        # Cumulative sums for fast SSR computation
-        cumsum = np.cumsum(Y, axis=1)      # (n_bootstrap, T)
-        cumsum2 = np.cumsum(Y ** 2, axis=1)  # (n_bootstrap, T)
-
-        all_f = np.zeros((self.n_bootstrap, n_breaks))
-        for idx, bp in enumerate(range(min_seg, T - min_seg)):
+        Yc = Y - Y.mean(axis=1, keepdims=True)
+        ssr_full = (Yc ** 2).sum(axis=1)
+        cs = np.cumsum(Y, axis=1)
+        cs2 = np.cumsum(Y ** 2, axis=1)
+        best = np.zeros(Bn)
+        for bp in range(min_seg, T - min_seg):
             n1, n2 = bp, T - bp
-            s1 = cumsum[:, bp - 1]
-            ss1 = cumsum2[:, bp - 1]
-            s2 = cumsum[:, -1] - s1
-            ss2 = cumsum2[:, -1] - ss1
-
-            ssr_pre = ss1 - s1 * s1 / n1
-            ssr_post = ss2 - s2 * s2 / n2
-            ssr = np.maximum(ssr_pre + ssr_post, 1e-12)
-
+            s1 = cs[:, bp - 1]
+            ss1 = cs2[:, bp - 1]
+            s2 = cs[:, -1] - s1
+            ss2 = cs2[:, -1] - ss1
+            ssr = np.maximum(ss1 - s1 * s1 / n1 + ss2 - s2 * s2 / n2, 1e-12)
             f_val = (ssr_full - ssr) / (ssr / max(T - 2, 1))
-            all_f[:, idx] = f_val
-
-        sup_f = np.max(all_f, axis=1)
-        return float(np.percentile(sup_f, 100 * (1 - alpha)))
+            best = np.maximum(best, f_val)
+        return best
 
 
 class FactorHealthDiagnoser:
@@ -711,12 +764,22 @@ class FactorHealthDiagnoser:
         Minimum number of missing periods a label-relevant boundary must span
         before it is treated as a continuity risk (v3.5.2). Default 2
         (isolated single NaN does not trigger). Must be >= 1.
+    sup_f_method : str
+        Critical-value method for the single-break sup-F test (v3.5.3):
+        'asymptotic' (default, Andrews 1993) or 'bootstrap' (AR(1) sieve
+        residual bootstrap). Default preserves legacy labels bit-for-bit.
+    n_bootstrap : int
+        Bootstrap iterations when `sup_f_method='bootstrap'`; must be >= 50.
+    random_state : int
+        RNG seed for the AR(1) sieve bootstrap.
     """
 
     def __init__(self, bandwidth: int = 24, alpha: float = 0.05,
                  half_life_threshold: int = 60,
                  multi_break_shift_threshold: float = 1.0,
-                 multi_break_gap_min_run: int = 2):
+                 multi_break_gap_min_run: int = 2,
+                 sup_f_method: str = 'asymptotic',
+                 n_bootstrap: int = 1000, random_state: int = 42):
         self.bandwidth = bandwidth
         self.alpha = alpha
         self.half_life_threshold = half_life_threshold
@@ -729,7 +792,9 @@ class FactorHealthDiagnoser:
             )
         self.multi_break_gap_min_run = gap_min_run
         self.estimator = PremiumEstimator(bandwidth=bandwidth)
-        self.detector = BreakpointDetector(alpha=alpha)
+        self.detector = BreakpointDetector(
+            alpha=alpha, sup_f_method=sup_f_method,
+            n_bootstrap=n_bootstrap, random_state=random_state)
 
     def diagnose(self, factor: pd.DataFrame, forward_returns: pd.DataFrame,
                  return_type: str = 'unknown',
@@ -758,6 +823,8 @@ class FactorHealthDiagnoser:
             mean_premium_pre_bp, mean_premium_post_bp : float
             half_life : float or None (months)
             chow_max_stat : float
+            chow_critical / breakpoint_sup_f_method : 临界值与临界值方法 (v3.5.3;
+                单断点 sup-F, 'asymptotic' 或 'bootstrap')
             breakpoint_mode / breakpoint_confirmed / breakpoint_material /
             breakpoint_shift_ratio / n_breaks / breakpoints / segment_means /
             segment_bounds / best_bic_m / best_lwz_m : 诊断描述键 (v3.5.1)
@@ -800,6 +867,8 @@ class FactorHealthDiagnoser:
             'mean_premium_post_bp': bp_result['post_mean'],
             'half_life': td_result.get('half_life'),
             'chow_max_stat': bp_result['chow_max_stat'],
+            'chow_critical': bp_result['critical'],
+            'breakpoint_sup_f_method': self.detector.sup_f_method,
             'breakpoint_mode': bp_result['breakpoint_mode'],
             'breakpoint_confirmed': bp_result['breakpoint_confirmed'],
             'breakpoint_material': bp_result['breakpoint_material'],
@@ -895,6 +964,7 @@ class FactorHealthDiagnoser:
                               else float('nan')),
                 'breakpoint_shift_ratio': ratio,
                 'chow_max_stat': single_view['chow_max_stat'],
+                'critical': single_view['critical'],
             }
             gap_at_bp = bp_gaps[0] if bp_gaps else None
         elif confirmed:
@@ -922,6 +992,7 @@ class FactorHealthDiagnoser:
                 'post_mean': float('nan'),
                 'breakpoint_shift_ratio': ratio,
                 'chow_max_stat': single_view['chow_max_stat'],
+                'critical': single_view['critical'],
             }
             gap_at_bp = None
 
@@ -974,6 +1045,7 @@ class FactorHealthDiagnoser:
                 'post_mean': nan,
                 'breakpoint_shift_ratio': nan,
                 'chow_max_stat': chow,
+                'critical': float(single.get('critical', nan)),
             }
 
         bp_orig = int(single['breakpoint_idx'])
@@ -996,6 +1068,7 @@ class FactorHealthDiagnoser:
             'post_mean': post_m,
             'breakpoint_shift_ratio': float(ratio),
             'chow_max_stat': chow,
+            'critical': float(single.get('critical', nan)),
         }
 
     def _multi_break_materiality(self, multi: Dict, T: int):

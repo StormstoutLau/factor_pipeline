@@ -49,7 +49,8 @@
 | ADR-046 | 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对拍 | v3.5.0, 2026-11-16 |
 | ADR-047 | 多断点接入 diagnose 标签路径 — opt-in + 形式检验 + 材料性门控 | v3.5.1, 2026-11-17 |
 | ADR-048 | 多断点路径 NaN 间隙守卫 — 连续性描述 + ES 降级 suspect | v3.5.2, 2026-11-17 |
-| ADR-049 起 | 未占用 | — |
+| ADR-049 | sup-F 自相关稳健临界值 — AR(1) sieve bootstrap | v3.5.3, 2026-11-17 |
+| ADR-050 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3447,6 +3448,97 @@ gmin 扫描: gmin=1 会把"真断点 + 孤立 NaN"误降级 7.3%; gmin=2 降至 
 `_multi_break_materiality` 的二元返回与 `_classify_premium_health` 原分支;
 删除 G1-G9; 版本 6 锚点回 3.5.1; 回退 ADR-048/CHANGELOG/PROJECT_STATUS/
 DEV_PROGRESS/CODE_WIKI 条目。`detect` 与分段算法未改动, 无需回滚。
+
+---
+
+## ADR-049: sup-F 自相关稳健临界值 — AR(1) sieve bootstrap (v3.5.3)
+
+**日期**: 2026-11-17
+**状态**: 已实施 (v3.5.3)
+**优先级**: P1
+**关联测试**: `tests/unit/test_layer3_factor_health.py::TestAutocorrRobustSupF` (F1-F11)
+**关联文档**: [调研](docs/research/RESEARCH_V3.5.3_AUTOCORR_ROBUST_BREAKPOINT.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.5.3_AUTOCORR_ROBUST_BREAKPOINT.md) / [审计](docs/audit/2026-11-17-v3.5.3-autocorr-robust-breakpoint-audit.md) / ADR-048
+
+### 背景
+
+v3.5.2 P4 披露: Andrews (1993) sup-F 临界值在 AR(1) 下严重过度拒绝
+(φ=0.2 15.7%, φ=0.5 48.7%, 名义 5%), 且与 NaN 间隙无关。
+v3.5.3 任务分析进一步发现 `sup_f_method='bootstrap'` **名不副实**:
+
+- 文档声称 "Residual-based bootstrap ... preserves the empirical
+  autocorrelation structure";
+- 实现为 `rng.randn(n_bootstrap, T)` — 纯 iid 高斯参数自助, 完全未使用观测序列;
+- 实测 φ=0.2 22%, φ=0.5 51%, 与 asymptotic 同阶。
+
+`FactorHealthDiagnoser` 固定构造默认 asymptotic 检测器, 因此对 φ=0.5 的持续因子,
+`diagnose` 约一半时间误标 `ES` → `recalibrate`/`monitor` 误路由。
+
+### 决策
+
+1. 将 `sup_f_method='bootstrap'` **修正为 AR(1) sieve 残差自助**:
+   OLS 拟合 `y_t = c + φ y_{t-1} + e_t`, φ 截断 `[-0.99, 0.99]`,
+   残差中心化后有放回重采样, 递归生成 B 条伪序列 (burn-in 50),
+   取 `sup-F*` 的 `1-alpha` 分位数为临界值;
+2. 与 `StructuralBreakMonitor._bootstrap_pvalue` (设计 m10) 保持相同的
+   AR(1) 代理、φ 截断与 burn-in 约定;
+3. `BreakpointDetector.__init__` 新增 `random_state=42`;
+   未知方法 / bootstrap 下 `n_bootstrap < 50` → `ValueError`;
+4. `detect` 输出 6 → 7 键 (+`critical_method`); T<30 退化结果同步 +1 键;
+5. `FactorHealthDiagnoser.__init__` 新增 `sup_f_method` / `n_bootstrap` /
+   `random_state` 并透传;
+6. `diagnose` 输出 28 → 30 键 (+`breakpoint_sup_f_method` / +`chow_critical`);
+7. 默认 `asymptotic` 路径的临界值、断点、标签**逐位不变**;
+   `detect_multiple` (BIC) 零改动; 缓存代际 `v2.3.0-cache` 不变;
+8. 版本 **3.5.3** (6 锚点); 不修改 ADR-048 历史文本, 以其扩展记录本决策。
+
+### 证据 (2026-11-17 探针)
+
+方法比较 (T=240, B=300, R=300, 名义 5%):
+
+| φ | asymptotic | iid | **AR(1)** | AR(p) | MBB |
+|---|-----------|-----|-----------|-------|-----|
+| 0.0 | 4.7% | 5.3% | **5.3%** | 5.3% | 4.0% |
+| 0.2 | 14.0% | 18.7% | **5.7%** | 4.7% | 6.0% |
+| 0.5 | 50.0% | 49.0% | **5.3%** | 5.0% | 13.7% |
+| 0.8 | 93.3% | 93.3% | **8.7%** | 7.7% | 35.3% |
+
+实现口径复核 (T=240, B=300, R=150): φ=0.5 size 48.7% → **4.7%**,
+power (Δ=1σ) 100% → **96.0%**; φ=0 size 4.7% → 4.0%。
+
+真实 β_t (4 因子): |φ| ≤ 0.21; sup-F 1.74-3.08 均低于所有临界值, 标签不变;
+正相关 amihud 的 bootstrap 临界值上移 (8.85 → 12.22), 负相关因子下移 (5-8)。
+
+### 后果
+
+- **正面**: 持续因子的 `ES` 误标率从 ~49% 降到 ~5%; `bootstrap` 选项与文档一致;
+  `diagnose` 输出可审计 (方法 + 临界值);
+- **代价**: 校正 size 后高持续序列 power 下降 (φ=0.5 96%, φ=0.8 44%);
+  这是"低有效样本"的诚实结果, 不以放宽 size 换 power;
+- **局限**: 仅 AR(1); 高阶依赖可能有余留过度拒绝; T<50 参数估计噪声大;
+  多重断点 BIC 路径不使用 sup-F 临界值; 确定性趋势不在 AR(1) 代理内
+  (复审 P4: 趋势 DGP 下 bootstrap 与 asymptotic 均 ~100% 拒绝 — H0 为
+  常数均值的既有语义); 近单位根 (|φ̂|→1) 临界值发散、检验失效 (复审 P3);
+  退化回退 (常数序列 / 全 NaN / T<5) 时 `critical_method` 仍报告配置方法 (复审 P6);
+- **风险**: `bootstrap` 行为修正属语义变更 (原实现为缺陷), 已在 CHANGELOG/
+  文档显式标注; 默认路径不受影响。
+
+### 替代方案
+
+| 方案 | 否决理由 |
+|------|---------|
+| AR(p) sieve (AIC) | AR(1) DGP 无增益; T=68-72 下 p 选择不稳, 临界值可低至 5.84 (过激) |
+| 移动块自助 | φ=0.5/T=240 size 13.7%, φ=0.8 35.3% — 不满足 5% 目标 |
+| 预白化后 sup-F | 均值位移被转换为单点脉冲, 检验目标改变 |
+| 保留旧 iid bootstrap 并新增 `ar1` | 旧选项文档已声明自相关, 保留即保留缺陷 |
+
+### 回滚方案
+
+删除 `random_state` / `n_bootstrap` 校验、`_sup_f_batch`, 恢复
+`_bootstrap_sup_f_crit(T, epsilon, alpha)` 的 iid 实现与 `_sup_f_critical_value`
+三参数签名; 删除 `detect` 的 `critical_method` 键、`FactorHealthDiagnoser` 的
+3 个新参数、`diagnose` 的 2 个新键; 删除 F1-F11; 版本 6 锚点回 3.5.2;
+回退 ADR-049/CHANGELOG/PROJECT_STATUS/DEV_PROGRESS/CODE_WIKI 条目。
+默认 asymptotic 路径未改动, 无需回滚。
 
 ---
 

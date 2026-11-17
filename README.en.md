@@ -930,15 +930,15 @@ factor_pipeline/
 
 ## Version Information
 
-- **Pipeline Version**: v3.5.2 (NaN gap guard on the multi-breakpoint path, ADR-048; includes v3.5.1 multi-breakpoint wired into `diagnose`, ADR-047; v3.5.0 Bai-Perron multi-breakpoint + Stata 46/46 cross-check, ADR-046; v3.4.x unified cross-sectional rank pipeline / deprecated non-production decouplers / break monitor scheduler / Dynamic component separability / ablation cleanup / short-sample breakpoint degradation, ADR-042–045)
+- **Pipeline Version**: v3.5.3 (autocorrelation-robust sup-F critical values via AR(1) sieve bootstrap, ADR-049; includes v3.5.2 NaN gap guard, ADR-048; v3.5.1 multi-breakpoint wired into `diagnose`, ADR-047; v3.5.0 Bai-Perron multi-breakpoint + Stata 46/46 cross-check, ADR-046; v3.4.x unified cross-sectional rank pipeline / deprecated non-production decouplers / break monitor scheduler / Dynamic component separability / ablation cleanup / short-sample breakpoint degradation, ADR-042–045)
 - **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028) + **statistical_classifier** (v3.2.0 ADR-027)
 - **External Data Boundary**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **Test Baseline**: 1786 passed / 15 skipped / 0 failed (1160.73s, v3.5.2)
+- **Test Baseline**: 1797 passed / 15 skipped / 0 failed (1027.28s, v3.5.3)
 - **CI Matrix**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
 - **Build Date**: 2026.11.17
-- **Status**: STABLE (v3.5.2)
+- **Status**: STABLE (v3.5.3)
 
-> Detailed per-version notes for v3.4.5–v3.5.2 live in the authoritative Chinese [README.md](README.md) (this English file is auto-translated).
+> Detailed per-version notes for v3.4.5–v3.5.3 live in the authoritative Chinese [README.md](README.md) (this English file is auto-translated).
 
 ### Version History
 
@@ -964,6 +964,7 @@ factor_pipeline/
 | v3.5.0 | 2026.11.16 | Multi-breakpoint support (ADR-046): `detect_multiple()` — DP global minimum SSR (Bai-Perron 1998) + BIC/LWZ selection, 13-key output; Stata 18.0 MP official `regress` cross-check 46/46 PASS |
 | v3.5.1 | 2026.11.17 | Multi-breakpoint wired into `diagnose` (ADR-047): opt-in `breakpoint_mode='multiple'`; sup-F confirms existence, BIC provides segmentation, materiality gate (≥1.0 within-sd) downgrades unconfirmed breaks to `suspect`; +10 output keys; default `'single'` unchanged |
 | v3.5.2 | 2026.11.17 | NaN gap guard on the multi-breakpoint path (ADR-048): `multi_break_gap_min_run=2`; label-relevant boundaries spanning missing periods set `breakpoint_gap_risk=True` and downgrade ES/ES+TD to `suspect`; `detect_multiple` 13→18 keys, `diagnose` 22→28 keys; default `single` unchanged |
+| v3.5.3 | 2026.11.17 | Autocorrelation-robust sup-F critical values (ADR-049): `sup_f_method='bootstrap'` rewritten as AR(1) sieve residual bootstrap (previous implementation was iid Gaussian, a doc-implementation mismatch); `n_bootstrap=1000` / `random_state=42`; `detect` adds `critical_method`; `FactorHealthDiagnoser` passthrough and `diagnose` +2 keys (30); φ=0.5 size 50%→5.3%, power 93.7%; default asymptotic unchanged bitwise; +11 tests |
 
 ---
 

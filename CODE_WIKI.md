@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.5.2 | **构建日期**: 2026-11-17 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫)
+> **版本**: v3.5.3 | **构建日期**: 2026-11-17 | **状态**: STABLE (统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 
@@ -1429,6 +1429,41 @@ res = diag.diagnose(..., breakpoint_mode='multiple')
 - 默认 `single` 模式 `breakpoint_gap_risk=False`, 标签零变更
 - `detect_multiple` 13→18 键, `diagnose` 22→28 键; 分段算法零改动
 
+**自相关稳健临界值 (v3.5.3, ADR-049)** — AR(1) sieve bootstrap
+
+```python
+detector = BreakpointDetector(
+    alpha=0.05, min_segment=0.15,
+    sup_f_method='bootstrap',  # 默认 'asymptotic' (Andrews 1993)
+    n_bootstrap=1000, random_state=42,
+)
+res = detector.detect(beta_raw)
+# 新增/变更键:
+#   'critical': 7.94,              # sup-F* 的 95% 分位 (bootstrap)
+#   'critical_method': 'bootstrap' # 当前生效方法
+```
+
+```python
+diag = FactorHealthDiagnoser(sup_f_method='bootstrap', n_bootstrap=1000,
+                             random_state=42)
+res = diag.diagnose(...)
+# 新增键:
+#   'chow_critical': 7.94,                 # 与 detector 一致
+#   'breakpoint_sup_f_method': 'bootstrap' # 透传当前方法
+```
+
+- 算法: OLS `y_t = c + φ y_{t-1} + e_t` → φ clip ±0.99 → 残差中心化有放回重采样
+  → burn-in 50 递归生成 B 条伪序列 → `_sup_f_batch` 向量化算 sup-F* → `1-α` 分位
+- 修正旧实现的文档-实现不一致: 旧 `sup_f_method='bootstrap'` 实为 `rng.randn` iid 高斯
+- 实测 (T=240): φ=0.5 size 50.0%→5.3%, φ=0.8 93.3%→8.7%; power (φ=0.5) 93.7%
+- 参数校验: 未知方法 / bootstrap 且 `n_bootstrap < 50` → `ValueError`
+- T<5 或残差退化 → 回退 Andrews 渐近临界值
+- 默认 `'asymptotic'` 逐位不变; `detect` 新增 `critical_method` (有断点 8 键), `diagnose` 30 键
+- `critical_method` 报告**配置**方法 (复审 P6): 常数序列 / 全 NaN / T<5 退化回退
+  按渐近值或 NaN 计算, 标签不变 — `has_breakpoint` 判定不受影响
+- 趋势/近单位根限制 (复审 P3/P4): AR(1) 代理无趋势项, β_t 含线性趋势时
+  asymptotic 与 bootstrap 均 ~100% 拒绝 (H0=常数均值); φ̂≈0.97 时临界值发散 (>430)
+
 **`FactorHealthDiagnoser`** — 多状态综合诊断
 
 ```python
@@ -2662,5 +2697,6 @@ class ThresholdDriftMonitor:
 | v3.5.0 | 2026-11-16 | 多断点支持 (ADR-046): 新增 `BreakpointDetector.detect_multiple()` — Bai-Perron 全局最小 SSR (DP, O(m·T²)) + BIC/LWZ 选段数, 13 键输出 (含 `breakpoints` / `segment_means` / `segment_bounds`); 不硬编码 sup-F 临界值表; T<30 退化; `detect` / `diagnose` 零改动; Stata 18.0 MP 官方 `regress` 对拍 46/46 PASS |
 | v3.5.1 | 2026-11-17 | 多断点接入 diagnose (ADR-047): `diagnose(..., breakpoint_mode='single'|'multiple', m_max=5)`; 存在性由 sup-F (`breakpoint_confirmed`) + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 single 标签逐位不变; 新增 9 例 (F1-F9) |
 | v3.5.2 | 2026-11-17 | NaN 间隙守卫 (ADR-048): `multi_break_gap_min_run=2`; 标签相关边界跨 ≥2 期缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; `detect_multiple` +5 键 (18), `diagnose` +6 键 (28); 默认 single 零变更; 新增 9 例 (G1-G9) |
+| v3.5.3 | 2026-11-17 | sup-F 自相关稳健临界值 (ADR-049): `sup_f_method='bootstrap'` 重写为 AR(1) sieve 残差自助 (旧实现为 iid 高斯, 文档-实现不一致); `n_bootstrap=1000` / `random_state=42`; `detect` +`critical_method`; 新增 `_sup_f_batch`; `FactorHealthDiagnoser` 透传 + `diagnose` +2 键 (30); φ=0.5 size 50.0%→5.3%, power 93.7%; 默认 asymptotic 逐位不变; 新增 11 例 (F1-F11); 异构复审 PASS_WITH_FIXES (H8 因子名修正 + H3/H4 披露) |
 
 > v3.3.1–v3.3.7 的因果性修复链详见 [CHANGELOG.md](CHANGELOG.md)。
