@@ -113,6 +113,25 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ✅ **完成** (v3.4.0 A/B: 2 因子/2023; v3.4.12: 4 因子/2020-2026; 2026-11-16: 12 因子 × 三分段 + Barra 中性化 40 月, 5/12 BH / 3/12 Bonferroni; **组合层: 4 因子 + 复合 × 2 池 × 4 费率 — 全市场多空 SR 0.77-1.05 / NW t 2.4-3.0, 复合 SR 0.94 / t 3.04; 但多头超额 ≈0 (t≤0.48) → 收益来自空头端; 沪深300 内失效**; **多头端落地研究 (2026-11-17, v1.1 含异构复审): Q5 毛 16.89% 但净超额 +1.34% (t 0.48), 属低风险画像溢价 (低波动 z+0.98/无暴涨 z+0.96/低换手 z+0.67; 波动+流动性双中性后超额归零) — 非选股 alpha; 负面剔除 exQ1 净超额 +3.08% (t 4.08), TE 2.44%, 30bp 后 +2.39%, 跨基准停牌口径稳健, S1/S2 均正 (S2 边际) — 落地形态是「宽基底仓 + 排除最差 20%」, 沪深300 内仍无解; 复审 8 探针 0 推翻, PASS_WITH_FIXES (归因修正 H7 + 代码修正 H3)**; **容量/冲击成本压力测试 (2026-11-17, 已异构复审 PASS_WITH_FIXES): exQ1 现实容量约 90-100 亿 (低流动性层 10% ADV), 上限 200 亿, 盈亏平衡 200-300 亿 (c=1.0); Q5 容量 5-11 亿且 10 亿冲击后净 -0.70% → 不可产品化; exQ1 S2 在 100 亿冲击后 t 1.11 (可交易 0.65) 不显著 — alpha 集中于 S1**) | [v3.4.0 实证](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) + [多因子×多年验证](analysis/MULTIFACTOR_MULTIYEAR_VERIFICATION.md) + [组合层回测](analysis/PORTFOLIO_BACKTEST_VERIFICATION.md) + [多头端落地研究](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) + [容量压力测试](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) |
 | 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | ✅ 实验完成 — 结论**不切换默认**, MAD 保留为可选项 | [实验报告](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) (ADR-042 已知遗留; O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
 | 3 | `BreakpointDetector.detect` T<30 → `_no_breakpoint_result` 缺失 (AttributeError) | ✅ v3.4.13 修复 (退化 6 键结果 + E1-E5 边界测试; 正常路径零改动) | [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) + [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md) |
+| 4 | **多日执行模型** (拆 2-3 日成交 + 延迟成本): 量化参与率下降带来的容量提升 vs 延迟 1-2 日的 alpha 衰减, 修正 exQ1「90-100 亿」口径; 前置为 P2 数据新鲜度守卫 | [ ] **回测主线下一优先** | [容量报告 §7.2-2 / §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md); [数据缺口诊断 §5](analysis/DATA_GAPS_DIAGNOSIS.md) (日频足够, 不依赖 mv/barra) |
+| 5 | **流动性 regime 容量压力测试**: 按全市场成交额 regime / 极端月 (2024-02) 重算 p95 参与率与容量, 给压力情景 | [ ] 可与 #4 合并交付 | [容量报告 §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) (ADV 未预测 / 容量对 regime 敏感) |
+| 6 | **exQ1 覆盖层工程化**: 规模/流动性下限参数 + 单测 + 与研究报告逐位对账 (不新增多头选股 API) | [ ] 待 #4/#5 容量口径定稿 | [多头端研究 §10-6](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
+| 7 | **低风险倾斜表达研究** (Q5 替代形态): 因子倾斜/权重调整 vs 持有 Q5, 评估降波动与 TE 权衡 | [ ] 可选新方向 | [容量报告 §7.2-4](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) / [多头端研究 §10-2](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
+| 8 | **S2 样本外跟踪**: 2026-02 起刷新 exQ1 冲击后净超额, t<2 前对外标注「S1 证据」 | ⏸ 待数据更新 (当前止于 2026-01-30) | [容量报告 §7.2-5](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) / [多头端研究 §7](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
+
+> ⏸ **阻塞项 (仅记录, 暂不可执行)**: ① c 系数实证校准 — 无分钟/逐笔数据, 维持 c∈{0.1,0.5,1.0} 敏感性 ([容量报告 §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md)); ② 2023-06 后风格/行业中性 — barra 与行业源 2023-07-31 后停更 ([数据缺口诊断 §3](analysis/DATA_GAPS_DIAGNOSIS.md))。
+
+### 🟠 P1-A — 多因子治理体系底座 (路线图 P0 四项)
+
+> 方案: [多因子治理体系深度优化路线图](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) §5; P1/P2 阶段不逐条登记
+> 执行顺序: GR-1 → (GR-2 / GR-3 并行) → GR-4; 全部要求默认零变更
+
+| # | 任务 | 可交付物 | 验收标准 | 依赖 |
+|---|------|---------|---------|------|
+| GR-1 | `GovernanceRecord` + 存储 | `backtest/governance.py`（`GovernanceRecord` / `GovernanceStore`, DuckDB/JSONL；emit 钩子与 SpecificationLogger 解耦） | 往返序列化一致; `record_id` 确定性; 缺字段/schema 版本校验; 口径强制项（benchmark/return/tradable/cost/sign/split）必填; append-only; 不传 store 时默认零变更 | — |
+| GR-2 | 数据契约守卫 | `backtest/data_contract.py`（`check_data_contract(..., max_lag=1)`, strict 默认关/warn） | 当前 mv 5 日缺口（2026-01-23 vs 01-30）**必须被拦截**; 正常数据通过且零误报; 接入容量/多头端脚本前置 | — |
+| GR-3 | Golden master 回归基线 | `backtest/golden_master.py` + `tests/golden/` | 默认路径 1e-10 零差异; 故意改参（如 percentile 2/98）→ 必须报差异; 禁跨环境 bitwise 断言 | GR-1（记录 hash） |
+| GR-4 | 多重检验台账 | `backtest/multiple_testing_ledger.py` | BH 与参考实现 q/掩码 ≤1e-12; Romano-Wolf/White RC 等按各自校正 p 口径; `family_id` 预注册分组、`n_trials` 含全部已执行试验; 未登记变体不得进结论 | GR-1 |
 
 ### 📦 历史: v3.3.0 已实施 — Layer 3 溢价健康诊断双层体系
 
@@ -139,7 +158,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | # | 任务 | 状态 | 来源 |
 |---|------|------|------|
 | — | HAC 检验 NaN 过滤 (`ledoit_wolf_hac_test` 未 drop NaN → `compare` 的 HAC 静默返回 NaN) | ✅ v3.4.10 | [MAD 实验 §6 O1](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) |
-| — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] | DESIGN_DISCUSSION_V3.3.0 §6.1 |
+| — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] **暂缓** — 阶段口径不匹配 (默认静态路径无 S4、S3 默认关) + 0.3/0.7 阈值未校准; 先做 τ 分布/判别力探针 | DESIGN_DISCUSSION_V3.3.0 §6.1 + [可行性分析与治理体系核对](analysis/ENDOGENEITY_PREMIUM_GOVERNANCE_ANALYSIS.md) |
 | — | 多断点支持 (Bai-Perron) | ✅ v3.5.0 (`detect_multiple` + Stata 46/46 对拍) | DESIGN_DISCUSSION_V3.3.0 §6.2 |
 | — | 多断点接入 `diagnose` 标签路径 | ✅ v3.5.1 (opt-in `breakpoint_mode='multiple'` + sup-F 确认 + 材料性 suspect) | v3.5.0 ADR-046 遗留 |
 | — | 多断点路径 NaN 间隙守卫 | ✅ v3.5.2 (连续性描述键 + 边界跨缺失 → ES 降级 suspect, ADR-048) | v3.5.0 H7 / v3.5.1 H5 |
@@ -147,6 +166,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | — | 组合层容量 / 冲击成本压力测试 | ✅ 2026-11-17 (exQ1 ~90-100 亿 / 上限 200 亿; Q5 5-11 亿不可产品化; 已异构复审 PASS_WITH_FIXES) | 多头端研究 §7 落地缺口 + [复审审计](audit/2026-11-17-capacity-impact-stress-audit.md) |
 | — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − 5 交易日) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 |
 | — | mv 重新导出至 2026-01-30 / barra+行业换源 (2024+) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
+| — | 复合因子池扩展 (4 因子 → 更多因子 / ML 组合) 的容量与可实施性 | [ ] 可选 | [多头端研究 §11 因子范围](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
 | — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
 | — | Anderson-Rubin 后验检验 (中性化质量监控) | ✅ v3.2.0 (`enable_ar_check`, 默认关闭) | v3.2.0 Step 8 |
