@@ -31,6 +31,7 @@ sys.path.insert(0, str(SCRIPTS))
 import numpy as np
 import pandas as pd
 
+from contract_gate import run_contract_gate
 from verify_layer3_hac_real import build_eligible, cross_section_prep, month_end
 from verify_multifactor_multiyear import (
     build_price_factors,
@@ -353,8 +354,26 @@ def main():
     ap.add_argument('--data-root', default=DATA_ROOT)
     ap.add_argument('--fee-bps', type=int, nargs='+', default=list(FEE_BPS))
     ap.add_argument('--json', default=str(ROOT / 'out' / 'long_side_research.json'))
+    ap.add_argument('--contract', action='store_true',
+                    help='运行前置数据契约（GR-2），未通过则不继续研究')
+    ap.add_argument('--contract-only', action='store_true',
+                    help='只运行数据契约并退出（dry-run）')
+    ap.add_argument('--contract-sample-end', default=None,
+                    help='契约样本末（默认取 stock_close 最后一个交易日）')
+    ap.add_argument('--contract-json', default=None,
+                    help='契约 JSON 输出路径（默认 out/long_side_research_contract.json）')
     args = ap.parse_args()
     fees = args.fee_bps
+
+    if args.contract or args.contract_only:
+        report = run_contract_gate(
+            args.data_root, sample_end=args.contract_sample_end,
+            prefix='long_side_research', json_path=args.contract_json,
+        )
+        if not report.passed:
+            return 2
+        if args.contract_only:
+            return 0
 
     close, adj, amount, mv, list_date = load_market(args.data_root)
     adj_price = close * adj
@@ -663,4 +682,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

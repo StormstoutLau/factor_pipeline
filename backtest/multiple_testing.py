@@ -1015,11 +1015,52 @@ class WhiteRealityCheck:
         """长期方差估计 omega^2 (Newey-West), 复用模块级函数"""
         return _estimate_long_run_var(x)
 
+    def _bootstrap_from_indices(
+        self,
+        excess: np.ndarray,
+        f_bar: np.ndarray,
+        sqrt_T: float,
+        bootstrap_indices: np.ndarray,
+    ) -> Tuple[np.ndarray, List[float]]:
+        """用注入的 (B, T) 索引矩阵做联合 bootstrap（分块，默认 None 不进入）。"""
+        idx = np.asarray(bootstrap_indices)
+        T, K = excess.shape
+        if idx.ndim != 2:
+            raise ValueError(
+                f"bootstrap_indices 必须是 2D (B, T), 实际 ndim={idx.ndim}"
+            )
+        if idx.shape[1] != T:
+            raise ValueError(
+                f"bootstrap_indices 列数 ({idx.shape[1]}) ≠ T ({T})"
+            )
+        if not np.issubdtype(idx.dtype, np.integer):
+            if not np.allclose(idx, np.floor(idx)):
+                raise ValueError("bootstrap_indices 必须是整数索引")
+            idx = idx.astype(np.intp)
+        if idx.size and (idx.min() < 0 or idx.max() >= T):
+            raise ValueError("bootstrap_indices 越界")
+
+        B = int(idx.shape[0])
+        stats = np.zeros(B)
+        counts = np.zeros(K)
+        threshold = sqrt_T * f_bar
+        chunk = max(1, (256 * 1024 ** 2) // max(1, T * K * 8))
+        for start in range(0, B, chunk):
+            end = min(start + chunk, B)
+            block = excess[idx[start:end]]          # (b, T, K)
+            f_boot = block.mean(axis=1)             # (b, K)
+            delta = f_boot - f_bar
+            stats[start:end] = sqrt_T * np.max(delta, axis=1)
+            counts += (sqrt_T * delta >= threshold).sum(axis=0)
+        individual = (counts / B).tolist() if B else [0.0] * K
+        return stats, individual
+
     def test(
         self,
         returns_matrix: np.ndarray,
         benchmark_index: int = 0,
         alpha: float = 0.05,
+        bootstrap_indices: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """执行 White Reality Check
 
@@ -1074,33 +1115,38 @@ class WhiteRealityCheck:
         else:
             B = self._auto_block_size(excess[:, 0]) if K > 0 else 2.0
 
-        # Bootstrap 主循环: 在 H0 (无策略优于基准) 下重新中心化为 f_bar
-        bootstrap_max_stats = np.zeros(self.n_bootstrap)
-        for b in range(self.n_bootstrap):
-            boot_excess = np.empty_like(excess)
+        # Bootstrap: 注入索引时用联合重抽样；None 时沿用原 RNG 路径（逐值不变）
+        if bootstrap_indices is not None:
+            bootstrap_max_stats, individual_p = self._bootstrap_from_indices(
+                excess, f_bar, sqrt_T, bootstrap_indices
+            )
+        else:
+            bootstrap_max_stats = np.zeros(self.n_bootstrap)
+            for b in range(self.n_bootstrap):
+                boot_excess = np.empty_like(excess)
+                for k in range(K):
+                    boot_excess[:, k] = self._bootstrap(excess[:, k], B)
+                f_boot = boot_excess.mean(axis=0)
+                # recenter by f_bar (White RC: under H0, f_bar = 0)
+                V_boot = float(sqrt_T * np.max(f_boot - f_bar)) if K > 0 else 0.0
+                bootstrap_max_stats[b] = V_boot
+
+            # 各策略单独 p 值 (无校正): 单策略 bootstrap 检验
+            individual_p = []
             for k in range(K):
-                boot_excess[:, k] = self._bootstrap(excess[:, k], B)
-            f_boot = boot_excess.mean(axis=0)
-            # recenter by f_bar (White RC: under H0, f_bar = 0)
-            V_boot = float(sqrt_T * np.max(f_boot - f_bar)) if K > 0 else 0.0
-            bootstrap_max_stats[b] = V_boot
+                f_k = excess[:, k]
+                B_k = self.block_size if self.block_size is not None else self._auto_block_size(f_k)
+                boot_k = np.array([
+                    self._bootstrap(f_k, B_k).mean()
+                    for _ in range(self.n_bootstrap)
+                ])
+                stat_k = sqrt_T * f_bar[k]
+                boot_stat_k = sqrt_T * (boot_k - f_bar[k])
+                p_k = float(np.mean(boot_stat_k >= stat_k))
+                individual_p.append(min(max(p_k, 0.0), 1.0))
 
         rc_p_value = float(np.mean(bootstrap_max_stats >= V))
         rc_p_value = min(max(rc_p_value, 0.0), 1.0)
-
-        # 各策略单独 p 值 (无校正): 单策略 bootstrap 检验
-        individual_p: List[float] = []
-        for k in range(K):
-            f_k = excess[:, k]
-            B_k = self.block_size if self.block_size is not None else self._auto_block_size(f_k)
-            boot_k = np.array([
-                self._bootstrap(f_k, B_k).mean()
-                for _ in range(self.n_bootstrap)
-            ])
-            stat_k = sqrt_T * f_bar[k]
-            boot_stat_k = sqrt_T * (boot_k - f_bar[k])
-            p_k = float(np.mean(boot_stat_k >= stat_k))
-            individual_p.append(min(max(p_k, 0.0), 1.0))
 
         # 校正后拒绝: White RC 是联合检验, rc_p < alpha 则拒绝 (所有策略一致)
         rc_rejected: List[bool] = [rc_p_value < alpha] * K
@@ -1136,11 +1182,54 @@ class HansenSPA(WhiteRealityCheck):
         result = spa.test(returns_matrix, benchmark_index=0)  # 返回 8 字段 Dict
     """
 
+    def _spa_bootstrap_from_indices(
+        self,
+        excess: np.ndarray,
+        f_bar: np.ndarray,
+        sqrt_T: float,
+        bootstrap_indices: np.ndarray,
+        in_h1: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """用注入的 (B, T) 索引矩阵做 SPA 三区域 bootstrap（分块）。"""
+        idx = np.asarray(bootstrap_indices)
+        T, K = excess.shape
+        if idx.ndim != 2:
+            raise ValueError(
+                f"bootstrap_indices 必须是 2D (B, T), 实际 ndim={idx.ndim}"
+            )
+        if idx.shape[1] != T:
+            raise ValueError(
+                f"bootstrap_indices 列数 ({idx.shape[1]}) ≠ T ({T})"
+            )
+        if not np.issubdtype(idx.dtype, np.integer):
+            if not np.allclose(idx, np.floor(idx)):
+                raise ValueError("bootstrap_indices 必须是整数索引")
+            idx = idx.astype(np.intp)
+        if idx.size and (idx.min() < 0 or idx.max() >= T):
+            raise ValueError("bootstrap_indices 越界")
+
+        B = int(idx.shape[0])
+        stats = np.zeros(B)
+        stats_lc = np.zeros(B)
+        chunk = max(1, (256 * 1024 ** 2) // max(1, T * K * 8))
+        for start in range(0, B, chunk):
+            end = min(start + chunk, B)
+            block = excess[idx[start:end]]
+            f_boot = block.mean(axis=1)
+            delta = f_boot - f_bar
+            if in_h1.any():
+                stats[start:end] = sqrt_T * np.max(delta[:, in_h1], axis=1)
+            else:
+                stats[start:end] = 0.0
+            stats_lc[start:end] = sqrt_T * np.max(delta, axis=1)
+        return stats, stats_lc, np.zeros(B)
+
     def test(
         self,
         returns_matrix: np.ndarray,
         benchmark_index: int = 0,
         alpha: float = 0.05,
+        bootstrap_indices: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """执行 Hansen SPA 检验
 
@@ -1224,25 +1313,31 @@ class HansenSPA(WhiteRealityCheck):
         # consistent: max over H1 of (f_boot - f_bar)  [H1 重新中心化到 0 under H0]
         # lc (lower, 更保守): max over ALL of (f_boot - f_bar)  [含 H0, H0 中心化后高方差]
         # uc (upper, 更宽松): 空集 → 统计量恒 0 (假设所有 H0 都是真 H1, 无需检验)
-        boot_stats = np.zeros(self.n_bootstrap)       # consistent
-        boot_stats_lc = np.zeros(self.n_bootstrap)    # lower (更保守)
-        boot_stats_uc = np.zeros(self.n_bootstrap)    # upper (更宽松)
+        if bootstrap_indices is not None:
+            boot_stats, boot_stats_lc, boot_stats_uc = \
+                self._spa_bootstrap_from_indices(
+                    excess, f_bar, sqrt_T, bootstrap_indices, in_h1
+                )
+        else:
+            boot_stats = np.zeros(self.n_bootstrap)       # consistent
+            boot_stats_lc = np.zeros(self.n_bootstrap)    # lower (更保守)
+            boot_stats_uc = np.zeros(self.n_bootstrap)    # upper (更宽松)
 
-        for b in range(self.n_bootstrap):
-            boot_excess = np.empty_like(excess)
-            for k in range(K):
-                boot_excess[:, k] = self._bootstrap(excess[:, k], B)
-            f_boot = boot_excess.mean(axis=0)
+            for b in range(self.n_bootstrap):
+                boot_excess = np.empty_like(excess)
+                for k in range(K):
+                    boot_excess[:, k] = self._bootstrap(excess[:, k], B)
+                f_boot = boot_excess.mean(axis=0)
 
-            # recenter: 所有策略减去 f_bar (consistent 与 lc 用此, 中心化到 0 under H0)
-            f_recentered_all = f_boot - f_bar
+                # recenter: 所有策略减去 f_bar (consistent 与 lc 用此, 中心化到 0 under H0)
+                f_recentered_all = f_boot - f_bar
 
-            # consistent: max over H1 of (f_boot - f_bar)
-            boot_stats[b] = _spa_stat(f_recentered_all, in_h1)
-            # lower consistent: max over ALL of (f_boot - f_bar) — 包含 H0
-            boot_stats_lc[b] = _spa_stat(f_recentered_all, np.ones(K, dtype=bool))
-            # upper consistent: 空集 → 统计量恒 0 (所有 H0 视为真 H1, 无待检验模型)
-            boot_stats_uc[b] = 0.0
+                # consistent: max over H1 of (f_boot - f_bar)
+                boot_stats[b] = _spa_stat(f_recentered_all, in_h1)
+                # lower consistent: max over ALL of (f_boot - f_bar) — 包含 H0
+                boot_stats_lc[b] = _spa_stat(f_recentered_all, np.ones(K, dtype=bool))
+                # upper consistent: 空集 → 统计量恒 0 (所有 H0 视为真 H1, 无待检验模型)
+                boot_stats_uc[b] = 0.0
 
         spa_p = float(np.mean(boot_stats >= V_spa))
         spa_lc_p = float(np.mean(boot_stats_lc >= V_spa))

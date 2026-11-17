@@ -1,6 +1,6 @@
 # 研究工程化工作流方法论
 
-> **版本**: v1.3 (2026-08-14)
+> **版本**: v1.4 (2026-11-17；v1.3 = 10 步 spec 规范整合；v1.4 = 对齐上游 SPEC_PROCESS v1.7.2，见 §14)
 > **来源**: 三轮工作流提炼讨论的整合 + 10 步 spec 规范整合 (v1.3)
 > **范围**: 从 v2.4.0 到 v3.3.1 的开发实践中提炼的工作流, 经 planning-with-files / audit-driven-development / MCP 双轨核实三方增强, v1.3 进一步整合 10 步 spec 规范 (调研→设计→实施→验收)
 > **状态**: 已定义, 待长期验证后固化为 skill
@@ -1231,6 +1231,55 @@ MCP 工具调用 (强制):
 | 验收 checklist 可被 audit-driven-development 直接复用 | 步骤 10 审计时对照 checklist 逐项确认 | 低 (设计上已对齐) | ⏳ 待 v3.4.0 验证 |
 | 跨文档一致性 review (步骤 8) 发现真实问题 | 统计步骤 8 发现的不一致项数量 | 中 (可能全部一致) | ⏳ 待 v3.4.0 验证 |
 | 10 步流程在小任务上可裁剪 | 试点不同规模任务的裁剪规则 | 低 (已有裁剪表 §13.8) | ⏳ 待验证 |
+
+---
+
+## 14. 上游规范基线（v1.4 新增，2026-11-17）
+
+> 本文 §13 是**本仓环境映射**；上游规范为权威源。二者冲突时以上游为准，并在本文登记替换理由。
+
+### 14.1 权威源与版本
+
+| 项 | 路径 | 版本（读取日 2026-11-17） |
+|----|------|------------------------|
+| 流程宪法 | `F:\Spec_Workflow\SPEC_PROCESS.md` | v1.7.2（2026-11-08） |
+| 执行器 | `F:\Spec_Workflow\tools\spec_runner\spec_runner.py` | v1.11.0 |
+| 冻结存档 | `F:\Spec_Runner`（v1.0.0） | **不再使用**（P-019 起归巢，README 明示冻结） |
+| 接入壳 | `scripts/spec_runner_adapter.py`（本仓） | 已接入；`probe` 通过 |
+
+### 14.2 本仓必须遵守的上游条款（§13 未覆盖部分）
+
+| 条款 | 要求 | 本仓落点 |
+|------|------|---------|
+| RULE-1 时序独立 | Review 不得与正文同次写入；并发产物标 `[自查·并发]`，独立 pass 后升级 | `EXECUTION_V3.6.0_GOVERNANCE_BASE.md` §9 |
+| RULE-2 统计溯源 | 验收统计逐项核对，禁止由通过总数推算 | CHECKLIST §10.1 类汇总 |
+| RULE-3 环境确定性 | 禁止条件 skip；隔离测试须有 Owner/Deadline/降权运行/Re-qualification | 测试编写规范 |
+| RULE-4 单 Agent 自查 | 同 agent 既写又审须标 `自查（单视角）` | 各 review 节 |
+| RULE-5 审查异质性 | 同基座新会话≠异构审查；未满足须显式声明 | DESIGN §19.2 |
+| RULE-6 审计证据绑定 | Step 10 取证矩阵 E1-E5；E5 禁入结论；零发现须声明扫描范围 | 审计报告 |
+| ADD 四阶段 | Spec 质量门 / 完整性 / 忠实度 / 必要性 / 语义 | Step 10 |
+| T1/T3 档位 | Layer-1 → T1 四文档；Layer-0 → T3 可裁剪但须写理由 | 每批 PROGRESS/状态行 |
+| F1-F5 形态 | 来源日期 / 版本 / 降级链 / 引用验证表 / 先失败记录 | RESEARCH §9、EXECUTION §11 |
+| 未决项四元块 | 判据 / 触发条件 / 当前倾向 / 证据等级 | 各文档 §未决项 |
+| 设计替代方案 | 每个关键决策写被拒绝替代 + 理由 + 代价 | DESIGN §19.1 |
+
+### 14.3 工件映射（环境态）
+
+| 上游工件 | 本仓路径 | 入库 |
+|---------|---------|------|
+| `spec/<feature>/RESEARCH.md` | `docs/research/RESEARCH_<TOPIC>.md` | ✅ |
+| `spec/<feature>/DESIGN.md` | `docs/private/DESIGN_<TOPIC>.md` | ❌（gitignored；证据降级见 DESIGN §19.4） |
+| `spec/<feature>/IMPLEMENTATION.md` | `docs/EXECUTION_<VERSION>_<TOPIC>.md` | ✅ |
+| `spec/<feature>/CHECKLIST.md` | `docs/audit/CHECKLIST_<VERSION>_<TOPIC>.md` | ✅ |
+| 一致性 review | `docs/audit/CONSISTENCY_REVIEW_<VERSION>_<TOPIC>.md` | ✅ |
+| 事件流 | `F:\Spec_Workflow\tools\spec_runner\sessions\factorpipe-*.jsonl` | 外仓 |
+
+### 14.4 当前批次
+
+v3.6.0 治理底座（GR-1~GR-4）：档位 **T1**；步骤 1-8 完成（RESEARCH v1.1 / DESIGN v1.2 / EXECUTION v1.0 /
+CHECKLIST v1.0 / CONSISTENCY_REVIEW v1.0）；步骤 9 进行中（E1 11 passed；E2 5 passed；E3 5 passed；E4 12 passed；
+E5 Stata 18.0 对拍 PASS + T31-T35 6 passed；E6 完成：T31-T40 联合 22 passed + golden 基线入库，全量回归 1907 passed / 7 skipped；
+E7 完成：研究入口 `--contract*` 接线，dry-run 拦截 mv 5 日缺口，T41-T45 11 passed）。
 
 ---
 

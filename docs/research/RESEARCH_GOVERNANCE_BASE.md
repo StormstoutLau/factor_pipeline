@@ -1,6 +1,6 @@
 # RESEARCH 治理底座 — P0 四件套 (GR-1 ~ GR-4)
 
-> **版本**: v1.0 (2026-11-17)
+> **版本**: v1.1 (2026-11-17；v1.0 = 步骤 2 初稿；v1.1 = 按 SPEC_PROCESS v1.7.2 补步骤 2 门禁与 F1-F4 形态对账，见 §9)
 > **范围**: `GovernanceRecord` + 存储 / 数据契约 / Golden master / 多重检验台账 / 计量基准对拍 / 性能
 > **上游**: [多因子治理路线图 §4-§6](../analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) / [PROJECT_STATUS P1-A](../PROJECT_STATUS.md)
 > **调研工具**: Crossref / OpenAlex / WebSearch / WebFetch / 本地代码回溯 / Stata 18 批处理冒烟
@@ -371,6 +371,41 @@ DuckDB 官方文档明确警告：**不要用 `executemany` 大批量插入**，
 | F3 | Romano-Wolf 2016 页码/DOI 未核实 | 标为 ⚠️，仅引用算法不引页码 |
 
 **结论**: 调研文档无幻觉级错误；可作为步骤 3 设计的依据。
+
+---
+
+## §9 步骤 2 门禁与 F1-F4 形态对账（SPEC_PROCESS v1.7.2）
+
+> 2026-11-17 追加。只补**形态**，不改结论；对应上游 §Step 2 Review 门禁 (a)-(d) 与 §契约取证字段形态 F1-F5。
+
+### 9.1 Step 2 门禁四项
+
+| 门禁 | 状态 | 证据 |
+|------|------|------|
+| (a) FALSIFIED 断言已改写并记入修订记录 | ✅ | §8 F1「volume/suspend 实际不存在」→「该加载器未使用」；F2 BH 并列排序敏感性 → 5040 排列实测后改写 §4.1/§6.2；F3 Romano-Wolf 2016 页码标 ⚠️ |
+| (b) CONFLICT / STEP_GAP_OPEN 已仲裁 | ✅ 无 OPEN | Hansen 未 studentize 属「实现与原文偏差」而非文献冲突，已在 §2.1 与设计 §7.4 登记为 F-G；无 STEP_GAP_OPEN |
+| (c) 阻断性断言双源 | ✅ | Hansen studentization：原文摘要（T1）+ 原文 PDF（T1）；DSR/PBO 公式：原文 PDF（T1）+ 二次源；RW 重抽单元：RW 2005（T1）+ RAPS 综述（T2）。单源项仅 §3.4 DuckDB 官方警告，已由本机实测 P1 交叉（T1 + E2） |
+| (d) 假设区已转 A/B 或显式 [待定] | ✅ | 「mv 走独立导出流程」→ [待定]（DATA_GAPS §2.2 推断，根因未取证）；「tushare 行业可换源」→ [待定]（专项 B）；「真实 A 股 size/power」→ U1（E5 待核） |
+
+### 9.2 F1-F4 出具形态
+
+| 字段 | 出具 |
+|------|------|
+| **F1 来源日期** | 全部外部来源**读取日 = 2026-11-17**（本次 Crossref/原文 PDF 复核日）；发布日信息 = 文献年份 + 卷期（见 §2 表）。内部文件写版本 + 行号区间（如 `multiple_testing.py L1119 @ 3.5.3`）。无「近期/最新」表述 |
+| **F2 来源版本** | 文献：期刊卷期/DOI 版本（§2 表）；内部文件：`factor_pipeline 3.5.3` + 行号（§4）；工具：DuckDB 1.5.3 / pydantic 2.13.4 / Stata 18 MP（§5）。无留空行 |
+| **F3 降级链** | 三段式：`Semantic Scholar (search_semantic) 返回空 + mcp_english-search 522 → Crossref REST + 原文 PDF / WebFetch → 读到 DOI 命中、摘要与公式片段；未取证项 = 付费墙页码（§7）`；`Stata SSC 包（rwolf2/multproc）未安装 → 自写 .do + Mata 参照 → 算法级对拍可用，包级第二参照未取证（§2.1/§7）` |
+| **F4 引用验证表** | 外部引用 >3 条，§2.1/§2.2 已建表（引用 / DOI / 关键定义 / 状态）。核验读数：Crossref 命中 **5/5**（BY、Hansen、Romano-Wolf、Model Cards、Pandera）；**元数据错配 0 条**；**未验证 2 条**（Romano-Wolf 2016 页码、White 2000 / Holm 1979 的 DOI 未逐项查） |
+| **F5 先失败记录** | **N/A**：本批为文档（Layer-0），无代码 / fixture 改动；F5 只约束 Step 9 有代码改动时 |
+
+### 9.3 证据等级自评
+
+| 结论 | 等级 | 说明 |
+|------|------|------|
+| 代码行号/签名/默认值（§4） | E1 | 读码可原样重放（grep/Read） |
+| 文献公式与定义（§2） | E1 | 回原文 PDF / Crossref 元数据 |
+| 性能数字 P1-P8（§5） | E2 | 本机实测，含失败/边界场景（executemany 慢、契约宽表扫描） |
+| 工具可用性（Stata 冒烟） | E2 | 单场景冒烟，已附命令与退出码 |
+| 社区实践结论（§3） | E4 | 判断陈述，仅作工程陷阱线索，不作方法学依据 |
 
 ---
 

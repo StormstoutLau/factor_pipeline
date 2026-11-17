@@ -35,6 +35,7 @@ import pandas as pd
 
 from verify_layer3_hac_real import build_eligible, cross_section_prep, month_end
 from verify_multifactor_multiyear import build_price_factors, load_market
+from contract_gate import run_contract_gate
 from verify_portfolio_backtest import (
     FACTORS,
     MIN_STOCKS,
@@ -237,7 +238,25 @@ def main():
     ap.add_argument('--data-root', default=DATA_ROOT)
     ap.add_argument('--json',
                     default=str(SCRIPTS.parent / 'out' / 'capacity_impact.json'))
+    ap.add_argument('--contract', action='store_true',
+                    help='运行前置数据契约（GR-2），未通过则不继续研究')
+    ap.add_argument('--contract-only', action='store_true',
+                    help='只运行数据契约并退出（dry-run）')
+    ap.add_argument('--contract-sample-end', default=None,
+                    help='契约样本末（默认取 stock_close 最后一个交易日）')
+    ap.add_argument('--contract-json', default=None,
+                    help='契约 JSON 输出路径（默认 out/capacity_impact_contract.json）')
     args = ap.parse_args()
+
+    if args.contract or args.contract_only:
+        report = run_contract_gate(
+            args.data_root, sample_end=args.contract_sample_end,
+            prefix='capacity_impact', json_path=args.contract_json,
+        )
+        if not report.passed:
+            return 2
+        if args.contract_only:
+            return 0
 
     P = build_panels(args.data_root)
     print('=' * 120)
@@ -464,4 +483,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

@@ -15,8 +15,12 @@
 - 中间状态追踪：指纹、分类、处理全流程可追溯
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional, Tuple, Callable
+from dataclasses import dataclass, field, asdict
+import hashlib
+import json
+import os
+import platform
 import pandas as pd
 import numpy as np
 import logging
@@ -1130,7 +1134,59 @@ class FactorProcessingPipelineV2:
             except ImportError:
                 logger.warning("CUSUM 监测器启用失败: cusum_drift_monitor 模块不可用")
 
+        # v3.6.0 E6: 治理事件 hook (默认 None, 零行为变更)
+        self._governance_hook: Optional[Callable[[Dict[str, Any]], None]] = None
+
         logger.info("FactorProcessingPipelineV2 initialized")
+
+    # —— v3.6.0 E6: 治理 hook（默认 None，零行为变更）——
+    def set_governance_hook(
+        self, hook: Optional[Callable[[Dict[str, Any]], None]]
+    ) -> None:
+        if hook is not None and not callable(hook):
+            raise TypeError("governance hook 必须可调用或为 None")
+        self._governance_hook = hook
+
+    def _config_hash(self) -> str:
+        body = json.dumps(
+            asdict(self.config), sort_keys=True, default=str,
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _pipeline_version() -> str:
+        try:
+            from .reporting import PipelineExecutionReport
+            return str(PipelineExecutionReport().pipeline_version)
+        except Exception:  # 仅用于事件展示，不影响拟合
+            return "unknown"
+
+    @staticmethod
+    def _env_fingerprint() -> Dict[str, Any]:
+        info: Dict[str, Any] = {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "implementation": platform.python_implementation(),
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+        }
+        blas = "unknown"
+        config = getattr(getattr(np, "__config__", None), "CONFIG", None)
+        if isinstance(config, dict):
+            try:
+                blas = (
+                    config.get("Build Dependencies", {})
+                    .get("blas", {})
+                    .get("name", "unknown")
+                )
+            except AttributeError:
+                blas = "unknown"
+        info["blas"] = blas
+        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
+                     "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+            info["threads_%s" % name] = os.environ.get(name, "unset")
+        return info
 
     def fit(self,
             factor_data: Dict[str, pd.DataFrame],
@@ -1191,6 +1247,17 @@ class FactorProcessingPipelineV2:
             f"  pipeline_mode={self.config.pipeline_mode} → execution pipe '{pipe_type}'"
         )
 
+        hook_context: Optional[Dict[str, Any]] = None
+        if self._governance_hook is not None:
+            hook_context = {
+                "event": "pipeline_fit",
+                "stage": "S2",
+                "arm": self.config.ab_experiment_id,
+                "pipeline_version": self._pipeline_version(),
+                "config_hash": self._config_hash(),
+                "env_fingerprint": self._env_fingerprint(),
+            }
+
         for name, df in factor_data.items():
             pipe = self._create_pipeline(
                 pipe_type, neutralizer_params, self.config.module_enabled)
@@ -1220,6 +1287,18 @@ class FactorProcessingPipelineV2:
                 ),
             )
             self._log_spec(self.factor_routing[name])
+
+            if self._governance_hook is not None and hook_context is not None:
+                routing = self.factor_routing[name]
+                self._governance_hook({
+                    **hook_context,
+                    "factor_id": name,
+                    "routing": asdict(routing),
+                    "sample_window": {
+                        "start": routing.fingerprint_meta.start,
+                        "end": routing.fingerprint_meta.end,
+                    },
+                })
 
         # Backward compat: 保留共享管道属性引用 (测试中可能被 mock)
         if self.factor_pipelines:

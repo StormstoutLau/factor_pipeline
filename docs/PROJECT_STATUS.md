@@ -125,6 +125,19 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 > 方案: [多因子治理体系深度优化路线图](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) §5; P1/P2 阶段不逐条登记
 > 执行顺序: GR-1 → (GR-2 / GR-3 并行) → GR-4; 全部要求默认零变更
+> **spec 状态（2026-11-17）**: 档位 **T1**；步骤 1-8 完成 — 调研 [RESEARCH v1.1](research/RESEARCH_GOVERNANCE_BASE.md)、
+> 设计 DESIGN v1.2（`docs/private/`，本地）、实施 [EXECUTION v1.0](EXECUTION_V3.6.0_GOVERNANCE_BASE.md)（含步骤 6 review §9）、
+> 验收清单 [CHECKLIST v1.0](audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md)、
+> 一致性 [CONSISTENCY_REVIEW v1.0](audit/CONSISTENCY_REVIEW_V3.6.0_GOVERNANCE_BASE.md)（PASS_WITH_FIXES）、
+> 门禁接入 [spec_runner_adapter.py](../scripts/spec_runner_adapter.py)（Spec_Runner v1.11.0）。
+> **步骤 9 进行中**: E1 `governance.py`（11 passed）、E2 `data_contract.py`（5 passed）、E3 `golden_master.py`（5 passed）、
+> E4 `multiple_testing_ledger.py` + `multiple_testing.py` 注入（12 passed）、
+> E5 `benchmarks/stata_econ_crosscheck.py`（Stata 18.0 `--case all` PASS；T31-T35 6 passed）、
+> E6 管线 hook（T31-T40 联合 22 passed；golden 基线 `tests/golden/govbase_v1_synth` 入库；全量回归 1907 passed / 7 skipped）、
+> E7 研究入口契约（`scripts/contract_gate.py` + 容量/多头端 `--contract*` 接线；dry-run 正确拦截 mv 5 日缺口 exit 2；
+> T41-T45 11 passed；全量回归 1914 passed / 7 skipped，较基线 +50）完成；
+> 异构复审 PASS_WITH_NOTES（P1-P8，0 推翻 / 0 重大；F1 锁等待语义、F2 注入路径 `individual_p_values` 口径已披露）；
+> 红→绿读数见 EXECUTION §5.3、复审见 EXECUTION §9.8；下一步 E8 文档闭环。
 
 | # | 任务 | 可交付物 | 验收标准 | 依赖 |
 |---|------|---------|---------|------|
