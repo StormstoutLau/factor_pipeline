@@ -57,6 +57,9 @@ cache/
 *.duckdb.wal
 factor_db.duckdb
 
+# 一次性证据/剖析脚本与读数（不入库；文档中以 out/ 引用）
+out/
+
 # 学术层文档隔离 (2026-07-08): docs/private/ 不提交远程
 # 含 RESEARCH_NOTES.md / ABLATION_DESIGN_V3.0.0.md / DESIGN_DISCUSSION_V3.1.0.md / KABC_*.md
 docs/private/

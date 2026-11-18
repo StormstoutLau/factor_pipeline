@@ -55,7 +55,7 @@
 | 修复正确性 | T51-T54 红→绿读数（§2） | E1 |
 | 复审来源 | `out/review_v360_t46_e8_results.txt`（R1-R4） | E2 |
 | 零变更 | `gate unit-tests`（seq 30）+ `gate version-consistency`（seq 29）事件流 | E1 |
-| 代码行号 | `Lxxx@WORKTREE`，提交后回填 | E3（P3-1 沿用） |
+| 代码行号 | `Lxxx@9221e7a`（P3-1 已回填） | E3 |
 
 ## §6 汇总（实施后）
 

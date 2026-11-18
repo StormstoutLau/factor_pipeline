@@ -195,7 +195,7 @@
 | ADD 审计 | `docs/audit/2026-11-18-v3.6.0-governance-base-audit.md` | E2/E3 | 通过（Phase 0-4 + 取证矩阵；P1 0 / P2 5（4 处置 + P2-5 落档）/ P3 7 披露） |
 | 独立复审（批次收尾，RULE-5） | `out/review_v360_t46_e8_results.txt` | E2 | 通过（4 项发现：1 major R1 + 3 minor R2-R4，双验证器 2/2 确认、0 误报；R1 实测 `same id: False`；用户裁决落档不修码 → P2-5/P3-5~P3-7；R1-R4 已入 EXECUTION §9.9） |
 | Stata 对拍 | `out/stata_econ_crosscheck.json` | E2 | 通过（Stata 18.0；`--case all` exit 0；bh/by/bonf/holm/RW/White/SPA PASS；dsr/pbo SKIP-P1） |
-| 设计落地 | 行号 `Lxxx@commit` | E3 | 通过（ADD 审计 Phase 1 16/16；`@64e4053` + `@WORKTREE`，回填见 P3-1） |
+| 设计落地 | 行号 `Lxxx@commit` | E3 | 通过（ADD 审计 Phase 1 16/16；`@64e4053` + `@9221e7a`，P3-1 已回填） |
 | 盲区扫描 | EXECUTION §9（E4，发现 7 项：2 MAJOR + 5 MINOR） | E4 | 通过（发现 7 项） |
 
 > E5（推测/未执行）不得出现在验收结论中；仅可列入"未覆盖项"。
