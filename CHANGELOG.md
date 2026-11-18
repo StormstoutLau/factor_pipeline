@@ -1,5 +1,60 @@
 # 开发日志 (Changelog)
 
+## v3.7.0 — P1 统计证据链: 样本外协议 + 选择偏差 + 效应量/门禁 (已实施, 2026-11-18)
+
+### 概览
+
+v3.6.0 解决了"记录可复现"，但结论本身仍缺统计防线：单路径回测、多重试验未折算、
+规格曲线只能看摘要、显著性无效应量与区间。v3.7.0 新增四个平级模块
+（`cross_validation` / `overfitting` / `effect_size` 互不 import），扩展规格日志与
+多重检验台账，并给出 G2 门禁的纯函数评估。**既有无参调用路径逐位不变**。
+
+### 核心产出
+
+- **E1** `backtest/cross_validation.py`（新增）: `PurgedKFold`（5 折基线）+
+  `CombinatorialPurgedKFold`（`N=6, k=2` → 15 路径）；purge/embargo 各 1 期，
+  训练集剔除 `[a−max(purge,label_horizon), b+embargo]`；`HoldoutRegistry`
+  （DuckDB `cv_holdout`，64 位 `holdout_id`，跨 batch 重叠拒绝、同 batch 幂等、
+  `dev_mask` 末尾裁 purge、`assert_locked_before`）
+- **E2** `backtest/overfitting.py`（新增）: `deflated_sharpe_ratio`（逐期 SR、
+  `N=n_trials`、`V[SR_n]` 默认 `1/(T−1)` 或 `trial_sharpes`）+
+  `probability_of_backtest_overfitting`（CSCV 严格 `T%S==0`、S 偶数、平均秩）+
+  `trim_to_divisible(keep='recent')`（58→56）；`sharpe_ratio` 为唯一公共 Sharpe 实现
+- **E3** `backtest/effect_size.py`（新增）: `newey_west_se`（Bartlett，默认
+  `max(1, floor(4*(T/100)^(2/9)))`，`Omega/T`，对齐 statsmodels `use_correction=False`）+
+  `mean_ci` / `sharpe_ci`（stationary bootstrap）+ `effect_summary` 分派
+- **E4** `specification_logger`（扩展）: `log_run` v2 可选字段
+  （`spec_id`/`values`/`value_type`/`parent_run_id`/`spec`，`schema_version="2"`，
+  `content_hash` 64 位）；`get_specification_matrix`（strict / 非 strict 截断）；
+  `joint_inference`（null-imposed 去中心化 bootstrap，输出 median / share_significant /
+  Stouffer Z，`resampling='stationary'|'iid'`）；`pre_registration.commit` 增加
+  `content_hash`，`verify_compliance` 优先按内容哈希匹配
+- **E5** `multiple_testing_ledger`（扩展）: `FamilySpec.stage ∈ {factor, portfolio}`；
+  portfolio family 仅接受 S4/portfolio trial；`holdout_checker` 回调注入
+- **E6** `governance`（扩展）: `G2Policy` + `evaluate_g2` 纯函数；FDR 轨
+  （bh/by）与 FWER 轨（bonferroni/holm/romano_wolf/white_rc/hansen_spa）分轨；
+  失败 `action='downgrade'` 且不写库
+- **E7** `scripts/verify_stat_evidence.py`（新增）: `--section {all,dsr,pbo,curve,leakage}`
+  四段自检，输出 `out/stat_evidence_verification.json`；Stata 对拍 P1 两项 detail 记为 N/A
+- **E8** 版本号统一 3.7.0（`__init__.py` / `config_v2.py` / `reporting.py` /
+  `pyproject.toml` / `test_fix3_version_unification.py` / `verify_fix3_manual.py`）
+
+### 口径与零变更
+
+- 缓存代际仍 `v2.3.0-cache`；零新增依赖；`backtest/__init__.py` 无改动；
+  `get_specification_curve` 5 键返回不变。
+- 旧 `log_run` 调用字段集合逐字不变；`resampling` 默认 `stationary`，`iid` 可复刻原文。
+
+### 测试
+
+- 新增测试文件 5 个共 **55 例**（T01-T14b / T15-T26b / T27-T33b / T34-T40c / T41-T46b，含异构复审修正 3 例）；
+  扩展既有测试文件 **8 例**（规格日志 v2 3 例 + 台账 stage 5 例）；
+  全量回归 **1929 passed / 15 skipped / 0 failed**（对比 v3.6.0 基线 1866，+63，零新增失败）；
+  异构复审 PASS_WITH_FIXES：唯一 P2 真实缺陷 H1（常数序列浮点假阳绕过零方差守卫）已修复（5 处
+  `np.ptp == 0` 显式拦截），其余 7 项 FAIL 均为探针勘误；详见
+  [审计报告](docs/audit/2026-11-18-v3.7.0-stat-evidence-chain-audit.md)；
+  TDD 红→绿读数见 [EXECUTION §5.3](docs/EXECUTION_V3.7.0_STAT_EVIDENCE_CHAIN.md)
+
 ## v3.6.0 — 治理底座 P0 四件套: GR-1~GR-4 + 研究入口契约 (已实施, 2026-11-18)
 
 ### 概览

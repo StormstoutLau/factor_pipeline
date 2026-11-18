@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.6.0 的"**治理底座 (GR-1~GR-4 + 研究入口契约) + 多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 自相关稳健断点 + 因子路由统一化治理**"（ADR-050~054：治理记录契约 / 数据契约与 A 股口径枚举 / golden master 基线 / 多重检验台账 / 研究入口契约门禁；ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-049：sup-F AR(1) sieve bootstrap — 自相关下 size 从 50% 回到 5%；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫 + 自相关稳健临界值)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**、**规格日志 (opt-in)**与**治理记录/数据契约/golden 基线/多重检验台账 (v3.6.0)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.7.0 的"**统计证据链 (样本外协议 + DSR/PBO + 规格曲线联合推断 + 效应量/G2) + 治理底座 (GR-1~GR-4 + 研究入口契约) + 多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 自相关稳健断点 + 因子路由统一化治理**"（ADR-055~058：CPCV/holdout 全局锁 / DSR 与 PBO 口径 / 规格曲线 v2 联合推断 / 效应量 CI 与 G2 门禁；ADR-050~054：治理记录契约 / 数据契约与 A 股口径枚举 / golden master 基线 / 多重检验台账 / 研究入口契约门禁；ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-049：sup-F AR(1) sieve bootstrap — 自相关下 size 从 50% 回到 5%；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫 + 自相关稳健临界值)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**、**规格日志 (opt-in)**、**治理记录/数据契约/golden 基线/多重检验台账 (v3.6.0)**与**统计证据链 (v3.7.0)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -40,6 +40,16 @@
 ---
 
 ## 版本更新摘要
+
+### v3.7.0 P1 统计证据链 (2026.11, 已实施)
+
+> **状态**: 已实施, 新增测试文件 5 个共 55 例 + 扩展 8 例; 全量回归 1929 passed / 15 skipped / 0 failed (+63); 四段自检 `scripts/verify_stat_evidence.py` 全 PASS; 版本统一 15 passed (版本一致性 + golden master); 异构复审 PASS_WITH_FIXES (H1 已修复)
+> **文档**: [ADR-055~058](DECISIONS.md) / 设计 (private, 未提交) / [实施](docs/EXECUTION_V3.7.0_STAT_EVIDENCE_CHAIN.md) / [验收](docs/audit/CHECKLIST_V3.7.0_STAT_EVIDENCE_CHAIN.md) / [一致性](docs/audit/CONSISTENCY_REVIEW_V3.7.0_STAT_EVIDENCE_CHAIN.md)
+> **版本 / 缓存**: 3.7.0 / `v2.3.0-cache` (缓存代际未变)
+
+**治理动因**: v3.6.0 解决了"记录可复现"，但结论本身仍缺统计防线——单路径回测、多重试验未折算、规格曲线只能看摘要、显著性无效应量与区间、holdout 可被反复研究。
+
+**决策**: 新增 `cross_validation.py`（PurgedKFold + CPCV + `HoldoutRegistry` DuckDB 全局锁）、`overfitting.py`（DSR + PBO/CSCV + `trim_to_divisible`）、`effect_size.py`（Newey-West HAC + stationary bootstrap CI）三个平级模块（互不 import）；`specification_logger` 升 v2（逐规格序列 + `joint_inference` null-imposed bootstrap + `content_hash`）；台账增加 `stage` 与 `holdout_checker` 回调；`governance` 增加 `G2Policy`/`evaluate_g2` 纯函数（FDR/FWER 分轨，失败 `downgrade` 不阻断）。**默认路径逐位不变**。
 
 ### v3.6.0 治理底座 P0 四件套 (2026.11, 已实施)
 

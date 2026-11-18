@@ -13,11 +13,12 @@ L3 (事后校正): apply_by_fdr (backtest/multiple_testing.py) — BY-FDR 依赖
 """
 from .spec_log import SpecificationLogger, _make_json_serializable
 from .pre_registration import PreRegistration
-from .spec_curve import SpecificationCurve
+from .spec_curve import SpecificationCurve, joint_inference
 
 __all__ = [
     'SpecificationLogger',
     'PreRegistration',
     'SpecificationCurve',
+    'joint_inference',
     '_make_json_serializable',
 ]

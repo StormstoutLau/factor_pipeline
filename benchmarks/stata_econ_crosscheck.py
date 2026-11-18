@@ -625,7 +625,10 @@ def main() -> int:
                 rows.append({
                     "case": case, "python": "-", "stata": "-",
                     "diff": None, "tolerance": None,
-                    "verdict": "SKIP", "detail": "P1 未实装（DESIGN §8.2）",
+                    "verdict": "SKIP",
+                    "detail": ("N/A（P1 无 Stata 对拍样例；由 "
+                               "tests/test_backtest/test_overfitting.py 与 "
+                               "scripts/verify_stat_evidence.py 覆盖）"),
                 })
         report["cases"] = rows
 

@@ -302,3 +302,60 @@ class TestPipelineLogSpecification:
         )
         assert isinstance(commit_hash, str)
         assert len(commit_hash) == 8
+
+
+# ============================================================
+# v3.7.0 E4: schema v2 / content_hash / 旧记录兼容
+# ============================================================
+
+class TestSpecificationLoggerV2:
+    """v3.7.0 E4 扩展用例（不计入 52 项）。"""
+
+    def test_log_run_v2_fields(self, tmp_path):
+        logger = SpecificationLogger(log_dir=str(tmp_path))
+        commit_hash = logger.log_run(
+            {'lag': 5}, {'ic': 0.05}, factor_name='momentum',
+            spec_id='spec_a', values=[0.01, 0.02],
+            value_type='returns',
+        )
+        assert len(commit_hash) == 8
+        log_path = os.path.join(str(tmp_path), 'specifications.jsonl')
+        with open(log_path, 'r', encoding='utf-8') as f:
+            rec = json.loads(f.readline())
+        assert rec['schema_version'] == '2'
+        assert rec['spec_id'] == 'spec_a'
+        assert rec['values'] == [0.01, 0.02]
+        assert rec['value_type'] == 'returns'
+        assert len(rec['content_hash']) == 64
+
+    def test_content_hash_stable(self, tmp_path):
+        logger = SpecificationLogger(log_dir=str(tmp_path))
+        kwargs = dict(
+            config={'lag': 5}, result={'ic': 0.05}, factor_name='momentum',
+            spec_id='spec_a', values=[0.01, 0.02], value_type='returns',
+        )
+        logger.log_run(**kwargs)
+        logger.log_run(**kwargs)
+        log_path = os.path.join(str(tmp_path), 'specifications.jsonl')
+        with open(log_path, 'r', encoding='utf-8') as f:
+            records = [json.loads(line) for line in f if line.strip()]
+        assert records[0]['content_hash'] == records[1]['content_hash']
+
+    def test_legacy_record_read(self, tmp_path):
+        logger = SpecificationLogger(log_dir=str(tmp_path))
+        legacy = {
+            'timestamp': '2026-01-01T00:00:00',
+            'run_type': 'exploratory',
+            'factor_name': 'legacy',
+            'config': {'lag': 3},
+            'result': {'ic': 0.02, 'p_value': 0.04},
+            'commit_hash': 'abcd1234',
+        }
+        log_path = os.path.join(str(tmp_path), 'specifications.jsonl')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(legacy) + '\n')
+        curve = logger.get_specification_curve(factor_name='legacy')
+        assert set(curve.keys()) == {
+            'specifications', 'results', 'p_values',
+            'median_effect', 'consistency',
+        }

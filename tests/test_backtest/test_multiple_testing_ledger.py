@@ -12,6 +12,8 @@
 import numpy as np
 import pytest
 
+from dataclasses import replace
+
 from factor_pipeline.backtest.multiple_testing import (
     HansenSPA,
     WhiteRealityCheck,
@@ -23,6 +25,7 @@ from factor_pipeline.backtest.multiple_testing import (
 from factor_pipeline.backtest.multiple_testing_ledger import (
     CorrectionMethod,
     CorrectionTrack,
+    FamilyConflictError,
     FamilySpec,
     MultipleTestingLedger,
     PreregistrationError,
@@ -60,11 +63,11 @@ def _family(family_id="fam1", track=CorrectionTrack.FDR, alpha=0.05,
 
 
 def _trial(family_id, variant_id, p, attempt_id="a1", *,
-           created_at=None, primary=False) -> TrialRecord:
+           created_at=None, primary=False, stage="S3") -> TrialRecord:
     return TrialRecord(
         family_id=family_id, variant_id=variant_id,
         attempt_id=attempt_id, factor_id="f_%s" % variant_id,
-        stage="S3", metric_name="lambda_mean", metric_value=0.01,
+        stage=stage, metric_name="lambda_mean", metric_value=0.01,
         p_value=p, spec_hash="h_%s" % variant_id,
         primary=primary, created_at=created_at,
     )
@@ -351,5 +354,89 @@ def test_t40_result_id_stable_with_exploratory(tmp_path):
         second = _result_rows(ledger)
         assert len(second) == 1
         assert second[0][0] == first[0][0]
+    finally:
+        ledger.close()
+
+
+# ============================================================
+# v3.7.0 E5: family stage / holdout 回调
+# ============================================================
+
+def test_family_stage_default(tmp_path):
+    default = _family()
+    assert default.stage == "factor"
+    # stage 不进入指纹
+    assert (replace(default, stage="portfolio").fingerprint()
+            == default.fingerprint())
+
+    ledger = _ledger(tmp_path)
+    try:
+        ledger.register_family(default)
+        loaded = ledger._load_family("fam1")
+        assert loaded.stage == "factor"
+        # 注册时 lead_variant_id 被补全为首个 variant，指纹其余部分不变
+        expected = replace(default, lead_variant_id="v1")
+        assert loaded.fingerprint() == expected.fingerprint()
+    finally:
+        ledger.close()
+
+
+def test_family_stage_portfolio(tmp_path):
+    ledger = _ledger(tmp_path)
+    try:
+        portfolio = replace(_family(), stage="portfolio")
+        assert ledger.register_family(portfolio) == "fam1"
+        ledger.record_trial(_trial("fam1", "v1", 0.01, stage="S4"))
+        ledger.record_trial(
+            _trial("fam1", "v1", 0.02, attempt_id="a2", stage="portfolio"))
+
+        with pytest.raises(FamilyConflictError):
+            ledger.register_family(
+                replace(_family(family_id="fam2"), stage="unknown"))
+    finally:
+        ledger.close()
+
+
+def test_holdout_checker_called(tmp_path):
+    calls = []
+
+    def checker(holdout_id, batch_id):
+        calls.append((holdout_id, batch_id))
+
+    ledger = MultipleTestingLedger(
+        db_path=str(tmp_path / "mt.duckdb"), holdout_checker=checker)
+    try:
+        spec = replace(_family(), holdout_id="h" * 64)
+        ledger.register_family(spec)
+        assert calls == [("h" * 64, spec.batch_id)]
+    finally:
+        ledger.close()
+
+
+def test_holdout_checker_error(tmp_path):
+    def checker(holdout_id, batch_id):
+        raise RuntimeError("holdout not locked")
+
+    ledger = MultipleTestingLedger(
+        db_path=str(tmp_path / "mt.duckdb"), holdout_checker=checker)
+    try:
+        spec = replace(_family(), holdout_id="h" * 64)
+        with pytest.raises(RuntimeError):
+            ledger.register_family(spec)
+        with pytest.raises(PreregistrationError):
+            ledger.record_trial(_trial("fam1", "v1", 0.01))
+    finally:
+        ledger.close()
+
+
+def test_family_stage_idempotent(tmp_path):
+    ledger = _ledger(tmp_path)
+    try:
+        factor = _family()
+        ledger.register_family(factor)
+        portfolio = replace(factor, stage="portfolio")
+        assert ledger.register_family(portfolio) == "fam1"
+        # 首次注册为准
+        assert ledger._load_family("fam1").stage == "factor"
     finally:
         ledger.close()

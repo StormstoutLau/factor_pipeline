@@ -58,14 +58,15 @@ v3.5.1 (2026-11-17) 多断点接入 diagnose 标签路径 — opt-in + 两级门
 v3.5.2 (2026-11-17) 多断点路径 NaN 间隙守卫 — 连续性描述 + ES 降级 (ADR-048)   [x]
 v3.5.3 (2026-11-17) sup-F 自相关稳健临界值 — AR(1) sieve bootstrap (ADR-049)  [x]
 v3.6.0 (2026-11-18) 治理底座 P0 四件套 — GR-1~GR-4 + 研究入口契约 (ADR-050~054) [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.6.0
+v3.7.0 (2026-11-18) P1 统计证据链 — 样本外协议 + DSR/PBO + 效应量/G2 (ADR-055~058) [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.7.0
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
 v3.5.x (远期)     内生性-溢价诊断交互                                           [ ]
 ```
 
 ---
 
-## §2. 当前待办 (v3.5.3 完成后)
+## §2. 当前待办 (v3.7.0 完成后)
 
 ### 🔴 P0 — 阻塞/误导
 
@@ -73,10 +74,11 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 |---|------|------|
 | — | _(当前无 P0 阻塞项)_ | ✅ |
 
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点 (v3.4.0 – v3.5.3)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点 + 治理底座 + 统计证据链 (v3.4.0 – v3.7.0)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.7.0 | P1 统计证据链 | 新增 `cross_validation.py` (PurgedKFold + CPCV N=6,k=2 + `HoldoutRegistry` DuckDB 全局锁 / 跨 batch 重叠拒绝 / `dev_mask` 裁 purge)、`overfitting.py` (DSR 逐期 SR + PBO/CSCV 严格整除 + `trim_to_divisible`)、`effect_size.py` (NW HAC + stationary bootstrap CI)；`specification_logger` v2 (逐规格序列 + `joint_inference` + `content_hash`)；台账 `stage` + `holdout_checker`；`governance` `G2Policy`/`evaluate_g2`；`scripts/verify_stat_evidence.py`；版本 3.7.0 | ADR-055~058 | 新增 55 例 + 扩展 8 例全绿; 全量 1929 passed / 15 skipped / 0 failed; 异构复审 PASS_WITH_FIXES (H1 常数序列守卫修复); 四段自检全 PASS; 性能 7 项全在预算内; 缓存代际 `v2.3.0-cache` 不变 |
 | v3.5.3 | sup-F 自相关稳健临界值 | `BreakpointDetector(..., sup_f_method='asymptotic'\|'bootstrap', n_bootstrap=1000, random_state=42)`; bootstrap 重写为 AR(1) sieve 残差自助 (OLS φ + 中心化残差重采样 + burn-in 50); `detect` 传 `y` + `critical_method`; 新增 `_sup_f_batch` 向量化; `FactorHealthDiagnoser` 透传 + `diagnose` +2 键 (`chow_critical` / `breakpoint_sup_f_method`, 28→30); 默认 asymptotic 逐位不变 | ADR-049 | F1-F11 11 passed; layer3 60 passed; size (T=240): φ=0.5 50.0%→5.3%, φ=0.8 93.3%→8.7%; power φ=0.5 93.7%; 实现口径复核 φ=0.5 size 48.7%→4.7% / power 96.0%; 真实 4 因子 \|φ̂\|≤0.21, 标签不变; 版本统一 7 passed + 手工 5/5; 异构复审 PASS_WITH_FIXES (P1-P8: 实现口径 8 配置复现 / 默认路径逐位不变 / 趋势+近单位根披露 / H8 因子名修正) |
 | v3.5.2 | 多断点路径 NaN 间隙守卫 | `detect_multiple` +5 连续性键 (13→18); `diagnose(..., breakpoint_mode='multiple')` +6 键 (22→28); `multi_break_gap_min_run=2`; 标签相关边界跨 ≥2 期缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; 默认 single 零变更 | ADR-048 | G1-G9 9 passed; layer3 49 passed; 纯噪声守卫触发 0-1.3%; 真断点远离间隙误降级 ≤0.7%; 真断点正落 g=5 间隙降级 21.7%; 端到端 single=ES / multiple=suspect; 版本统一 7 passed + 手工 5/5 |
 | v3.5.1 | 多断点接入 `diagnose` | `diagnose(..., breakpoint_mode='single'|'multiple', m_max=5)`; 存在性由 sup-F (`breakpoint_confirmed`) + BIC 分段 + 材料性门控 (≥1.0 within-sd) → `suspect` (不升级 ES); 输出 +10 键; 默认 single 零变更; `detect`/`detect_multiple`/Estimator 零改动 | ADR-047 | F1-F9 9 passed; layer3 40 passed; single 模式 20/20 与旧分类器一致; 双断点 T=240 → `ES`, n=2, [80,160]; 版本统一 7 passed + 手工 5/5; 全量回归 1777 passed / 15 skipped / 0 failed |
@@ -339,13 +341,15 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 > **v3.5.3 (2026-11-17) 同步**: CHANGELOG / DECISIONS (ADR-049) / 调研 / 设计 (private) / 实施 / 审计 / PROJECT_STATUS / DEV_PROGRESS / CODE_WIKI / README / README.en.md / ARCHITECTURE 已更新; 版本锚点 6 处统一 3.5.3; 小任务裁剪 (调研+设计保留轻量版)。
 >
 > **v3.5.3 (2026-11-17) 异构复审**: 5 视角 × 8 探针 → **PASS_WITH_FIXES** (H1-H8, 0 P0/P1, 实现零改动)。H8 修正 CHANGELOG β_t 表因子名誊写 (turnover/reversal_1m/size → momentum/reversal_1w/amihud); H3/H4 补披露 (趋势误设 100% 拒绝 / 近单位根临界值发散 / φ̂ 偏差); H7 澄清 `critical_method` 配置方法语义; H1/H2/P7 确认实现口径复现与默认路径零变更。同步: 审计 Phase 9 / RESEARCH §3.4+§4.6 / EXECUTION §3.2+§8 / CHANGELOG 局限 / CODE_WIKI / ADR-049。
+>
+> **v3.7.0 (2026-11-18) 同步**: CHANGELOG / DECISIONS (ADR-055~058) / 设计 v1.2 (private) / 实施 v1.2 / CHECKLIST v1.0 (步骤 9 回填) / 一致性 review v1.0 / PROJECT_STATUS / README 已更新; 版本锚点 6 处统一 3.7.0; 缓存代际保持 `v2.3.0-cache`; README.en.md 未改动 (其版本块为 v3.5.1 时期, 本批范围仅 README.md); CODE_WIKI 待批次收口后补记新模块。
 
 ---
 
 ## §5. 执行历史
 
-> **全量回归基线 (2026-11-17, v3.5.3)**: 全仓 `pytest` → **1797 passed / 15 skipped / 0 failed** (1027.28s, exit 0)。
-> 基线演进: v3.4.13 = 1760 / v3.5.0 = 1768 (+8) / v3.5.1 = 1777 (+9) / v3.5.2 = 1786 (+9) / v3.5.3 = 1797 (+11), 均 0 新增失败。
+> **全量回归基线 (2026-11-18, v3.7.0 含复审修正)**: 全仓 `pytest` → **1929 passed / 15 skipped / 0 failed** (exit 0)。
+> 基线演进: v3.4.13 = 1760 / v3.5.0 = 1768 (+8) / v3.5.1 = 1777 (+9) / v3.5.2 = 1786 (+9) / v3.5.3 = 1797 (+11) / v3.6.0 = 1866 (+69) / v3.7.0 = 1929 (+63, 含异构复审修正 3 例), 均 0 新增失败。
 > 外部数据测试默认跳过: `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空; `tests/verify_integration_real_data.py` 为手动运行脚本, 不参与收集。
 
 | 日期 | Commit | 内容 |

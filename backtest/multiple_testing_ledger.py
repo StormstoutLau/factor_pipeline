@@ -14,7 +14,9 @@ import logging
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple,
+)
 
 import numpy as np
 import pandas as pd
@@ -30,6 +32,10 @@ from .multiple_testing import (
 logger = logging.getLogger(__name__)
 
 POLICY_VERSION = "1.0.0"
+
+# v3.7.0 E5: family stage 约束（stage 不进入指纹，只做一致性校验）
+_FAMILY_STAGES = ("factor", "portfolio")
+_PORTFOLIO_TRIAL_STAGES = ("S4", "portfolio")
 
 
 # ============================================================
@@ -101,6 +107,7 @@ class FamilySpec:
     holdout_id: Optional[str] = None
     policy_version: str = POLICY_VERSION
     variants: Tuple[VariantSpec, ...] = ()
+    stage: str = "factor"               # factor | portfolio（不进入指纹）
     registered_at: Optional[str] = None
 
     def fingerprint(self) -> str:
@@ -325,6 +332,7 @@ class MultipleTestingLedger:
         table_prefix: str = "mt_",
         enable: bool = True,
         strict_preregistration: bool = True,
+        holdout_checker: Optional[Callable[[str, str], None]] = None,
     ):
         if not table_prefix.replace("_", "").isalnum():
             raise ValueError("非法 table_prefix: %r" % table_prefix)
@@ -332,6 +340,7 @@ class MultipleTestingLedger:
         self.prefix = table_prefix
         self.enable = enable
         self.strict_preregistration = strict_preregistration
+        self.holdout_checker = holdout_checker
         self._conn = None
         if enable:
             self._connect()
@@ -426,6 +435,11 @@ class MultipleTestingLedger:
             return ""
         if not spec.variants:
             raise FamilyConflictError("family 必须至少有一个 variant")
+        if spec.stage not in _FAMILY_STAGES:
+            raise FamilyConflictError(
+                "非法 family stage: %s" % spec.stage)
+        if spec.holdout_id and self.holdout_checker is not None:
+            self.holdout_checker(spec.holdout_id, spec.batch_id)
         ids = [v.variant_id for v in spec.variants]
         if len(ids) != len(set(ids)):
             raise FamilyConflictError("variant_id 重复")
@@ -476,6 +490,14 @@ class MultipleTestingLedger:
         if not self.enable:
             return ""
         family = self._load_family(trial.family_id)
+        if family.stage == "portfolio":
+            if trial.stage not in _PORTFOLIO_TRIAL_STAGES:
+                raise FamilyConflictError(
+                    "portfolio family 不接受 stage=%s 的 trial"
+                    % trial.stage)
+        elif trial.stage in _PORTFOLIO_TRIAL_STAGES:
+            raise FamilyConflictError(
+                "factor family 不接受 stage=%s 的 trial" % trial.stage)
         variants = {v.variant_id: v for v in family.variants}
         variant = variants.get(trial.variant_id)
 

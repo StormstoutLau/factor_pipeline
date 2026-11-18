@@ -33,7 +33,11 @@ class PreRegistration:
         researcher: str = "anonymous",
         description: str = "",
     ) -> str:
-        """提交事前承诺."""
+        """提交事前承诺.
+
+        返回 8 位 ``commit_hash``（旧契约）；同时写入 timestamp 不参与的
+        64 位 ``content_hash``（SHA256）与 ``hash_algo="sha256"``。
+        """
         record = {
             'timestamp': datetime.now().isoformat(),
             'researcher': researcher,
@@ -43,7 +47,17 @@ class PreRegistration:
         commit_hash = hashlib.sha1(
             json.dumps(record, sort_keys=True, default=str).encode('utf-8')
         ).hexdigest()[:8]
+        content_hash = hashlib.sha256(
+            json.dumps(
+                {'researcher': researcher,
+                 'description': description,
+                 'spec': spec},
+                sort_keys=True, separators=(",", ":"), default=str,
+            ).encode('utf-8')
+        ).hexdigest()
         record['commit_hash'] = commit_hash
+        record['content_hash'] = content_hash
+        record['hash_algo'] = 'sha256'
 
         with open(self.prereg_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(record, default=str, ensure_ascii=False) + '\n')
@@ -54,36 +68,118 @@ class PreRegistration:
         self,
         actual_config: Dict[str, Any],
         committed_hash: str,
+        *,
+        strict_extra: bool = False,
+        run_at: Optional[str] = None,
+        constraints: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        """验证实际运行是否与事前承诺一致."""
-        committed = self._find_record(committed_hash)
+        """验证实际运行是否与事前承诺一致.
+
+        Args:
+            actual_config: 实际运行配置
+            committed_hash: 64 位 ``content_hash`` 或 8 位 ``commit_hash``
+            strict_extra: 实际配置出现承诺外的键 → 记为偏差
+            run_at: 实际运行时间；早于事前提案时间 → 记为偏差
+            constraints: ``{key: op}``，校验 actual 相对 committed 的方向，
+                op ∈ {">", ">=", "<", "<=", "==", "!="}
+        """
+        committed, matched_by = self._match_record(committed_hash)
         if committed is None:
-            return {'is_compliant': False, 'deviations': ['commit_hash not found'],
-                    'committed_spec': {}, 'actual_config': actual_config}
+            return {
+                'is_compliant': False,
+                'deviations': ['commit_hash not found'],
+                'committed_spec': {},
+                'actual_config': actual_config,
+                'matched_by': None,
+                'committed_at': None,
+            }
 
         committed_spec = committed.get('spec', {})
         deviations = []
         for key, committed_val in committed_spec.items():
             actual_val = actual_config.get(key)
             if actual_val != committed_val:
-                deviations.append(f"{key}: committed={committed_val}, actual={actual_val}")
+                deviations.append(
+                    f"{key}: committed={committed_val}, actual={actual_val}")
+
+        if strict_extra:
+            for key in actual_config:
+                if key not in committed_spec:
+                    deviations.append(
+                        f"{key}: extra key not in committed spec")
+
+        if run_at is not None:
+            committed_at = committed.get('timestamp')
+            if committed_at and _parse_dt(run_at) < _parse_dt(committed_at):
+                deviations.append("run_before_commit")
+
+        if constraints:
+            for key, op in constraints.items():
+                if op not in _CONSTRAINT_OPS:
+                    raise ValueError("不支持的约束运算符: %r" % (op,))
+                actual_val = actual_config.get(key)
+                committed_val = committed_spec.get(key)
+                if not _check_constraint(actual_val, committed_val, op):
+                    deviations.append(
+                        f"{key}: constraint {op} failed "
+                        f"(committed={committed_val}, actual={actual_val})")
 
         return {
             'is_compliant': len(deviations) == 0,
             'deviations': deviations,
             'committed_spec': committed_spec,
             'actual_config': actual_config,
+            'matched_by': matched_by,
+            'committed_at': committed.get('timestamp'),
         }
 
-    def _find_record(self, commit_hash: str) -> Optional[Dict]:
+    def _match_record(self, committed_hash: str):
+        """按 content_hash 精确匹配，再回退 commit_hash。"""
         if not os.path.exists(self.prereg_path):
-            return None
+            return None, None
         with open(self.prereg_path, 'r', encoding='utf-8') as f:
+            records = []
             for line in f:
                 try:
-                    rec = json.loads(line.strip())
-                    if rec.get('commit_hash') == commit_hash:
-                        return rec
+                    records.append(json.loads(line.strip()))
                 except json.JSONDecodeError:
                     continue
-        return None
+        for rec in records:
+            if rec.get('content_hash') == committed_hash:
+                return rec, 'content_hash'
+        for rec in records:
+            if rec.get('commit_hash') == committed_hash:
+                return rec, 'commit_hash'
+        return None, None
+
+    def _find_record(self, commit_hash: str) -> Optional[Dict]:
+        record, _ = self._match_record(commit_hash)
+        return record
+
+
+_CONSTRAINT_OPS = (">", ">=", "<", "<=", "==", "!=")
+
+
+def _parse_dt(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
+
+
+def _check_constraint(actual: Any, committed: Any, op: str) -> bool:
+    if actual is None or committed is None:
+        return False
+    try:
+        if op == ">":
+            return actual > committed
+        if op == ">=":
+            return actual >= committed
+        if op == "<":
+            return actual < committed
+        if op == "<=":
+            return actual <= committed
+        if op == "==":
+            return actual == committed
+        return actual != committed
+    except TypeError:
+        return False

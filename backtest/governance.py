@@ -43,6 +43,17 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1.0.0"
 GATE_NAMES = ("G0", "G1", "G2", "G3", "G3.5", "G4", "G5")
 
+# v3.7.0 E6: G2 分轨方法名（与 multiple_testing_ledger.CorrectionMethod
+# 逐字一致；本模块不 import ledger，T41b 在测试层做防漂移断言）
+_FDR_METHODS: FrozenSet[str] = frozenset({
+    "benjamini_hochberg", "benjamini_yekutieli",
+})
+_FWER_METHODS: FrozenSet[str] = frozenset({
+    "bonferroni", "holm", "romano_wolf", "white_rc", "hansen_spa",
+})
+_EFFECT_METRICS: Tuple[str, ...] = ("lambda_mean", "ic_mean", "sharpe")
+_OOS_KEYS: Tuple[str, ...] = ("metric", "value", "n_periods", "same_sign")
+
 # 口径枚举（DESIGN §5.7.2）；qfq 禁止进入 production / golden（G4）
 PRICE_CONVENTIONS: Tuple[str, ...] = (
     "hfq", "raw+adj_factor", "qfq", "total_return",
@@ -460,6 +471,34 @@ class GovernanceRecord(BaseModel):
             if value is not None and not (0.0 <= value <= 1.0):
                 raise ValueError("%s 必须在 [0, 1]" % name)
 
+        # v3.7.0 E6: DSR / PBO 取值域与 OOS 结构校验（设计 §10.3）
+        for name in ("dsr", "pbo"):
+            value = getattr(self, name)
+            if value is not None:
+                if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+                    raise ValueError("%s 必须在 [0, 1] 且有限" % name)
+        if self.oos_metric is not None:
+            if not isinstance(self.oos_metric, Mapping):
+                raise ValueError("oos_metric 必须是字典")
+            missing = [k for k in _OOS_KEYS if k not in self.oos_metric]
+            if missing:
+                raise ValueError("oos_metric 缺少字段: %s" % missing)
+            metric = self.oos_metric["metric"]
+            if not isinstance(metric, str) or not metric:
+                raise ValueError("oos_metric.metric 必须是非空字符串")
+            value = self.oos_metric["value"]
+            if (isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))):
+                raise ValueError("oos_metric.value 必须是有限数值")
+            n_periods = self.oos_metric["n_periods"]
+            if (isinstance(n_periods, bool)
+                    or not isinstance(n_periods, int)
+                    or n_periods < 1):
+                raise ValueError("oos_metric.n_periods 必须是 >= 1 的整数")
+            if not isinstance(self.oos_metric["same_sign"], bool):
+                raise ValueError("oos_metric.same_sign 必须是布尔值")
+
         # 价格复权口径（DESIGN §5.7.2 H3）：qfq 破坏可复现性
         if self.price_convention not in PRICE_CONVENTIONS:
             raise ValueError("price_convention 非法: %r" % self.price_convention)
@@ -562,6 +601,111 @@ class GovernanceRecord(BaseModel):
             raise ValueError("production 门禁未通过: %s" % failed)
         if not self.reviewer:
             raise ValueError("production 必须提供 reviewer")
+
+
+# ============================================================
+# G2 门禁（v3.7.0 E6）
+# ============================================================
+
+@dataclass(frozen=True)
+class G2Policy:
+    """G2 门禁阈值与开关（设计 §10.1）。"""
+
+    alpha: float = 0.05
+    dsr_threshold: float = 0.95
+    pbo_threshold: float = 0.10
+    require_dsr: bool = True
+    require_pbo: bool = False
+    require_oos: bool = True
+    require_effect: bool = True
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.alpha < 1.0):
+            raise ValueError("alpha 必须在 (0, 1) 内")
+        if not (0.0 <= self.dsr_threshold <= 1.0):
+            raise ValueError("dsr_threshold 必须在 [0, 1] 内")
+        if not (0.0 <= self.pbo_threshold <= 1.0):
+            raise ValueError("pbo_threshold 必须在 [0, 1] 内")
+
+
+def evaluate_g2(
+    record: "GovernanceRecord",
+    policy: Optional[G2Policy] = None,
+) -> GateResultPayload:
+    """评估 G2 门禁；失败只降级、不阻断、不写库。"""
+    policy = policy or G2Policy()
+    reasons: List[str] = []
+
+    stage_value = getattr(record.stage, "value", record.stage)
+    if stage_value not in ("S3", "final", "portfolio"):
+        reasons.append("stage_not_eligible")
+
+    method = getattr(record.correction_method, "value",
+                     record.correction_method)
+    known = method in _FDR_METHODS or method in _FWER_METHODS
+    if not known:
+        reasons.append("unknown_correction_method")
+
+    q_value = record.q_value
+    adjusted_p = record.adjusted_p
+    if q_value is not None and adjusted_p is not None:
+        reasons.append("ambiguous_track")
+    elif known:
+        if method in _FDR_METHODS:
+            track_value = q_value
+        else:
+            track_value = adjusted_p
+        if track_value is None:
+            reasons.append("missing_q_or_adjusted_p")
+        elif track_value > policy.alpha:
+            reasons.append("not_significant")
+
+    if policy.require_effect:
+        if (record.effect_metric not in _EFFECT_METRICS
+                or record.effect_size is None):
+            reasons.append("missing_effect")
+        elif (record.ci is None
+              or not (record.ci[0] <= record.effect_size <= record.ci[1])):
+            reasons.append("invalid_ci")
+
+    if record.n_trials is None or record.n_trials < 1:
+        reasons.append("missing_n_trials")
+
+    if policy.require_dsr:
+        if (record.dsr is None or not math.isfinite(record.dsr)
+                or record.dsr < policy.dsr_threshold):
+            reasons.append("dsr_below_threshold")
+
+    if policy.require_pbo:
+        if (record.pbo is None or not math.isfinite(record.pbo)
+                or record.pbo > policy.pbo_threshold):
+            reasons.append("pbo_above_threshold")
+
+    if policy.require_oos:
+        oos = record.oos_metric
+        if not isinstance(oos, Mapping):
+            reasons.append("missing_oos")
+        else:
+            missing = [k for k in _OOS_KEYS if k not in oos]
+            value = oos.get("value")
+            if (missing
+                    or not isinstance(oos.get("metric"), str)
+                    or not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(float(value))
+                    or not isinstance(oos.get("n_periods"), int)):
+                reasons.append("missing_oos")
+            elif oos.get("same_sign") is not True:
+                reasons.append("oos_not_same_sign")
+
+    passed = len(reasons) == 0
+    return GateResultPayload(
+        passed=passed,
+        reasons=reasons,
+        action="allow" if passed else "downgrade",
+        evidence_refs=[record.record_id],
+        evaluated_by="script",
+    )
 
 
 # ============================================================

@@ -55,7 +55,11 @@
 | ADR-052 | Golden master 回归基线 — parquet + manifest + 容差比较 | v3.6.0, 2026-11-18 |
 | ADR-053 | 多重检验台账与 bootstrap 索引注入 | v3.6.0, 2026-11-18 |
 | ADR-054 | 研究入口契约门禁 — 默认关闭 + FAIL exit 2 | v3.6.0, 2026-11-18 |
-| ADR-055 起 | 未占用 | — |
+| ADR-055 | 样本外协议与 holdout 全局锁 — CPCV + DuckDB 登记 | v3.7.0, 2026-11-18 |
+| ADR-056 | DSR/PBO 口径与阈值 — 逐期 SR + CSCV 严格整除 | v3.7.0, 2026-11-18 |
+| ADR-057 | 规格曲线 v2 与联合推断 — null-imposed bootstrap | v3.7.0, 2026-11-18 |
+| ADR-058 | 效应量/CI 与 G2 证据评估 — NW/bootstrap + downgrade | v3.7.0, 2026-11-18 |
+| ADR-059 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3715,6 +3719,157 @@ GR-2 若只作为库存在，研究脚本仍可绕过；强制接入又会改变
 - **正面**: 在真实数据上正确拦截 mv 5 日缺口（两脚本 dry-run exit 2）；
   不传参数时行为与 3.5.3 逐位一致。
 - **回滚**: 删除 `contract_gate.py` 与 4 个命令行参数（不接线即回退）。
+
+---
+
+## ADR-055: 样本外协议与 holdout 全局锁 — CPCV + DuckDB 登记 (v3.7.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.7.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_cross_validation.py` (T01-T14b, 16 例)
+**关联文档**: [设计 §4](docs/private/DESIGN_STAT_EVIDENCE_CHAIN.md) / [实施 §2.1](docs/EXECUTION_V3.7.0_STAT_EVIDENCE_CHAIN.md)
+
+### 背景
+
+月频标签下样本期短（开发样本 58 期），单路径 walk-forward 无法暴露路径依赖；
+holdout 此前只有 warning，无法阻止同一窗口被反复"研究"，样本外证据可被耗尽。
+
+### 决策
+
+1. 样本外主协议 **CPCV**（`CombinatorialPurgedKFold`，`N=6, k=2` → 15 条路径），
+   `PurgedKFold`（5 折）作单路径基线；purge / embargo 各 1 期，
+   训练集剔除 `[a−max(purge,label_horizon), b+embargo]`（保守口径）。
+2. 新增 `backtest/cross_validation.py`：`HoldoutRegistry` 以 DuckDB
+   `cv_holdout` 表登记（默认独立 `holdout_db.duckdb`），`holdout_id` 为
+   口径五元组的 SHA256（64 位）；**跨 batch 重叠窗口拒绝**，同 batch 同日历窗口幂等。
+3. `dev_mask()` 在 dev 末尾剔除 `purge` 期（2024-12 作为边界 purge，不入 dev/holdout）。
+
+### 替代方案（未采纳）
+
+- 单路径 walk-forward 为主协议（路径依赖不可见）；
+- holdout 仅告警（同一窗口可被反复消耗）；
+- holdout 用进程内文件锁（跨机器不可审计，故用 DuckDB 全局表）。
+
+### 后果
+
+- **正面**: 样本外一次性消耗可审计；CPCV 路径分布替代单点结论。
+- **代价**: dev 只剩 58 期（再裁边界 1 期），PBO 需裁 56；CPCV 每组约 9 期，估计噪声偏高——接受并披露。
+- **回滚**: 删除 `cross_validation.py`；不调用即原路径，零对外行为变化。
+
+---
+
+## ADR-056: DSR/PBO 口径与阈值 — 逐期 SR + CSCV 严格整除 (v3.7.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.7.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_overfitting.py` (T15-T26, 12 例)
+**关联文档**: [设计 §5-§6](docs/private/DESIGN_STAT_EVIDENCE_CHAIN.md) / [实施 §2.2-§2.3](docs/EXECUTION_V3.7.0_STAT_EVIDENCE_CHAIN.md)
+
+### 背景
+
+因子研究中"试了多少次"直接决定显著性；单看 Sharpe 会系统性高估，需要把多重试验与
+选择偏差折算为可比较的概率量。
+
+### 决策
+
+1. **DSR**（Bailey & López de Prado 2014）：逐期 Sharpe，`N` 取 ledger `n_trials`（保守上界），
+   `V[SR_n]` 默认 `1/(T−1)`，可选 `trial_sharpes` 经验方差；阈值 0.95 **仅作 G2 证据，不单独阻断**。
+2. **PBO**（Bailey et al. 2017, CSCV）：`T % S == 0` 严格校验，S 为偶数；提供
+   `trim_to_divisible(keep="recent")`（开发样本 58 → 56，`S=8` 主 / `S=14` 敏感）；
+   OOS 相对秩并列取平均秩；阈值 0.1 同样仅作证据。
+3. 新增 `backtest/overfitting.py`；`sharpe_ratio()` 定为**唯一公共 Sharpe 实现**，
+   `effect_size` 复用之，避免年化/逐期口径漂移。
+
+### 替代方案（未采纳）
+
+- 用年化 SR 直接代入 DSR（与 Bailey-LdP 原式不一致）；
+- PBO 用非严格整除的近似分块（块长不等，相对秩不可比）。
+
+### 后果
+
+- **正面**: 可复现的选择偏差概率量；口径唯一定义，跨模块不会各算一套。
+- **代价**: T=58 下 DSR 检验力低；需先有 trial 台账才能算 DSR/PBO。
+- **回滚**: 删除 `overfitting.py`；不影响既有回测路径。
+
+---
+
+## ADR-057: 规格曲线 v2 与联合推断 — null-imposed bootstrap (v3.7.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.7.0)
+**优先级**: P1
+**关联测试**: `tests/test_backtest/test_spec_curve_v2.py` (T34-T40b, 8 例) + `tests/test_backtest/test_specification_logger.py` (3 例)
+**关联文档**: [设计 §7-§8](docs/private/DESIGN_STAT_EVIDENCE_CHAIN.md) / [实施 §2.4](docs/EXECUTION_V3.7.0_STAT_EVIDENCE_CHAIN.md)
+
+### 背景
+
+旧 `specification_logger` 只存摘要，无法回答"整条规格曲线的联合显著性"，也无法
+持久化逐规格序列供复算（Simonsohn 2020 的 specification curve 要求全序列）。
+
+### 决策
+
+1. `spec_log.log_run` 追加 v2 可选字段（`spec_id` / `values` / `value_type` /
+   `parent_run_id` / `spec`），`schema_version="2"`；纯旧调用字段集合逐字不变。
+2. 新增 `get_specification_matrix()`：跳过非 v2 记录，长度不齐 `strict` 报错、非 strict
+   尾部截断并标记 `truncated=True`（下标为行号，便于定位）。
+3. 新增 `joint_inference()`：观测统计量用原始 values，零分布用**去中心化**后的
+   共享索引 stationary bootstrap（null-imposed）；输出 `median` / `share_significant` /
+   `aggregated_z`（Stouffer），`p=(1+#{≥})/(B+1)`；`resampling="iid"` 可复刻原文。
+4. `commit()` 增加 `content_hash`（SHA256，不含 timestamp）；`verify_compliance()`
+   优先按 `content_hash` 匹配并回退 `commit_hash`。
+
+### 替代方案（未采纳）
+
+- 只对规格曲线中位数做 t 检验（忽略规格间相关，且丢弃曲线形状）；
+- 默认沿用原文 iid 重采样（对时序残留自相关过乐观）。
+
+### 后果
+
+- **正面**: 规格曲线可联合推断；预注册比对不因 commit hash 截断而误判。
+- **代价**: 每条规格需存 T 个 float；旧日志只能做描述统计。
+- **回滚**: 不传 v2 参数即旧 schema；`get_specification_matrix` 跳过非 v2。
+
+---
+
+## ADR-058: 效应量/CI 与 G2 证据评估 — NW/bootstrap + downgrade (v3.7.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.7.0)
+**优先级**: P1
+**关联测试**: `tests/test_backtest/test_effect_size.py` (T27-T33, 8 例) + `tests/test_backtest/test_g2_gate.py` (T41-T46, 8 例) + `tests/test_backtest/test_multiple_testing_ledger.py` (5 例)
+**关联文档**: [设计 §9-§10](docs/private/DESIGN_STAT_EVIDENCE_CHAIN.md) / [实施 §2.5-§2.6](docs/EXECUTION_V3.7.0_STAT_EVIDENCE_CHAIN.md)
+
+### 背景
+
+"显著"之外还需效应量及其不确定性；且 FDR 与 FWER 两条校正轨道的证据要求不同，
+若无统一评估，门禁判定会散落在各脚本中且口径不一。
+
+### 决策
+
+1. 新增 `backtest/effect_size.py`：均值/IC 用 **Newey-West HAC**（Bartlett 核，
+   默认 `max(1, floor(4*(T/100)^(2/9)))`，`Omega/T`，不做小样本修正，与 statsmodels
+   `use_correction=False` 对齐）；Sharpe 用 **Politis-Romano stationary bootstrap**；
+   `effect_summary()` 按 metric 分流。
+2. `governance` 新增 `G2Policy` + `evaluate_g2()` **纯函数**：FDR 轨（bh/by）与
+   FWER 轨（bonferroni/holm/romano_wolf/white_rc/hansen_spa）分轨判定，
+   收集 `reasons`；失败返回 `action="downgrade"` 且**不写库**（不自动阻断研究）。
+3. `multiple_testing_ledger`：`FamilySpec.stage` ∈ {factor, portfolio}；
+   portfolio family 仅接受 S4/portfolio trial；`holdout_checker` 回调注入校验
+   （模块边界 D10：ledger 不 import cross_validation）。
+
+### 替代方案（未采纳）
+
+- G2 失败即硬阻断写库（研究流程僵化，且无法人工复核）；
+- 只报 p 值不报效应量/CI（无法区分统计显著与经济显著）；
+- 在 governance 内直接 import ledger/cross_validation 取数（破坏模块边界 D10）。
+
+### 后果
+
+- **正面**: S3 起强制 effect/CI；G2 判定可单测、可复算、与存储解耦。
+- **代价**: 每条 S3 记录多算一次 CI；G2 仍依赖上层/人工决策执行。
+- **回滚**: 不调用 `evaluate_g2` / 不传 `holdout_checker` 即原路径。
 
 ---
 
