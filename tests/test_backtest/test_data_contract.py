@@ -210,3 +210,112 @@ def test_t15_cache_hit_and_mtime_invariance(tmp_path):
     assert reader.calls == 2
     assert third.snapshot.fields["price"].content_digest == digest
     assert third.snapshot.stable_hash() == stable
+
+
+# ============================================================
+# T49 known_gaps 码与 §5.7.4 词汇表对齐（barra_stale / industry_stale）
+# ============================================================
+
+def test_t49_known_gap_codes_match_design_vocabulary(tmp_path):
+    close = _panel(pd.bdate_range("2026-01-26", "2026-01-30"),
+                   ["000001", "000002"])
+    _write_pickle(tmp_path, "close.pkl", close)
+
+    fields = [
+        FieldSpec("price", "close.pkl", max_lag=0),
+        FieldSpec("barra", "barra.pkl", max_lag=None, required=False,
+                  missing_semantics="known_gap"),
+        FieldSpec("industry", None, reader="industry", max_lag=None,
+                  required=False, missing_semantics="known_gap"),
+        FieldSpec("volume", "volume.pkl", required=False,
+                  missing_semantics="warn"),
+    ]
+    calendar = pd.bdate_range("2026-01-26", "2026-01-30")
+    report = check_data_contract(
+        str(tmp_path), sample_end="2026-01-30",
+        fields=fields, trading_calendar=calendar,
+    )
+
+    assert report.passed is True
+    codes = {gap.code for gap in report.known_gaps}
+    assert "barra_stale" in codes, codes
+    assert "industry_stale" in codes, codes
+    assert all(c.severity != "block" for c in report.blocking())
+
+
+# ============================================================
+# T50 adj_alignment 严重度随 mode（research=warn / production=block）
+# ============================================================
+
+def test_t50_adj_alignment_severity_follows_mode(tmp_path):
+    dates = pd.bdate_range("2026-01-26", "2026-01-30")
+    close = _panel(dates, ["000001", "000002"])
+    adj = _panel(dates[:3], ["000001", "000002"], value=1.0)
+    _write_pickle(tmp_path, "close.pkl", close)
+    _write_pickle(tmp_path, "adj.pkl", adj)
+
+    fields = [
+        FieldSpec("price", "close.pkl", max_lag=0),
+        FieldSpec("adj", "adj.pkl", semantic_type="adj_factor",
+                  max_lag=5, required=False),
+    ]
+    calendar = dates
+
+    default = check_data_contract(
+        str(tmp_path), sample_end="2026-01-30",
+        fields=fields, trading_calendar=calendar,
+    )
+    research = check_data_contract(
+        str(tmp_path), sample_end="2026-01-30",
+        fields=fields, trading_calendar=calendar, mode="research",
+    )
+    production = check_data_contract(
+        str(tmp_path), sample_end="2026-01-30",
+        fields=fields, trading_calendar=calendar, mode="production",
+    )
+
+    assert default.passed is True
+    assert research.passed is True
+    assert any(
+        c.check == "adj_alignment" and c.severity == "warn"
+        for c in research.checks
+    )
+
+    assert production.passed is False
+    blocking = [c for c in production.blocking() if c.check == "adj_alignment"]
+    assert blocking, "production 下 adj_alignment 未升级为 block"
+    assert all(c.severity == "block" for c in blocking)
+
+    with pytest.raises(ValueError):
+        check_data_contract(
+            str(tmp_path), sample_end="2026-01-30",
+            fields=fields, trading_calendar=calendar, mode="magic",
+        )
+
+
+# ============================================================
+# T53 known_gap 码名集中映射（修复包 F3 / 复审 R3）
+# ============================================================
+
+def test_t53_gap_code_mapping_centralized(tmp_path):
+    from factor_pipeline.backtest.data_contract import GAP_CODE_BY_FIELD
+
+    assert GAP_CODE_BY_FIELD["barra"] == "barra_stale"
+    assert GAP_CODE_BY_FIELD["industry"] == "industry_stale"
+
+    # 映射外字段回退 <name>_missing（兜底语义不变）
+    close = _panel(pd.bdate_range("2026-01-26", "2026-01-30"), ["000001"])
+    _write_pickle(tmp_path, "close.pkl", close)
+    fields = [
+        FieldSpec("price", "close.pkl", max_lag=0),
+        FieldSpec("delist", "delist.pkl", required=False,
+                  missing_semantics="known_gap"),
+    ]
+    report = check_data_contract(
+        str(tmp_path), sample_end="2026-01-30",
+        fields=fields,
+        trading_calendar=pd.bdate_range("2026-01-26", "2026-01-30"),
+    )
+    codes = {gap.code for gap in report.known_gaps}
+    assert "delist_missing" in codes, codes
+    assert report.passed is True

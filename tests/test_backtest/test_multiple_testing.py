@@ -898,3 +898,108 @@ class TestBootstrapMethods:
         with pytest.raises(ValueError, match="method"):
             WhiteRealityCheck(method='invalid')
 
+
+# ============================================================
+# T55-T56 / T59 性能包：向量化等价性 + 烟测（P2-1 修复）
+# ============================================================
+
+def _bh_reference(p_values, alpha):
+    """朴素 BH 参考实现（逐条循环，含 ties 稳定排序）。"""
+    m = len(p_values)
+    if m == 0:
+        return [], []
+    order = sorted(range(m), key=lambda i: p_values[i])
+    adjusted = [0.0] * m
+    prev = 1.0
+    for pos in range(m - 1, -1, -1):
+        idx = order[pos]
+        value = min(prev, p_values[idx] * m / (pos + 1))
+        prev = value
+        adjusted[idx] = min(value, 1.0)
+    sorted_p = sorted(p_values)
+    k_star = 0
+    for k in range(1, m + 1):
+        if sorted_p[k - 1] <= alpha * k / m:
+            k_star = k
+    sig_sorted = [pos < k_star for pos in range(m)]
+    rejected = [False] * m
+    for pos, idx in enumerate(order):
+        rejected[idx] = sig_sorted[pos]
+    return adjusted, rejected
+
+
+def _rw_reference(p_arr, boot, alpha, k):
+    """朴素 Romano-Wolf stepdown 参考实现（逐 j 重排前缀子矩阵）。"""
+    m = len(p_arr)
+    order = np.argsort(p_arr, kind="stable")
+    sorted_p = p_arr[order]
+    sorted_boot = np.sort(boot, axis=1)
+    adjusted = np.zeros(m)
+    for j in range(m):
+        sub = sorted_boot[:, : j + 1]
+        if sub.shape[1] >= k:
+            kth = np.sort(sub, axis=1)[:, k - 1]
+        else:
+            kth = sub[:, -1]
+        adjusted[j] = float(np.mean(kth <= sorted_p[j]))
+    adjusted = np.maximum.accumulate(np.clip(adjusted, 0.0, 1.0))
+    rejected_sorted = np.zeros(m, dtype=bool)
+    for j in range(m):
+        if adjusted[j] <= alpha:
+            rejected_sorted[j] = True
+        else:
+            break
+    rejected = np.zeros(m, dtype=bool)
+    rejected[order] = rejected_sorted
+    adjusted_out = np.zeros(m)
+    adjusted_out[order] = adjusted
+    return adjusted_out.tolist(), rejected.tolist()
+
+
+@pytest.mark.parametrize("m", [1, 7, 50])
+def test_t55_bh_vectorized_matches_reference(m):
+    rng = np.random.default_rng(20261118 + m)
+    # 保留两位小数制造 ties
+    p = np.round(rng.random(m), 2).tolist()
+    got_adj, got_sig = apply_bh_fdr(p, alpha=0.1)
+    exp_adj, exp_sig = _bh_reference(p, 0.1)
+    assert got_adj == exp_adj
+    assert got_sig == exp_sig
+
+
+@pytest.mark.parametrize("k", [1, 3])
+def test_t56_rw_vectorized_matches_reference(k):
+    rng = np.random.default_rng(777 + k)
+    m, B = 15, 20
+    p = np.round(rng.random(m), 2)
+    boot = rng.random((B, m))
+    got_adj, got_rej = apply_romano_wolf(
+        p.tolist(), boot, alpha=0.1, k=k, method="stepdown")
+    exp_adj, exp_rej = _rw_reference(p, boot, 0.1, k)
+    assert got_adj == exp_adj
+    assert got_rej == exp_rej
+
+
+def test_t59_perf_smoke_complexity_guard():
+    """复杂度烟测（阈值宽松，防向量化退回 O(n^2)）。"""
+    import time
+
+    rng = np.random.default_rng(59)
+
+    p100k = rng.random(100000).tolist()
+    t = time.perf_counter()
+    apply_bh_fdr(p100k)
+    assert time.perf_counter() - t < 0.5, "BH 100k 复杂度回退"
+
+    boot = rng.random((300, 300))
+    p300 = rng.random(300).tolist()
+    t = time.perf_counter()
+    apply_romano_wolf(p300, boot)
+    assert time.perf_counter() - t < 1.0, "RW 300x300 复杂度回退"
+
+    R = rng.normal(size=(200, 21))
+    wrc = WhiteRealityCheck(n_bootstrap=100, block_size=5, random_state=1)
+    t = time.perf_counter()
+    wrc.test(R, benchmark_index=0)
+    assert time.perf_counter() - t < 5.0, "White 小尺寸复杂度回退"
+

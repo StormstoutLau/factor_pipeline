@@ -30,6 +30,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -42,6 +43,19 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1.0.0"
 GATE_NAMES = ("G0", "G1", "G2", "G3", "G3.5", "G4", "G5")
 
+# 口径枚举（DESIGN §5.7.2）；qfq 禁止进入 production / golden（G4）
+PRICE_CONVENTIONS: Tuple[str, ...] = (
+    "hfq", "raw+adj_factor", "qfq", "total_return",
+)
+ST_SOURCES: Tuple[str, ...] = ("name_proxy", "official_flag")
+SUSPEND_SOURCES: Tuple[str, ...] = (
+    "event_rebuild", "amount_proxy", "daily_flag",
+)
+TRADABLE_SOURCE_DEFAULTS: Dict[str, str] = {
+    "st_source": "name_proxy",
+    "suspend_source": "event_rebuild",
+}
+
 # 参与 record_id 的输入身份字段（结果字段不参与）
 ID_FIELDS: Tuple[str, ...] = (
     "batch_id", "parent_id", "experiment_id", "factor_id", "variant_id",
@@ -50,10 +64,19 @@ ID_FIELDS: Tuple[str, ...] = (
     "gate_policy_version",
     "data_snapshot_hash", "universe_version", "sample_window", "split_id",
     "holdout_locked_at",
-    "benchmark_id", "return_convention", "tradable_convention", "cost_model",
+    "benchmark_id", "price_convention", "return_convention",
+    "tradable_convention", "cost_model",
     "sign_convention",
     "seed",
 )
+
+# 参与 record_id 且带模型默认值的字段：build() 必须在算 id 前注入默认，
+# 否则「省略」与「显式传默认值」两条语义等价的输入会得到不同 record_id
+# （复审 R1 / 修复包 F1；DR-F1）
+ID_DEFAULTS: Dict[str, Any] = {
+    "price_convention": "hfq",
+    "gate_policy_version": "1.0.0",
+}
 
 # payload_hash 排除的易变/运维字段
 HASH_EXCLUDED: FrozenSet[str] = frozenset({
@@ -174,14 +197,28 @@ def _jsonable(obj: Any) -> Any:
 
 
 def canonical_json(obj: Any) -> str:
-    """稳定 JSON：键排序 + 紧凑分隔符；Enum 取 value，NaN → None。"""
-    return json.dumps(
-        _jsonable(obj),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    )
+    """稳定 JSON：键排序 + 紧凑分隔符；Enum 取 value，NaN → None。
+
+    快路径（性能包 O1）：``model_dump(mode="json")`` 产物已是 JSON-native，
+    直接 dumps 可省去 Python 层递归 ``_jsonable``（10k 记录约 0.6s）；
+    非 native 值触发 TypeError、NaN 触发 ValueError 时回退原路径，语义不变。
+    """
+    try:
+        return json.dumps(
+            obj,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return json.dumps(
+            _jsonable(obj),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
 
 
 def _as_mapping(value: Any) -> Any:
@@ -198,8 +235,11 @@ def compute_record_id(fields: Mapping[str, Any]) -> str:
 
 def compute_payload_hash(payload: Mapping[str, Any]) -> str:
     """payload_hash = 全 payload 排除易变/运维字段后的 SHA256。"""
+    # 性能包 O1：payload 来自 model_dump(mode="json") 时为 JSON-native，
+    # 不再逐字段走 _jsonable（10k 记录约 0.4s）；非 native / NaN 由
+    # canonical_json 回退路径按原语义归一。
     body = {
-        str(key): _jsonable(value)
+        str(key): value
         for key, value in payload.items()
         if key not in HASH_EXCLUDED
     }
@@ -331,8 +371,9 @@ class GovernanceRecord(BaseModel):
     split_id: Optional[str] = None
     holdout_locked_at: Optional[str] = None
 
-    # —— 口径（5）——
+    # —— 口径（6）——
     benchmark_id: str
+    price_convention: str = "hfq"
     return_convention: str
     tradable_convention: Dict[str, Any]
     cost_model: Dict[str, Any]
@@ -383,6 +424,12 @@ class GovernanceRecord(BaseModel):
         for key in ("tradable_convention", "cost_model"):
             if key in data:
                 data[key] = _as_mapping(data[key])
+        # 代理口径必须写入 record（DESIGN §5.7.2 H1）：缺省补默认，显式值保留
+        tradable = data.get("tradable_convention")
+        if isinstance(tradable, Mapping):
+            data["tradable_convention"] = {
+                **TRADABLE_SOURCE_DEFAULTS, **dict(tradable)
+            }
         if isinstance(data.get("sample_window"), Mapping):
             data["sample_window"] = {
                 str(k): (v if isinstance(v, str) else _normalize_time(v))
@@ -394,6 +441,9 @@ class GovernanceRecord(BaseModel):
             )
         if data.get("env_fingerprint") is None:
             data["env_fingerprint"] = env_fingerprint()
+        # ID 默认值注入（DR-F1）：在计算 record_id 之前，保证省略 == 显式默认
+        for _key, _default in ID_DEFAULTS.items():
+            data.setdefault(_key, _default)
         data["record_id"] = compute_record_id(data)
         return cls(**data)
 
@@ -409,6 +459,35 @@ class GovernanceRecord(BaseModel):
             value = getattr(self, name)
             if value is not None and not (0.0 <= value <= 1.0):
                 raise ValueError("%s 必须在 [0, 1]" % name)
+
+        # 价格复权口径（DESIGN §5.7.2 H3）：qfq 破坏可复现性
+        if self.price_convention not in PRICE_CONVENTIONS:
+            raise ValueError("price_convention 非法: %r" % self.price_convention)
+        # golden 场景 = G4 存在且通过（DR-F2）：G4 失败的留档记录不是基线，
+        # 允许其携带 qfq 记录失败证据；G4 通过则拒绝 qfq（防回归）
+        _g4 = self.gate_status.get("G4")
+        golden = bool(_g4 is not None and getattr(_g4, "passed", False))
+        if self.price_convention == "qfq" and (
+            self.mode == Mode.PRODUCTION or golden
+        ):
+            raise ValueError(
+                "price_convention='qfq' 禁止用于 production/golden（防回归）")
+
+        # ST/停牌代理口径必须写入且枚举合法（H1）
+        missing_sources = [
+            k for k in TRADABLE_SOURCE_DEFAULTS
+            if not self.tradable_convention.get(k)
+        ]
+        if missing_sources:
+            raise ValueError(
+                "tradable_convention 缺少代理口径: %s" % missing_sources)
+        if self.tradable_convention["st_source"] not in ST_SOURCES:
+            raise ValueError(
+                "st_source 非法: %r" % self.tradable_convention["st_source"])
+        if self.tradable_convention["suspend_source"] not in SUSPEND_SOURCES:
+            raise ValueError(
+                "suspend_source 非法: %r"
+                % self.tradable_convention["suspend_source"])
         if self.ci is not None and self.ci[0] > self.ci[1]:
             raise ValueError("ci 需满足 low <= high")
         counters = (self.n_trials, self.n_testable, self.n_hypotheses)
@@ -735,31 +814,46 @@ class GovernanceStore:
             return inserted
 
         self._connect()
-        pending: List[GovernanceRecord] = []
-        hashes: Dict[str, str] = {}
-        for record_id, record in unique.items():
-            digest = compute_payload_hash(record.model_dump(mode="json"))
-            if self._decide(record_id, digest):
-                pending.append(record)
-                hashes[record_id] = digest
+        # 每条记录只 dump/序列化一次（性能包 O1）
+        rows: List[Dict[str, Any]] = []
+        for record in unique.values():
+            payload = record.model_dump(mode="json")
+            rows.append({
+                "record_id": record.record_id,
+                "schema_version": record.schema_version,
+                "factor_id": record.factor_id,
+                "batch_id": record.batch_id,
+                "experiment_id": record.experiment_id,
+                "stage": record.stage.value,
+                "mode": record.mode.value,
+                "status": record.status.value,
+                "payload": canonical_json(payload),
+                "payload_hash": compute_payload_hash(payload),
+            })
+
+        # 批量存在性检查：一次 JOIN，替代逐条 _decide 查询
+        existing = self._existing_hashes([row["record_id"] for row in rows])
+        pending: List[Dict[str, Any]] = []
+        for row in rows:
+            record_id = row["record_id"]
+            if record_id not in existing:
+                pending.append(row)
+                continue
+            if existing[record_id] == row["payload_hash"]:
+                continue
+            if self.on_conflict == "keep_first":
+                logger.warning(
+                    "record_id %s 已存在且 payload 不同，keep_first 保留首条",
+                    record_id,
+                )
+                continue
+            raise ReproducibilityConflictError(
+                "record_id %s 对应不同 payload（结果不可复现）" % record_id
+            )
         if not pending:
             return 0
 
-        frame = pd.DataFrame([
-            {
-                "record_id": r.record_id,
-                "schema_version": r.schema_version,
-                "factor_id": r.factor_id,
-                "batch_id": r.batch_id,
-                "experiment_id": r.experiment_id,
-                "stage": r.stage.value,
-                "mode": r.mode.value,
-                "status": r.status.value,
-                "payload": canonical_json(r.model_dump(mode="json")),
-                "payload_hash": hashes[r.record_id],
-            }
-            for r in pending
-        ])
+        frame = pd.DataFrame(pending)
         self._conn.register("_gr_batch", frame)
         try:
             self._conn.execute(
@@ -776,6 +870,24 @@ class GovernanceStore:
         finally:
             self._conn.unregister("_gr_batch")
         return len(pending)
+
+    def _existing_hashes(self, record_ids: Sequence[str]) -> Dict[str, str]:
+        """批量取已存在记录的 payload_hash（一次注册 + JOIN）。"""
+        if not record_ids:
+            return {}
+        probe = pd.DataFrame({"record_id": list(record_ids)})
+        self._conn.register("_gr_probe", probe)
+        try:
+            rows = self._conn.execute(
+                """
+                SELECT p.record_id, t.payload_hash
+                FROM _gr_probe p
+                JOIN {t} t ON t.record_id = p.record_id
+                """.format(t=self.table)
+            ).fetchall()
+        finally:
+            self._conn.unregister("_gr_probe")
+        return {row[0]: row[1] for row in rows}
 
     def get(
         self, record_id: str,

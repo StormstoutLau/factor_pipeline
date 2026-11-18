@@ -86,32 +86,26 @@ def apply_bh_fdr(
     K = len(p_values)
     p_arr = np.asarray(p_values, dtype=float)
 
-    # BH 校正: 排序, 从大到小累积 min
-    order = np.argsort(p_arr)
-    p_adj = np.empty_like(p_arr)
-    prev = 1.0
-    for i in range(K - 1, -1, -1):
-        rank = i + 1
-        idx = order[i]
-        bh = p_arr[idx] * K / rank
-        prev = min(prev, bh)
-        p_adj[idx] = min(prev, 1.0)
+    # BH 校正（性能包 O2）：排序 → 反向累积 min → 按原序还原
+    order = np.argsort(p_arr, kind="stable")
+    ranks = np.arange(1, K + 1, dtype=float)
+    adj_sorted = p_arr[order] * K / ranks
+    adj_sorted = np.minimum.accumulate(adj_sorted[::-1])[::-1]
+    adj_sorted = np.minimum(adj_sorted, 1.0)
+    p_adj = np.empty(K, dtype=float)
+    p_adj[order] = adj_sorted
 
-    # 显著性判定: BH step-up procedure
-    # 找到最大的 k 使 p_(k) <= alpha * k / K
-    sorted_p = np.sort(p_arr)
+    # 显著性判定: BH step-up procedure（最大 k 使 p_(k) <= alpha * k / K）
+    sorted_p = p_arr[order]
+    step_mask = sorted_p <= alpha * ranks / K
+    if step_mask.any():
+        k_star = int(np.nonzero(step_mask)[0][-1]) + 1
+    else:
+        k_star = 0
     is_sig_sorted = np.zeros(K, dtype=bool)
-    k_star = 0
-    for k in range(1, K + 1):
-        if sorted_p[k - 1] <= alpha * k / K:
-            k_star = k
-    if k_star > 0:
-        is_sig_sorted[:k_star] = True
-
-    # 还原到原顺序
-    is_significant = np.zeros(K, dtype=bool)
-    for i in range(K):
-        is_significant[order[i]] = is_sig_sorted[i]
+    is_sig_sorted[:k_star] = True
+    is_significant = np.empty(K, dtype=bool)
+    is_significant[order] = is_sig_sorted
 
     return p_adj.tolist(), is_significant.tolist()
 
@@ -550,30 +544,31 @@ def _romano_wolf_stepdown(
     sorted_p = p_arr[order]
     # bootstrap 每行排序
     sorted_boot = np.sort(bootstrap_p_values, axis=1)  # (B, m)
+    B = sorted_boot.shape[0]
 
     # ---- 调整后 p 值 (经验 CDF) ----
+    # 性能包 O3：行内前缀有序 ⇒ j >= k-1 时「前缀第 k 小」恒等于整行第 k 小
+    # sorted_boot[:, k-1]，可一次 searchsorted 求出全部 CDF，消除逐 j 重排。
     adjusted_sorted = np.zeros(m)
-    for j in range(m):
-        # 在每行前 (j+1) 个最小 bootstrap p 值中取第 k 小
-        submatrix = sorted_boot[:, : j + 1]  # (B, j+1)
-        if submatrix.shape[1] >= k:
-            kth_in_sub = np.sort(submatrix, axis=1)[:, k - 1]
-        else:
-            # 列数 < k, 退化为取该行最大 (第 j+1 小)
-            kth_in_sub = submatrix[:, -1]
-        # p_adj_(j) = P*(kth_in_sub ≤ p_(j))  (经验 CDF)
-        adjusted_sorted[j] = float(np.mean(kth_in_sub <= sorted_p[j]))
+    head = min(k - 1, m)
+    for j in range(head):
+        # 前缀长度 < k：退化为取该行最大（第 j+1 小）
+        column = sorted_boot[:, j]
+        adjusted_sorted[j] = np.count_nonzero(
+            column <= sorted_p[j]) / float(B)
+    if m > head:
+        kth = np.sort(sorted_boot[:, k - 1])
+        counts = np.searchsorted(kth, sorted_p[head:], side="right")
+        adjusted_sorted[head:] = counts / float(B)
     # 累积最大 (stepdown 单调性: p_adj 应非减)
     adjusted_sorted = np.maximum.accumulate(adjusted_sorted)
     adjusted_sorted = np.clip(adjusted_sorted, 0.0, 1.0)
 
     # ---- 拒绝判定 (stepdown: 找最大 j* 使 p_adj_(j*) ≤ α, 拒绝 1..j*) ----
+    over = np.nonzero(adjusted_sorted > alpha)[0]
+    stop = int(over[0]) if over.size else m
     rejected_sorted = np.zeros(m, dtype=bool)
-    for j in range(m):
-        if adjusted_sorted[j] <= alpha:
-            rejected_sorted[j] = True
-        else:
-            break  # stepdown: 一旦不拒绝, 后续都不拒绝
+    rejected_sorted[:stop] = True
 
     # 还原原始顺序
     rejected = np.zeros(m, dtype=bool)
@@ -638,11 +633,10 @@ def apply_romano_wolf(
         # 拒绝: p_adj[i] ≤ α
         m = len(p_arr)
         k_idx = min(k - 1, m - 1)
-        kth_smallest = np.sort(boot, axis=1)[:, k_idx]
-        adjusted = np.array(
-            [float(np.mean(kth_smallest <= p_arr[i])) for i in range(m)]
-        )
-        adjusted = np.clip(adjusted, 0.0, 1.0)
+        # 性能包 O3：一次性求经验 CDF（等价于旧逐项 np.mean 循环）
+        kth_smallest = np.sort(np.sort(boot, axis=1)[:, k_idx])
+        counts = np.searchsorted(kth_smallest, p_arr, side="right")
+        adjusted = np.clip(counts / float(boot.shape[0]), 0.0, 1.0)
         rejected = (adjusted <= alpha).tolist()
         return adjusted.tolist(), rejected
     else:
@@ -736,6 +730,50 @@ def _stationary_bootstrap_index(T: int, block_size: float, rng: np.random.Genera
         else:
             idx[t] = (idx[t - 1] + 1) % T
     return idx
+
+
+def _stationary_indices_multi(
+    T: int, prob_new: np.ndarray, n_samples: int, rng: np.random.Generator
+) -> np.ndarray:
+    """向量化 stationary bootstrap 索引矩阵 (n_samples, K, T)（性能包 O4）。
+
+    ``prob_new`` 形状 (K,)：每列独立块大小（概率 1/block_size）。
+    沿 t 递推、跨 (n_samples, K) 并行；与逐样本循环同分布。
+    """
+    prob = np.atleast_1d(np.asarray(prob_new, dtype=float))
+    K = prob.shape[0]
+    idx = np.empty((n_samples, K, T), dtype=np.intp)
+    idx[:, :, 0] = rng.integers(0, T, size=(n_samples, K))
+    if T == 1:
+        return idx
+    u = rng.random((n_samples, K, T - 1))
+    starts = rng.integers(0, T, size=(n_samples, K, T - 1))
+    for t in range(1, T):
+        idx[:, :, t] = np.where(
+            u[:, :, t - 1] < prob[None, :],
+            starts[:, :, t - 1],
+            (idx[:, :, t - 1] + 1) % T,
+        )
+    return idx
+
+
+def _circular_indices_multi(
+    T: int, block_size: int, n_samples: int, rng: np.random.Generator,
+    K: int = 1,
+) -> np.ndarray:
+    """向量化 circular block bootstrap 索引矩阵 (n_samples, K, T)（O4）。"""
+    B = max(int(block_size), 1)
+    n_blocks = int(np.ceil(T / float(B)))
+    starts = rng.integers(0, T, size=(n_samples, K, n_blocks, 1))
+    offsets = np.arange(B, dtype=np.intp)[None, None, None, :]
+    grid = (starts + offsets) % T
+    return grid.reshape(n_samples, K, n_blocks * B)[:, :, :T]
+
+
+def _bootstrap_batch_rows(T: int, K: int, total: int) -> int:
+    """分块行数：三个 (b, K, T) 工作数组控制在 ~128MB 内。"""
+    per_row = max(1, T * K * 8 * 3)
+    return max(1, min(int(total), (128 * 1024 * 1024) // per_row))
 
 
 def _auto_block_size(T: int) -> int:
@@ -1011,6 +1049,42 @@ class WhiteRealityCheck:
             return self._circular_block_bootstrap(x, int(round(float(block_size))))
         return self._stationary_block_bootstrap(x, float(block_size))
 
+    # —— 向量化批量（性能包 O4）——
+
+    def _indices_batch(
+        self, T: int, block_sizes, n_samples: int,
+    ) -> np.ndarray:
+        """(n_samples, K, T) 索引矩阵；block_sizes 标量或 (K,) 数组。"""
+        bs = np.atleast_1d(np.asarray(block_sizes, dtype=float))
+        K = bs.shape[0]
+        if self.method == 'circular':
+            sizes = np.maximum(np.round(bs).astype(int), 1)
+            if np.unique(sizes).size == 1:
+                return _circular_indices_multi(
+                    T, int(sizes[0]), n_samples, self.rng, K=K)
+            # 逐列块大小不同（auto 估计）：按列独立生成后拼接，保持旧语义
+            parts = [
+                _circular_indices_multi(T, int(s), n_samples, self.rng, K=1)
+                for s in sizes
+            ]
+            return np.concatenate(parts, axis=1)
+        return _stationary_indices_multi(T, 1.0 / bs, n_samples, self.rng)
+
+    def _bootstrap_means(self, excess: np.ndarray, block_sizes) -> np.ndarray:
+        """分块返回 (B, K) bootstrap 均值（每列独立块大小）。"""
+        T, K = excess.shape
+        n = self.n_bootstrap
+        means = np.empty((n, K), dtype=float)
+        if K == 0:
+            return means
+        rows = _bootstrap_batch_rows(T, K, n)
+        cols = np.arange(K, dtype=np.intp)[None, :, None]
+        for start in range(0, n, rows):
+            end = min(start + rows, n)
+            idx = self._indices_batch(T, block_sizes, end - start)
+            means[start:end] = excess[idx, cols].mean(axis=2)
+        return means
+
     def _estimate_long_run_var(self, x: np.ndarray) -> float:
         """长期方差估计 omega^2 (Newey-West), 复用模块级函数"""
         return _estimate_long_run_var(x)
@@ -1121,29 +1195,30 @@ class WhiteRealityCheck:
                 excess, f_bar, sqrt_T, bootstrap_indices
             )
         else:
-            bootstrap_max_stats = np.zeros(self.n_bootstrap)
-            for b in range(self.n_bootstrap):
-                boot_excess = np.empty_like(excess)
-                for k in range(K):
-                    boot_excess[:, k] = self._bootstrap(excess[:, k], B)
-                f_boot = boot_excess.mean(axis=0)
-                # recenter by f_bar (White RC: under H0, f_bar = 0)
-                V_boot = float(sqrt_T * np.max(f_boot - f_bar)) if K > 0 else 0.0
-                bootstrap_max_stats[b] = V_boot
+            # 性能包 O4：分块向量化，替代 b×k×t 逐位置 Python 循环
+            if K == 0:
+                bootstrap_max_stats = np.zeros(self.n_bootstrap)
+                individual_p = []
+            else:
+                joint_sizes = np.full(K, B, dtype=float)
+                boot_means = self._bootstrap_means(excess, joint_sizes)
+                bootstrap_max_stats = sqrt_T * np.max(
+                    boot_means - f_bar, axis=1)
 
-            # 各策略单独 p 值 (无校正): 单策略 bootstrap 检验
-            individual_p = []
-            for k in range(K):
-                f_k = excess[:, k]
-                B_k = self.block_size if self.block_size is not None else self._auto_block_size(f_k)
-                boot_k = np.array([
-                    self._bootstrap(f_k, B_k).mean()
-                    for _ in range(self.n_bootstrap)
-                ])
-                stat_k = sqrt_T * f_bar[k]
-                boot_stat_k = sqrt_T * (boot_k - f_bar[k])
-                p_k = float(np.mean(boot_stat_k >= stat_k))
-                individual_p.append(min(max(p_k, 0.0), 1.0))
+                # 各策略单独 p 值（无校正）：块大小与联合一致；auto 时逐列估计
+                if self.block_size is not None:
+                    ind_means = boot_means
+                else:
+                    ind_sizes = np.array(
+                        [self._auto_block_size(excess[:, k])
+                         for k in range(K)], dtype=float)
+                    ind_means = self._bootstrap_means(excess, ind_sizes)
+                individual_p = []
+                for k in range(K):
+                    stat_k = sqrt_T * f_bar[k]
+                    boot_stat_k = sqrt_T * (ind_means[:, k] - f_bar[k])
+                    p_k = float(np.mean(boot_stat_k >= stat_k))
+                    individual_p.append(min(max(p_k, 0.0), 1.0))
 
         rc_p_value = float(np.mean(bootstrap_max_stats >= V))
         rc_p_value = min(max(rc_p_value, 0.0), 1.0)
@@ -1319,25 +1394,22 @@ class HansenSPA(WhiteRealityCheck):
                     excess, f_bar, sqrt_T, bootstrap_indices, in_h1
                 )
         else:
-            boot_stats = np.zeros(self.n_bootstrap)       # consistent
-            boot_stats_lc = np.zeros(self.n_bootstrap)    # lower (更保守)
-            boot_stats_uc = np.zeros(self.n_bootstrap)    # upper (更宽松)
-
-            for b in range(self.n_bootstrap):
-                boot_excess = np.empty_like(excess)
-                for k in range(K):
-                    boot_excess[:, k] = self._bootstrap(excess[:, k], B)
-                f_boot = boot_excess.mean(axis=0)
-
-                # recenter: 所有策略减去 f_bar (consistent 与 lc 用此, 中心化到 0 under H0)
-                f_recentered_all = f_boot - f_bar
-
-                # consistent: max over H1 of (f_boot - f_bar)
-                boot_stats[b] = _spa_stat(f_recentered_all, in_h1)
-                # lower consistent: max over ALL of (f_boot - f_bar) — 包含 H0
-                boot_stats_lc[b] = _spa_stat(f_recentered_all, np.ones(K, dtype=bool))
-                # upper consistent: 空集 → 统计量恒 0 (所有 H0 视为真 H1, 无待检验模型)
-                boot_stats_uc[b] = 0.0
+            # 性能包 O4：分块向量化
+            if K == 0:
+                boot_stats = np.zeros(self.n_bootstrap)
+                boot_stats_lc = np.zeros(self.n_bootstrap)
+            else:
+                boot_means = self._bootstrap_means(
+                    excess, np.full(K, B, dtype=float))
+                f_recentered_all = boot_means - f_bar
+                if in_h1.any():
+                    boot_stats = sqrt_T * np.max(
+                        f_recentered_all[:, in_h1], axis=1)
+                else:
+                    boot_stats = np.zeros(self.n_bootstrap)
+                boot_stats_lc = sqrt_T * np.max(f_recentered_all, axis=1)
+            # upper consistent: 空集 → 统计量恒 0 (所有 H0 视为真 H1, 无待检验模型)
+            boot_stats_uc = np.zeros(self.n_bootstrap)
 
         spa_p = float(np.mean(boot_stats >= V_spa))
         spa_lc_p = float(np.mean(boot_stats_lc >= V_spa))

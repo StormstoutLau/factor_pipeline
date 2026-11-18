@@ -9,7 +9,7 @@ Fix 3: 版本号统一 — TDD 测试
   - test_config_v2.py:  期望 '2.0.0' (历史失败)
   - test_reporting.py:  期望 "2.0.0"
 
-统一目标 (v3.4.8 首次统一, 2026-11-15; 锚点随版本演进, 当前 3.5.3): 四处声明保持一致
+统一目标 (v3.4.8 首次统一, 2026-11-15; 锚点随版本演进, 当前 3.6.0): 四处声明保持一致
   - __init__.py / config_v2.py / reporting.py / pyproject.toml
   - 缓存 code_version = "v2.3.0-cache" (缓存语义版本, 非项目版本;
     因 PL-02 变换 / PL-06 Mixed 缩尾 / PL-05 AR 解耦 / PL-08 AR 阶数选择
@@ -31,7 +31,7 @@ for ext in ["F:/Coding/Factor_Fingerprint", "F:/Coding/Factor_Decoupler"]:
         sys.path.insert(0, ext)
 
 # 期望的统一版本号
-EXPECTED_VERSION = "3.5.3"
+EXPECTED_VERSION = "3.6.0"
 
 
 class TestFix3VersionUnification(unittest.TestCase):
@@ -148,6 +148,49 @@ class TestFix3VersionUnification(unittest.TestCase):
             f"pyproject.toml version({declared}) != __version__({factor_pipeline.__version__})"
         )
         self.assertEqual(declared, EXPECTED_VERSION)
+
+    def test_08_old_versions_include_previous_release(self):
+        """test_08: OLD_VERSIONS 含上一发布版本 3.5.3（修复包 F4 / 复审 R4）.
+
+        用 ast 解析而非 import: verify_fix3_manual.py 是脚本,
+        import 会执行其顶层断言与打印.
+        """
+        import ast
+
+        script = (
+            Path(__file__).resolve().parent / "test_backtest"
+            / "verify_fix3_manual.py"
+        )
+        self.assertTrue(script.exists(), f"未找到校验脚本: {script}")
+        tree = ast.parse(script.read_text(encoding="utf-8"))
+        old_versions = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "OLD_VERSIONS":
+                        old_versions = ast.literal_eval(node.value)
+        self.assertIsNotNone(old_versions, "脚本未找到 OLD_VERSIONS 定义")
+        self.assertIn("3.5.3", old_versions, "OLD_VERSIONS 缺少上一发布版本 3.5.3")
+        self.assertIn("2.0.0", old_versions)
+        self.assertIn("2.1.0", old_versions)
+
+    def test_09_verify_script_passes_with_extended_old_versions(self):
+        """test_09: 追加 3.5.3 后校验脚本仍全通过（无代码级残留）. 子进程执行."""
+        import subprocess
+
+        script = (
+            Path(__file__).resolve().parent / "test_backtest"
+            / "verify_fix3_manual.py"
+        )
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            "verify_fix3_manual 失败:\n%s\n%s"
+            % (proc.stdout[-2000:], proc.stderr[-2000:]),
+        )
 
 
 if __name__ == '__main__':

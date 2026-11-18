@@ -13,7 +13,7 @@ import json
 import logging
 import math
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import (
     Any,
@@ -33,6 +33,14 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 POLICY_VERSION = "1.0.0"
+
+# known_gap 码名集中映射（DESIGN §5.7.4 词汇表；复审 R3 / 修复包 F3；DR-F3）：
+# 码名约束集中在数据处，新增 known_gap 字段只需加一行映射；
+# 未命中回退 "<name>_missing"（兜底语义不变）
+GAP_CODE_BY_FIELD: Dict[str, str] = {
+    "barra": "barra_stale",
+    "industry": "industry_stale",
+}
 
 
 # ============================================================
@@ -810,8 +818,10 @@ def _collect(
         if not exists:
             snapshots[spec.name] = _empty_snapshot(spec)
             if spec.missing_semantics == "known_gap":
+                code = GAP_CODE_BY_FIELD.get(
+                    spec.name, "%s_missing" % spec.name)
                 gaps.append(KnownGap(
-                    code=("%s_missing" % spec.name), field=spec.name,
+                    code=code, field=spec.name,
                     start=None, end=None,
                     impact="字段不可用，相关研究须披露",
                     mitigation="专项 B：外部数据采购/换源",
@@ -910,23 +920,40 @@ def build_snapshot(
     return snapshot
 
 
+CONTRACT_MODES = ("research", "production")
+
+
 def check_data_contract(
     root: Union[str, Path],
     sample_end: Union[str, pd.Timestamp],
     fields: Optional[Sequence[FieldSpec]] = None,
     *,
     strict: bool = False,
+    mode: str = "research",
     trading_calendar: Optional[Any] = None,
     universe: Optional[Sequence[str]] = None,
     list_date: Optional[pd.Series] = None,
     cache: Optional[ContractCache] = None,
     readers: Optional[Mapping[str, Any]] = None,
 ) -> ContractReport:
+    if mode not in CONTRACT_MODES:
+        raise ValueError(
+            "mode 非法: %r（可选: %s）" % (mode, "/".join(CONTRACT_MODES))
+        )
     snapshot, checks, gaps, source = _collect(
         root, sample_end, fields,
         trading_calendar=trading_calendar, universe=universe,
         list_date=list_date, cache=cache, readers=readers,
     )
+    if mode == "production":
+        # DESIGN §5.3：adj_alignment 在 production 由 warn 升级为 block
+        checks = [
+            replace(check, severity="block")
+            if (check.check == "adj_alignment"
+                and not check.passed and check.severity == "warn")
+            else check
+            for check in checks
+        ]
     passed = not any(
         (not check.passed and check.severity == "block") for check in checks
     )

@@ -8,7 +8,9 @@ TDD 顺序：本文件先于 backtest/governance.py 落地；首次运行应为�
   T1 record_id 确定性 / T2 身份敏感性 / T3 易变字段不影响
   T4 stage 必填 / T5 production 门禁 / T6 roundtrip
   T7 幂等 / T8 冲突 / T9 query-latest / T10 JSONL fallback
+  T46 env_fingerprint / T47 hfq 锁定 / T48 tradable 代理口径写入
 """
+import json
 import sys
 
 import pytest
@@ -21,6 +23,7 @@ from factor_pipeline.backtest.governance import (
     Stage,
     compute_payload_hash,
     compute_record_id,
+    env_fingerprint,
     ID_FIELDS,
 )
 
@@ -302,3 +305,173 @@ def test_t10_jsonl_fallback_semantics(tmp_path, monkeypatch):
         assert len(store2.query()) == 2
     finally:
         store2.close()
+
+
+# ============================================================
+# T46 env_fingerprint（B7）
+# ============================================================
+
+def test_t46_env_fingerprint_fields_and_json_serializable():
+    info = env_fingerprint()
+
+    for key in ("python", "numpy", "pandas", "blas"):
+        assert key in info, "env_fingerprint 缺少 %s" % key
+        assert isinstance(info[key], str) and info[key]
+
+    thread_keys = [k for k in info if k.startswith("threads_")]
+    assert len(thread_keys) >= 4, "环境变量线程数披露不完整: %s" % thread_keys
+
+    text = json.dumps(info, sort_keys=True, ensure_ascii=False)
+    assert json.loads(text) == info
+
+    record = GovernanceRecord.build(**base_fields())
+    assert record.env_fingerprint == info
+
+
+# ============================================================
+# T47 hfq 锁定：qfq 禁止用于 production / golden（G4）
+# ============================================================
+
+def test_t47_qfq_rejected_in_production_and_golden():
+    production = base_fields(
+        stage="S5", mode="production", status="active",
+        reviewer="alice", gate_status=_all_gates(),
+        price_convention="hfq",
+    )
+    record = GovernanceRecord.build(**production)
+    assert record.price_convention == "hfq"
+
+    with pytest.raises(ValidationError):
+        GovernanceRecord.build(**{
+            **production, "price_convention": "qfq"})
+
+    # golden 基线场景：research + G4
+    golden = base_fields(
+        gate_status={"G0": _gate(), "G4": _gate()},
+        price_convention="qfq",
+    )
+    with pytest.raises(ValidationError):
+        GovernanceRecord.build(**golden)
+
+    # research 无 G4 允许 qfq，但必须原样写入 record（披露）
+    research = GovernanceRecord.build(**base_fields(price_convention="qfq"))
+    assert research.price_convention == "qfq"
+
+    with pytest.raises(ValidationError):
+        GovernanceRecord.build(**{
+            **base_fields(), "price_convention": "forward_adjusted"})
+
+
+# ============================================================
+# T48 tradable 代理口径写入 record（H1）
+# ============================================================
+
+def test_t48_tradable_proxy_sources_written_to_record():
+    defaulted = GovernanceRecord.build(**base_fields(
+        tradable_convention={"exclude_st": True}))
+    assert defaulted.tradable_convention["st_source"] == "name_proxy"
+    assert defaulted.tradable_convention["suspend_source"] == "event_rebuild"
+    assert defaulted.tradable_convention["exclude_st"] is True
+
+    custom = GovernanceRecord.build(**base_fields(
+        tradable_convention={
+            "exclude_st": True,
+            "st_source": "official_flag",
+            "suspend_source": "amount_proxy",
+        }))
+    assert custom.tradable_convention["st_source"] == "official_flag"
+    assert custom.tradable_convention["suspend_source"] == "amount_proxy"
+
+    with pytest.raises(ValidationError):
+        GovernanceRecord.build(**base_fields(
+            tradable_convention={"st_source": "magic_flag"}))
+
+    with pytest.raises(ValidationError):
+        GovernanceRecord.build(**base_fields(
+            tradable_convention={"suspend_source": "guess"}))
+
+
+def test_t48b_proxy_sources_change_record_id():
+    base = GovernanceRecord.build(**base_fields(
+        tradable_convention={"st_source": "name_proxy"}))
+    other = GovernanceRecord.build(**base_fields(
+        tradable_convention={"st_source": "official_flag"}))
+    assert base.record_id != other.record_id
+
+
+# ============================================================
+# T57 append_many 批量语义（性能包 O1）
+# ============================================================
+
+def test_t57_append_many_batch_semantics(tmp_path):
+    store = GovernanceStore(db_path=str(tmp_path / "t57.duckdb"))
+    try:
+        a = GovernanceRecord.build(**base_fields(experiment_id="exp_a"))
+        b = GovernanceRecord.build(**base_fields(experiment_id="exp_b"))
+        # 批内重复保留首条；首次写入 2 条
+        assert store.append_many([a, b, a]) == 2
+        # 幂等：同 payload 再写 0 条
+        assert store.append_many([a, b]) == 0
+        # 同 record_id 不同 payload → 冲突（p_value 不进 id）
+        conflict = GovernanceRecord.build(
+            **base_fields(experiment_id="exp_a", p_value=0.5))
+        assert conflict.record_id == a.record_id
+        with pytest.raises(ReproducibilityConflictError):
+            store.append_many([conflict])
+    finally:
+        store.close()
+
+    keep = GovernanceStore(
+        db_path=str(tmp_path / "t57_keep.duckdb"), on_conflict="keep_first")
+    try:
+        assert keep.append_many([a]) == 1
+        assert keep.append_many([conflict]) == 0  # keep_first 跳过
+        assert len(keep.query()) == 1
+    finally:
+        keep.close()
+
+
+# ============================================================
+# T51 build 注入 ID 默认值（修复包 F1 / 复审 R1）
+# ============================================================
+
+def test_t51_build_injects_id_defaults():
+    omitted = GovernanceRecord.build(**base_fields())
+    explicit = GovernanceRecord.build(**base_fields(
+        price_convention="hfq", gate_policy_version="1.0.0"))
+    assert omitted.price_convention == "hfq"
+    assert omitted.gate_policy_version == "1.0.0"
+    # 语义等价（省略 vs 显式默认）必须得到同一 record_id
+    assert omitted.record_id == explicit.record_id
+
+    # 显式不同口径仍应改变 id（身份敏感性不回退）
+    changed = GovernanceRecord.build(**base_fields(price_convention="total_return"))
+    assert changed.record_id != omitted.record_id
+
+
+# ============================================================
+# T52 golden 场景要求 G4 通过（修复包 F2 / 复审 R2）
+# ============================================================
+
+def test_t52_golden_requires_g4_passed():
+    # G4 失败留档：research + G4(passed=False) + qfq → 允许（记录失败证据）
+    failed = GovernanceRecord.build(**base_fields(
+        gate_status={"G0": _gate(), "G4": _gate("G4", passed=False)},
+        price_convention="qfq",
+    ))
+    assert failed.price_convention == "qfq"
+
+    # G4 通过 + qfq → 拒绝（golden 基线防回归；拒绝须来自 qfq 检查而非缺 G0）
+    with pytest.raises(ValidationError, match="qfq"):
+        GovernanceRecord.build(**base_fields(
+            gate_status={"G0": _gate(), "G4": _gate("G4", passed=True)},
+            price_convention="qfq",
+        ))
+
+    # production + qfq → 仍拒绝（不受 F2 影响）
+    with pytest.raises(ValidationError):
+        GovernanceRecord.build(**base_fields(
+            stage="S5", mode="production", status="active",
+            reviewer="alice", gate_status=_all_gates(),
+            price_convention="qfq",
+        ))

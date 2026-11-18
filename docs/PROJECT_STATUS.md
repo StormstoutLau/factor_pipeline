@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-11-17
+> **更新日期**: 2026-11-18
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -57,7 +57,8 @@ v3.5.0 (2026-11-16) 多断点支持 — Bai-Perron 全局最小 SSR + Stata 对�
 v3.5.1 (2026-11-17) 多断点接入 diagnose 标签路径 — opt-in + 两级门控 (ADR-047)  [x]
 v3.5.2 (2026-11-17) 多断点路径 NaN 间隙守卫 — 连续性描述 + ES 降级 (ADR-048)   [x]
 v3.5.3 (2026-11-17) sup-F 自相关稳健临界值 — AR(1) sieve bootstrap (ADR-049)  [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.5.3
+v3.6.0 (2026-11-18) 治理底座 P0 四件套 — GR-1~GR-4 + 研究入口契约 (ADR-050~054) [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.6.0
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
 v3.5.x (远期)     内生性-溢价诊断交互                                           [ ]
 ```
@@ -130,14 +131,28 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 > 验收清单 [CHECKLIST v1.0](audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md)、
 > 一致性 [CONSISTENCY_REVIEW v1.0](audit/CONSISTENCY_REVIEW_V3.6.0_GOVERNANCE_BASE.md)（PASS_WITH_FIXES）、
 > 门禁接入 [spec_runner_adapter.py](../scripts/spec_runner_adapter.py)（Spec_Runner v1.11.0）。
-> **步骤 9 进行中**: E1 `governance.py`（11 passed）、E2 `data_contract.py`（5 passed）、E3 `golden_master.py`（5 passed）、
+> **步骤 9 完成**: E1 `governance.py`（11 passed）、E2 `data_contract.py`（6 passed）、E3 `golden_master.py`（5 passed）、
 > E4 `multiple_testing_ledger.py` + `multiple_testing.py` 注入（12 passed）、
 > E5 `benchmarks/stata_econ_crosscheck.py`（Stata 18.0 `--case all` PASS；T31-T35 6 passed）、
 > E6 管线 hook（T31-T40 联合 22 passed；golden 基线 `tests/golden/govbase_v1_synth` 入库；全量回归 1907 passed / 7 skipped）、
 > E7 研究入口契约（`scripts/contract_gate.py` + 容量/多头端 `--contract*` 接线；dry-run 正确拦截 mv 5 日缺口 exit 2；
-> T41-T45 11 passed；全量回归 1914 passed / 7 skipped，较基线 +50）完成；
+> T41-T45 11 passed）、
+> E8 文档闭环（版本 3.6.0 六锚点；ADR-050~054；CHANGELOG/ARCHITECTURE/README 同步）；
+> §6 口径缺口补齐（T46-T50：`env_fingerprint`、qfq 锁定、tradable 代理口径与 ID 敏感性、
+> `known_gap` 码表、`adj_alignment` production 升级）；
+> 全量回归 **1920 passed / 7 skipped / 13 subtests**（742.43s；基线 1864 + 56，0 失败 0 新增 skip）；
 > 异构复审 PASS_WITH_NOTES（P1-P8，0 推翻 / 0 重大；F1 锁等待语义、F2 注入路径 `individual_p_values` 口径已披露）；
-> 红→绿读数见 EXECUTION §5.3、复审见 EXECUTION §9.8；下一步 E8 文档闭环。
+> 批次收尾独立复审 PASS_WITH_NOTES（GLM 复审 DeepSeek 实现，RULE-5；4 项发现：1 major R1 `record_id` 默认值分裂实测复现 + 3 minor，双验证器 2/2 确认；用户裁决落档不修码 → P2-5/P3-5~P3-7，R1-R4 入 EXECUTION §9.9）；
+> 步骤 10 ADD 审计完成（P1 0 / P2 5（4 处置 + P2-5 落档）/ P3 7 披露；性能 3/8 达标，P2 性能债已登记）；
+> 复审修复包 R1-R4 → F1-F4 已落地（3.6.0 内折入不 bump，T51-T54 红→绿）：
+> [EXECUTION_V3.6.0_FIX_PACK](EXECUTION_V3.6.0_FIX_PACK.md)；
+> 修复包后全量 **1925 passed / 7 skipped / 13 subtests**（898.75s；1920 + 5，0 失败；seq 30）；
+> 红→绿读数见 EXECUTION §5.3、审计见 [2026-11-18 审计](audit/2026-11-18-v3.6.0-governance-base-audit.md)。
+> 性能包 P2-1 → O1-O5 已落地（3.6.0 内折入不 bump，T55-T59）：
+> [EXECUTION_V3.6.0_PERF_PACK](EXECUTION_V3.6.0_PERF_PACK.md)；
+> 5/5 达标（append 10k 7.605→**0.724s**、BH 100k 0.075→**0.0156s**、RW 3.123→**0.0071s**、
+> White/SPA 288.85/158.95→**7.56/3.89s**、golden 0.137→**0.0586s**；O1 预算重估 0.1→1.0s）；
+> 性能包后全量 **1933 passed / 7 skipped / 13 subtests**（1059.21s；1925 + 8，0 失败；seq 32）。
 
 | # | 任务 | 可交付物 | 验收标准 | 依赖 |
 |---|------|---------|---------|------|

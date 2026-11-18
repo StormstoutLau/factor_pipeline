@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factor_pipeline.backtest.golden_master import GoldenMaster
+from factor_pipeline.backtest.golden_master import GoldenMaster, _to_long
 
 
 # ============================================================
@@ -124,3 +124,46 @@ def test_t20_capture_no_overwrite_and_force_audit(tmp_path):
     assert manifest.reviewer == "alice"
     assert manifest.reason == "percentile 1/99 -> 2/98"
     assert len(values) == 12
+
+
+# ============================================================
+# T58 _to_long 与 melt 参考实现一致（性能包 O5）
+# ============================================================
+
+def _to_long_reference(outputs):
+    parts = []
+    for factor_id, frame in outputs.items():
+        data = frame.copy()
+        if not isinstance(data.index, pd.DatetimeIndex):
+            data.index = pd.to_datetime(data.index)
+        data = data.reset_index()
+        data = data.rename(columns={data.columns[0]: "date"})
+        long = data.melt(
+            id_vars=["date"], var_name="stock", value_name="value")
+        long["factor_id"] = str(factor_id)
+        long["stock"] = long["stock"].astype(str)
+        long["value"] = pd.to_numeric(long["value"], errors="coerce")
+        parts.append(long[["date", "factor_id", "stock", "value"]])
+    merged = pd.concat(parts, ignore_index=True)
+    merged["date"] = pd.to_datetime(merged["date"]).astype("datetime64[ns]")
+    return merged
+
+
+def test_t58_to_long_matches_melt_reference():
+    dates = pd.date_range("2023-01-31", periods=4, freq="ME")
+    outputs = {
+        "fa": pd.DataFrame(
+            np.arange(12, dtype=float).reshape(4, 3), index=dates,
+            columns=["x", "y", "z"]),
+        "fb": pd.DataFrame(
+            np.arange(8, dtype=float).reshape(4, 2), index=dates,
+            columns=["x", "y"]),
+    }
+    outputs["fb"].iloc[1, 0] = np.nan
+
+    got = _to_long(outputs).reset_index(drop=True)
+    exp = _to_long_reference(outputs).reset_index(drop=True)
+
+    assert list(got.columns) == list(exp.columns)
+    assert len(got) == len(exp)
+    pd.testing.assert_frame_equal(got, exp, check_dtype=True)

@@ -11,9 +11,9 @@
 
 | 项 | 结果 |
 |----|------|
-| 结论 | **PASS_WITH_FIXES** |
+| 结论 | **PASS_WITH_FIXES**（E8 收尾后：C5 已关闭；余 C6 历史断链不阻断） |
 | P1（阻断） | 0 |
-| P2（应修） | 2（ADR-050~054 未落档；PROJECT_STATUS 4 处历史断链） |
+| P2（应修） | 2（ADR-050~054 未落档 → **E8 已关闭**；PROJECT_STATUS 4 处历史断链 → 非本批） |
 | P3（提示） | 1（编号零填充不一致，已修） |
 | 可进入步骤 9 | **是**（P2 均不阻断测试先行） |
 
@@ -58,7 +58,7 @@
 | 检查 | 读数 | 状态 |
 |------|------|------|
 | E0-E8 均有验收项 | 9/9（CHECKLIST §2） | 通过 |
-| T1-T46 均有 DoD | 46/46（CHECKLIST §3） | 通过 |
+| T1-T50 均有 DoD | 50/50（CHECKLIST §3；E8 复核 +T47~T50） | 通过 |
 | 性能预算一致 | EXECUTION §6 8 项 = CHECKLIST §5 8 项 | 通过 |
 | 数据口径一致 | EXECUTION §2.2/§6 = CHECKLIST §6 7 项 | 通过 |
 | 每项有 DoR/DoD | CHECKLIST §1 定义 + §2-§7 逐行 | 通过 |
@@ -74,7 +74,7 @@
 | 表格列数一致 | 去行内代码后计 `\|` | 本批 5 文档 0 失配；PROJECT_STATUS L79 1 处历史失配（非本批） |
 | 公共符号覆盖 | DESIGN §10.1 → EXECUTION | 32/32 |
 | 测试项覆盖 | DESIGN §12 T-id → EXECUTION | 32/32 |
-| 版本锚点 | grep 5 处 | 均 `3.5.3`（当前基线；E8 改 3.6.0） |
+| 版本锚点 | grep 预期位置 | 步骤 8 读数 5 处均 `3.5.3`；E8 复核实际 **6 处**（+`tests/test_backtest/verify_fix3_manual.py`）均 `3.6.0`；`gate version-consistency` pass |
 
 ---
 
@@ -108,8 +108,10 @@
 | DR-22 | E7 组合层 `market_fields()` 排除 `list_date`/`calendar`/`barra`，并以参数注入 + pkl 字符串日期归一化 | 真实目录字段位于 `market_data/`；`list_date` 为代码索引、`all_dates` 为 list、`barra` 为 dict-Series，均非日期面板；核心 `default_fields()` 保持不动（D-5） | E7 dry-run（BLOCK mv lag=5；`test_contract_gate.py` 2 passed） |
 | DR-23 | `_file_lock` 跨平台等待语义不一致（Windows `LK_LOCK` 约 10 s 后抛 `OSError`；POSIX `flock` 阻塞至获得），仅影响 JSONL fallback 极端跨进程竞争 | 异构复审 F1（2026-11-18）；进程内另有线程锁，默认单写者路径无影响 | EXECUTION §2.1 要点 5 + §9.8；P3 并发 40 行 0 异常 |
 | DR-24 | 注入 `bootstrap_indices` 时 `individual_p_values` 为联合重抽样边际 p，与 `None` 路径逐列独立 block bootstrap 口径不同 | 异构复审 F2；同一 (B,T) 索引矩阵供台账复现，主 `rc_p_value`/SPA 口径不变 | EXECUTION §2.5 + §9.8；P5 两次注入 rc_p 确定 |
+| DR-25 | `price_convention` 纳入 `ID_FIELDS`（设计 §4.3 原表遗漏） | §6 口径验收发现：价格口径写入 record 但未进身份哈希，同一实验不同价格口径会得到相同 `record_id`，击穿可复现性；决策锚点：口径即实验定义的一部分 | T48b（不同 `st_source` → 不同 record_id）；EXECUTION §2.1 要点 7 + D-6 |
+| DR-26 | `check_data_contract(..., mode="research")`：production 时 `adj_alignment` 未通过由 warn 升级为 block | 设计 §5.3 严重度表要求 research=warn / production=block，但 §5.5 接口无 `mode` 参数，规则不可达；默认值保持 research，零变更 | T50（红→绿）；EXECUTION §2.2 要点 9 + D-7 |
 
-> 以上 24 项均已在 EXECUTION 正文或 §9.6/§9.8 登记；步骤 9 实施时逐项验收。
+> 以上 26 项均已在 EXECUTION 正文或 §9.6/§9.8 登记；步骤 9 实施时逐项验收。
 
 ---
 
@@ -140,7 +142,7 @@ PY
 | DESIGN 引用 RESEARCH / 路线图 / PROJECT_STATUS | 头部 3 条 | 通过 |
 | EXECUTION 引用 DESIGN / RESEARCH / 路线图 / PROJECT_STATUS | 头部 4 条 | 通过 |
 | CHECKLIST 引用 EXECUTION / RESEARCH / DESIGN | 头部 3 条（DESIGN 为路径声明） | 通过 |
-| ADR-050~054 反向引用本 feature | **ADR 未落档** | **P2 未通过**（E8 补） |
+| ADR-050~054 反向引用本 feature | ADR 已落 `DECISIONS.md`（索引 + 5 条完整块，均引本批 E/GR 项） | **通过**（E8 关闭 C5） |
 | RESEARCH B 类断言状态延续 | 调研 §9 门禁表 → DESIGN §19 → EXECUTION §11 | 通过 |
 
 ---
@@ -153,7 +155,7 @@ PY
 | C2 | P2 | DESIGN §5.1 `known_gaps: Tuple[str,...]` 与 §5.7.4 结构化 `KnownGap` 冲突 | EXECUTION 取 §5.7.4（DR-4）；本表登记替换 |
 | C3 | P2 | DESIGN §10.3 异常继承与 D1 模块隔离冲突 | EXECUTION §3.5 局部基类（DR-2）；F1 登记 |
 | C4 | P2 | DESIGN §5.1 `DataSnapshot` 字段顺序违反 dataclass 默认值规则 | EXECUTION §9.6 F7；`calendar_hash=None`（DR-8） |
-| C5 | P2 | ADR-050~054 被四文档引用但 `DECISIONS.md` 尚无对应条目 | 不阻断步骤 9；E8 必须落档（否则双向引用检查失败） |
+| C5 | P2 | ADR-050~054 被四文档引用但 `DECISIONS.md` 尚无对应条目 | **已关闭**（E8：ADR-050~054 落档，索引末行改 ADR-055 起） |
 | C6 | P3 | `PROJECT_STATUS` L79 表格列数失配 + 4 处历史断链（`../EXECUTION_V3.3.0.md` 等） | 非本批引入；登记，不在本批修 |
 | C7 | P3 | `F:\Spec_Runner` 为 v1.0.0 冻结存档，但路径仍存在于环境 | WORKFLOW §14.1 明示不再使用；adapter 指向 v1.11.0 |
 

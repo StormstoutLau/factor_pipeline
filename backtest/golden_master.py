@@ -126,22 +126,27 @@ def _to_long(outputs: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     for factor_id, frame in outputs.items():
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("outputs[%r] 必须是 DataFrame" % factor_id)
-        data = frame.copy()
-        if not isinstance(data.index, pd.DatetimeIndex):
-            data.index = pd.to_datetime(data.index)
-        data = data.reset_index()
-        date_col = data.columns[0]
-        data = data.rename(columns={date_col: "date"})
-        long = data.melt(
-            id_vars=["date"], var_name="stock", value_name="value"
-        )
-        long["factor_id"] = str(factor_id)
-        long["stock"] = long["stock"].astype(str)
-        long["value"] = pd.to_numeric(long["value"], errors="coerce")
-        parts.append(long[["date", "factor_id", "stock", "value"]])
+        data = frame
+        index = data.index
+        if not isinstance(index, pd.DatetimeIndex):
+            index = pd.to_datetime(index)
+        n_rows, n_cols = data.shape
+        # 性能包 O5：numpy 直接构造长表，替代 DataFrame.melt；
+        # ravel(order="F") + tile/repeat 复刻 melt 的列优先行序，行序与旧实现一致
+        dates = np.tile(index.to_numpy(), n_cols)
+        stocks = np.repeat(
+            np.asarray(data.columns, dtype=object).astype(str), n_rows)
+        part = pd.DataFrame({
+            "date": dates,
+            "factor_id": str(factor_id),
+            "stock": stocks,
+            "value": data.to_numpy().ravel(order="F"),
+        })
+        parts.append(part[["date", "factor_id", "stock", "value"]])
     if not parts:
         return pd.DataFrame(columns=list(KEY_COLUMNS) + ["value"])
     merged = pd.concat(parts, ignore_index=True)
+    merged["value"] = pd.to_numeric(merged["value"], errors="coerce")
     merged["date"] = pd.to_datetime(merged["date"]).astype("datetime64[ns]")
     return merged
 

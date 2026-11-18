@@ -1,10 +1,13 @@
 # Factor Pipeline 架构总览
 
-> **版本**: v1.1 (2026-11-17; v1.0 = 2026-07-27)
+> **版本**: v1.2 (2026-11-18; v1.1 = 2026-11-17; v1.0 = 2026-07-27)
 > **范围**: 项目整体架构、模块边界、依赖关系、数据流、接口契约
 > **更新规则**: 任何架构变更 (新增模块 / 接口重构 / 依赖调整) 必须同步更新本文档 + 对应 ADR
 > **关联文档**: [DECISIONS.md](../DECISIONS.md) | [CHANGELOG.md](../CHANGELOG.md) | [DEV_PROGRESS.md](DEV_PROGRESS.md) | [WORKFLOW_METHODOLOGY.md](WORKFLOW_METHODOLOGY.md)
 >
+> v1.2 同步 (v3.6.0 治理底座): 新增四个平级模块 `governance.py` / `data_contract.py` /
+> `golden_master.py` / `multiple_testing_ledger.py` (ADR-050~053, 互不 import), 管线 hook
+> `set_governance_hook` (默认 None) 与研究入口契约门禁 `scripts/contract_gate.py` (默认关闭, ADR-054)。
 > v1.1 同步: Layer 3 `BreakpointDetector` 新增多断点 (`detect_multiple`, ADR-046) 且 `FactorHealthDiagnoser.diagnose` 新增 opt-in 多断点标签路径 (ADR-047, v3.5.1); v3.5.2 增加 NaN 间隙守卫 (ADR-048): 标签相关边界跨缺失时 ES 降级 suspect; v3.5.3 增加自相关稳健临界值 (ADR-049): `sup_f_method='bootstrap'` 重写为 AR(1) sieve 残差自助, 默认 asymptotic 路径不变。
 
 ---
@@ -19,7 +22,7 @@
 - **因果性保证**: 插补与去极值禁止使用未来数据 (插补 lookahead_safe=True 默认; 去极值逐日横截面, fit 不存参数),通过截断不变性测试验证; 变换统一为逐日截面 rank→正态 (v3.3.4), 系数/参数只用前缀
 - **学术可验证**: 每个统计决策都有显著性检验支撑,关键算法有学术文献引用 (经独立验证,排除幻觉); 管道选择/采样频率写入 SpecificationLogger (opt-in), 结构突变监控 (sup-F/CUSUM) 只告警
 
-**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042) → v3.4.1 (2026-11-11, 非生产路径解耦器弃用 + ADR-043) → v3.4.2 (2026-11-12, 断点监控调度 + ADR-044) → v3.4.3 (2026-11-12, Dynamic 组件可分离性 + ADR-045) → v3.4.4 (2026-11-13, AblationRunner decoupler 消融臂 + ADR-045 实现补充) → v3.4.5–v3.4.13 (2026-11-13~16, 市值口径全层对齐 / 旋钮接线审计 / 消融 trivial 口径 / HAC NaN 过滤 / 面板 HAC 标准误 / 短样本断点退化) → v3.5.0 (2026-11-16, 多断点支持 Bai-Perron + ADR-046) → v3.5.1 (2026-11-17, 多断点接入 `diagnose` 两级门控 + ADR-047) → v3.5.2 (2026-11-17, NaN 间隙守卫 + ADR-048)
+**版本基线**: v3.3.5 (2026-11-04, PL-06 Mixed 缩尾逐日截面 3σ + ADR-039) → v3.3.6 (2026-11-04, PL-05 Dynamic AR 因果三段式一步预测 + ADR-040) → v3.3.7 (2026-11-04, PL-08 AR 阶数选择统一 hold_back 样本 + ADR-041) → v3.4.0 (2026-11-10, 因子路由统一化治理 + ADR-042) → v3.4.1 (2026-11-11, 非生产路径解耦器弃用 + ADR-043) → v3.4.2 (2026-11-12, 断点监控调度 + ADR-044) → v3.4.3 (2026-11-12, Dynamic 组件可分离性 + ADR-045) → v3.4.4 (2026-11-13, AblationRunner decoupler 消融臂 + ADR-045 实现补充) → v3.4.5–v3.4.13 (2026-11-13~16, 市值口径全层对齐 / 旋钮接线审计 / 消融 trivial 口径 / HAC NaN 过滤 / 面板 HAC 标准误 / 短样本断点退化) → v3.5.0 (2026-11-16, 多断点支持 Bai-Perron + ADR-046) → v3.5.1 (2026-11-17, 多断点接入 `diagnose` 两级门控 + ADR-047) → v3.5.2 (2026-11-17, NaN 间隙守卫 + ADR-048) → v3.5.3 (2026-11-17, sup-F 自相关稳健临界值 + ADR-049) → v3.6.0 (2026-11-18, 治理底座 P0 四件套 + ADR-050~054)
 
 ---
 
@@ -107,7 +110,11 @@
 | `statistical_decision_bridge.py` | 统计决策桥 | — |
 | `markov_regime_identifier.py` | 马尔可夫状态识别 | — |
 | `three_channel_decomposition.py` | 三通道分解 | — |
-| `multiple_testing.py` | 多重检验校正 | — |
+| `multiple_testing.py` | 多重检验校正; v3.6.0 增 `bootstrap_indices` 注入 (默认 None) | ADR-053 |
+| `governance.py` | 治理记录契约 + 存储 (DuckDB/JSONL) + `ancestors()` | ADR-050 |
+| `data_contract.py` | 字段级数据契约 (freshness/PIT/覆盖率/值域/日历) | ADR-051 |
+| `golden_master.py` | golden 基线采集/比较 (parquet + manifest) | ADR-052 |
+| `multiple_testing_ledger.py` | 多重检验台账 (family 预注册 + 三分母 + backfill 隔离) | ADR-053 |
 
 ---
 
@@ -337,6 +344,7 @@ class ImputerAdapter(PipelineStep):
 - [ADR-019: 外部模块内化](../DECISIONS.md#adr-019-外部模块内化) (v2.4.0)
 - [ADR-027: 学术准则驱动管线重构](../DECISIONS.md#adr-027-学术准则驱动管线重构) (v3.2.0)
 - [ADR-042: 统一横截面秩管道替代三路指纹路由](../DECISIONS.md#adr-042-统一横截面秩管道替代三路指纹路由-v340) (v3.4.0)
+- [ADR-050: 治理记录契约](../DECISIONS.md#adr-050-治理记录契约--governancerecord--ancestorentry-v360) (v3.6.0)
 
 ### §7.2 统计方法
 - [ADR-002: Bonferroni KS 双样本检验](../DECISIONS.md#adr-002-bonferroni-校正的-ks-双样本检验替代简单迁移检测)
@@ -354,6 +362,10 @@ class ImputerAdapter(PipelineStep):
 - [ADR-015: adapters 重构](../DECISIONS.md#adr-015-adapters-重构--neutralizeradapter-required-化--garchwhiteningadapter-模块级导入)
 - [ADR-017: 跨版本 CI 矩阵](../DECISIONS.md#adr-017-跨版本-ci-矩阵--github-actions--tox-双轨)
 - [ADR-020: 多因子正交化](../DECISIONS.md#adr-020-多因子横截面正交化模块--对称正交化为主方法) (v2.5.0)
+- [ADR-054: 研究入口契约门禁](../DECISIONS.md#adr-054-研究入口契约门禁--默认关闭--fail-exit-2-v360) (v3.6.0)
+- [ADR-051: 数据契约与 A 股口径枚举](../DECISIONS.md#adr-051-数据契约与-a-股口径枚举--gr-2--e7-组合层适配-v360) (v3.6.0)
+- [ADR-052: Golden master 回归基线](../DECISIONS.md#adr-052-golden-master-回归基线--parquet--manifest--容差比较-v360) (v3.6.0)
+- [ADR-053: 多重检验台账与 bootstrap 索引注入](../DECISIONS.md#adr-053-多重检验台账与-bootstrap-索引注入-v360) (v3.6.0)
 
 ---
 

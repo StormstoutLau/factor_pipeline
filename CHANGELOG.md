@@ -1,5 +1,87 @@
 # 开发日志 (Changelog)
 
+## v3.6.0 — 治理底座 P0 四件套: GR-1~GR-4 + 研究入口契约 (已实施, 2026-11-18)
+
+### 概览
+
+研究结论长期缺少可复现载体：记录散落于脚本输出、血缘断链仅 warning、口径为自由字符串、
+多重检验"试了多少次"无台账、真实数据缺口可静默进入结论。v3.6.0 新增四个平级模块
+（互不 import）并在研究入口接入可选契约门禁，**默认路径逐位不变**。
+
+### 核心产出
+
+- **GR-1** `backtest/governance.py`: `GovernanceRecord`（schema 1.0.0, frozen,
+  `extra='forbid'`）+ `GovernanceStore`（DuckDB 主 / JSONL fallback，`lock_path`
+  文件锁）；`record_id` 确定性；stage S0-S6 条件校验；production 全门禁；
+  `ancestors()` 返回 `AncestorEntry`（断链 `reason=missing`、跨 schema `reason=schema_mismatch`，
+  循环抛 `GovernanceError`）；口径新增 `price_convention`（进 `ID_FIELDS`），
+  `tradable_convention` 强制写入 `st_source`/`suspend_source`（默认
+  `name_proxy`/`event_rebuild`）
+- **GR-2** `backtest/data_contract.py`: 字段级 schema/freshness/PIT/覆盖率/值域/
+  一致性/日历检查；`strict=False` 默认只报告；`expected_missing_tail` lag 扣减；
+  `known_gaps` 结构化（`barra_stale`/`industry_stale`）；`qfq` 禁止 production/G4
+- **GR-3** `backtest/golden_master.py` + `tests/golden/govbase_v1_synth`
+  （36 月 × 20 股 × 2 因子, `seed=20261117`）；`rtol=1e-10`/`atol=1e-12`；
+  capture 不覆盖，force 需 reason + reviewer
+- **GR-4** `backtest/multiple_testing_ledger.py`: family 预注册（早于数据观察）、
+  BH/BY/Romano-Wolf/White/SPA、三分母校验、backfill 隔离、`result_id` 稳定；
+  `WhiteRealityCheck.test`/`HansenSPA.test` 追加 `bootstrap_indices`（默认 None 逐值不变）
+- **E6** `pipelines_v2.py`: `set_governance_hook()`（默认 None，9 字段事件）
+- **E7** `scripts/contract_gate.py` + 容量/多头端 `--contract*` 接线
+  （默认关闭；FAIL → exit 2；报告 `out/<prefix>_contract.{json,md}`）
+
+### 口径与零变更
+
+- 默认路径（不设 hook / 不传 `--contract*` / `bootstrap_indices=None`）与 v3.5.3 一致；
+  缓存代际不变 `v2.3.0-cache`；零新增依赖；`backtest/__init__.py` 无改动。
+- 真实数据 dry-run：两研究入口 `--contract-only` 均 exit 2，正确拦截
+  `mv` 5 日缺口（`last_full=2026-01-23, end=2026-01-30`）。
+
+### 测试
+
+- 新增 56 例（E1-E8 + T41-T50）：governance 15 / data_contract 7 / golden 5 /
+  ledger 12 / hook+补充 15 / contract_gate 2；TDD 红→绿读数见
+  [EXECUTION §5.3](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md)
+- 全量回归 **1920 passed / 7 skipped / 13 subtests**（742.43s；基线 1864，+56 全为本批新增；0 失败 0 新增 skip）
+- 异构复审 PASS_WITH_NOTES（P1-P8，0 推翻 / 0 重大；F1 锁等待语义、F2 注入路径口径已披露）
+
+### 复审修复包（R1-R4 → F1-F4，同版本折入不 bump）
+
+- **F1 / P2-5（MAJOR）**：`build()` 新增 `ID_DEFAULTS` 注入（`price_convention="hfq"`、
+  `gate_policy_version="1.0.0"`），消除「省略 vs 显式默认」的 `record_id` 分裂
+  （红读数：`7d90...` vs `6d04...`）——语义等价记录不再绕过 `on_conflict` 去重
+- **F2 / P3-5**：golden 场景判定改 `G4` 存在且 `passed`，G4 失败留档可携带 qfq
+- **F3 / P3-6**：`known_gaps` 码名集中映射 `GAP_CODE_BY_FIELD`（对外码名不变）
+- **F4 / P3-7**：`verify_fix3_manual.py` `OLD_VERSIONS` 追加 3.5.3
+- 新增 T51-T54 5 例（T54 按两个断言要点实现为 test_08/test_09 两例；红→绿读数见
+  [FIX_PACK §5](docs/EXECUTION_V3.6.0_FIX_PACK.md)）；依据见独立复审
+  `out/review_v360_t46_e8_results.txt`
+- 修复包后全量回归 **1925 passed / 7 skipped / 13 subtests**（898.75s；1920 + 5，0 失败；耗时比 0.59）
+
+### 性能包（P2-1 → O1-O5，同版本折入不 bump）
+
+- **O1** `append_many` 10k：7.605s → **0.724s**（单次 `model_dump`、`canonical_json` JSON-native 快路径、
+  批量存在性 `JOIN`；预算按序列化下界重估 0.1→1.0s）
+- **O2** `apply_bh_fdr` 100k：0.0749s → **0.0156s**（argsort + 反向累积 min + searchsorted）
+- **O3** `apply_romano_wolf` 1000×1000：3.1232s → **0.0071s**（前缀第 k 小恒等于整行第 k 小）
+- **O4** White/SPA T=1000,K=100,B=1000：288.85s / 158.95s → **7.56s / 3.89s**
+  （索引矩阵按 t 递推 + 128MB 分块；峰值内存 170.9 / 170.2 MB）
+- **O5** `GoldenMaster.compare` 24×300×4：0.1372s → **0.0586s**（`_to_long` numpy 构造，行序复刻 melt）
+- 新增 T55-T59 5 函数 / 8 用例（对拍 + 批量语义 + 复杂度烟测；红→绿读数见
+  [PERF_PACK §5](docs/EXECUTION_V3.6.0_PERF_PACK.md)）
+- 白盒口径：White/SPA 同 seed 结果与旧实现不同（无硬编码 p 值断言）；BH ties 固定稳定序（DR-P2）
+- 性能包后全量回归 **1933 passed / 7 skipped / 13 subtests**（1059.21s；1925 + 8，0 失败；seq 32）
+
+### 版本与文档
+
+- 版本 **3.6.0**（6 锚点）；ADR-050~054 落 [DECISIONS.md](DECISIONS.md)；
+  [EXECUTION](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md) /
+  [CHECKLIST](docs/audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md) /
+  [CONSISTENCY_REVIEW](docs/audit/CONSISTENCY_REVIEW_V3.6.0_GOVERNANCE_BASE.md) 入库
+- 设计文档 `docs/private/DESIGN_GOVERNANCE_BASE.md` v1.2 按仓库策略不入库
+
+---
+
 ## v3.5.3 — sup-F 自相关稳健临界值: AR(1) sieve bootstrap (已实施, 2026-11-17)
 
 ### 概览

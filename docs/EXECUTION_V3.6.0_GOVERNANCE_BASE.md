@@ -1,6 +1,7 @@
 # EXECUTION v3.6.0 治理底座 — P0 四件套 (GR-1 ~ GR-4)
 
-> **版本**: v1.0 (2026-11-17) — 步骤 5 实施文档；步骤 6 review 见 §9
+> **版本**: v1.0 (2026-11-17；2026-11-18 补步骤 9 收尾) — 步骤 5 实施文档；步骤 6 review 见 §9；
+> 步骤 9 红→绿与验收读数见 §5.3/§6，独立复审见 §9.9，口径决策见 §12，流程状态见 §13
 > **上游设计**: [DESIGN_GOVERNANCE_BASE.md](private/DESIGN_GOVERNANCE_BASE.md) v1.2（本地，gitignored）
 > **上游调研**: [RESEARCH_GOVERNANCE_BASE.md](research/RESEARCH_GOVERNANCE_BASE.md) v1.1
 > **上游方案**: [多因子治理路线图 §4-§6](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) / [PROJECT_STATUS P1-A](PROJECT_STATUS.md)
@@ -29,6 +30,10 @@
 | `tests/test_backtest/test_{governance,data_contract,golden_master,multiple_testing_ledger}.py` | 新增 | 待实施（E1-E4） |
 | `tests/golden/govbase_v1_synth/` | 新增 fixture | 待实施（E3） |
 | `scripts/spec_runner_adapter.py` | 新增（流程工具） | **已完成**（附带回退点：删除文件即可） |
+
+> **步骤 9 收尾（2026-11-18）**：上表 10 个工件全部落地；E1-E8 的执行顺序、红→绿读数与门禁结果见 §5.3，
+> 验收状态见 [CHECKLIST](audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md)，最终审计见
+> [ADD 审计报告](audit/2026-11-18-v3.6.0-governance-base-audit.md)。
 
 ### 0.2 档位判定（SPEC_PROCESS v1.7.2 §批次档位）
 
@@ -67,7 +72,7 @@
 | E5 | Stata 对拍脚本 | DESIGN §8 | `benchmarks/stata_econ_crosscheck.py` | E4 | `python benchmarks/stata_econ_crosscheck.py --case all` | 删除脚本；Stata 缺失时 SKIP |
 | E6 | 管线 hook | DESIGN §4.5 | `pipelines_v2.py` 增 2 个方法 + 1 调用点 | E1 | T31/T32 + 全量回归 | 删除方法/调用点（默认 None） |
 | E7 | 研究脚本适配 | DESIGN §10.4 | 容量/多头端研究入口前置契约（可选） | E2 | 研究脚本 dry-run | 不接线即回退 |
-| E8 | 文档闭环 | 全部 | ADR-050~054 / CHANGELOG / PROJECT_STATUS / ARCHITECTURE / 版本号 | E1-E6 | `pytest tests/test_fix3_version_unification.py` | 文档回滚 |
+| E8 | 文档闭环 | 全部 | ADR-050~054 / CHANGELOG / PROJECT_STATUS / ARCHITECTURE / 版本号（6 锚点） | E1-E6 | `pytest tests/test_fix3_version_unification.py` | 文档回滚 |
 
 **实施顺序**：E1 → E2 ∥ E3 → E4 → E5 → E6 → E7 → E8。
 **禁止**：先做 E6（管线 hook）再补 E1——hook 依赖记录契约稳定。
@@ -88,7 +93,8 @@ ID_FIELDS: Tuple[str, ...] = (
     "stage", "status", "mode", "arm",
     "pipeline_version", "config_hash", "construction_code_hash", "gate_policy_version",
     "data_snapshot_hash", "universe_version", "sample_window", "split_id", "holdout_locked_at",
-    "benchmark_id", "return_convention", "tradable_convention", "cost_model", "sign_convention",
+    "benchmark_id", "price_convention", "return_convention", "tradable_convention",
+    "cost_model", "sign_convention",
     "seed",
 )
 HASH_EXCLUDED: FrozenSet[str] = frozenset({
@@ -137,8 +143,9 @@ class GovernanceRecord(BaseModel):
     sample_window: Dict[str, str]          # {"start": ISO, "end": ISO}
     split_id: Optional[str] = None
     holdout_locked_at: Optional[str] = None
-    # —— 口径（5）——
+    # —— 口径（6）——
     benchmark_id: str
+    price_convention: str = "hfq"          # hfq | raw+adj_factor | qfq | total_return
     return_convention: str
     tradable_convention: Dict[str, Any]
     cost_model: Dict[str, Any]
@@ -221,6 +228,11 @@ class AncestorEntry:
 6. `_parse_legacy` 三分支：当前版本严格校验；更旧补默认 + `extra="allow"` + `legacy=True`；更新版本原样 dict + warning。
    因此 `get/latest/query_records` 返回 `Union[GovernanceRecord, Dict]`（DR-16）；`ancestors` 遇非当前 schema 记录
    追加 `broken_link=True` 条目（`reason="schema_mismatch"`）后停止回溯。
+7. **§6 数据口径三项强制**（步骤 9 补实现，T47/T48/T48b）：
+   - `price_convention` 纳入 `ID_FIELDS`（DR-25：设计 §4.3 原表遗漏；不同价格口径必须产生不同 `record_id`）；
+   - `price_convention ∈ PRICE_CONVENTIONS`；`qfq` 在 `mode=production` 或 `gate_status` 含 `G4` 时直接拒绝；
+   - `tradable_convention` 由 `build()` 补默认（`st_source=name_proxy`、`suspend_source=event_rebuild`），
+     校验器要求两键非空且取值 ∈ `ST_SOURCES`/`SUSPEND_SOURCES`（代理口径必须写入 record）。
 
 #### 2.1.1 stage 条件校验（实现即设计 §4.2 表）
 
@@ -328,8 +340,8 @@ class ContractCache:
 def build_snapshot(root, sample_end, fields=None, *, trading_calendar=None,
                    universe=None, list_date=None, readers=None) -> DataSnapshot: ...
 def check_data_contract(root, sample_end, fields=None, *, strict=False,
-                        trading_calendar=None, universe=None, list_date=None,
-                        cache=None, readers=None) -> ContractReport: ...
+                        mode="research", trading_calendar=None, universe=None,
+                        list_date=None, cache=None, readers=None) -> ContractReport: ...
 class DataContractError(Exception):
     def __init__(self, report: ContractReport): ...
 ```
@@ -349,6 +361,9 @@ class DataContractError(Exception):
 8. **缓存命中的已知限制（DR-13）**：命中路径不保留完整 frame，跨字段 `adj_alignment`/`adj_monotonic`
    只在本次实际读取了 `adj + price` 时执行；命中缓存的报告不含该两项。`FieldSnapshot` 未加 `index_digest`，
    待 T41/E3 评估是否补（不影响 T11-T15）。
+9. **`mode` 严重度升级（DR-26，T50）**：`mode ∈ {"research","production"}`，默认 `research`；
+   `production` 时把未通过的 `adj_alignment`（warn）升级为 block 后再计算 `passed`。
+   默认路径报告逐字不变（研究入口 dry-run 仍为 WARN）。
 
 **回退点**：删除模块；契约不在管线默认路径调用，删除后无运行时影响。
 
@@ -786,6 +801,11 @@ scripts/spec_runner_adapter.py（已完成）
 | T44 | jsonl `lock_path` 获取/释放；并发线程无交错 | F-H |
 | T45 | `Inspect.signature` 断言 `bootstrap_indices` 默认 None | 零变更 |
 | T46 | `env_fingerprint()` 含 python/numpy/pandas/BLAS/线程且可序列化 | B7 |
+| T47 | `qfq` 在 production/golden 被拒；research 允许并原样写入；非法枚举拒绝 | 设计 §5.7.2 / H3 |
+| T48 | tradable 代理口径（`st_source`/`suspend_source`）默认补全并写入 record；非法取值拒绝 | 设计 §5.7.2 / H1 |
+| T48b | 不同 `st_source` → 不同 `record_id`（口径进 `ID_FIELDS`） | DR-25 |
+| T49 | `known_gap` 码名对齐设计词表（`barra_stale`/`industry_stale`），不误判 block | 设计 §5.7.4 |
+| T50 | `adj_alignment` 严重度随 `mode`：research=warn（默认）/ production=block；非法 mode 拒绝 | 设计 §5.3 / DR-26 |
 
 ### 5.3 红→绿记录形态（F5，Step 9 执行时填写）
 
@@ -952,6 +972,66 @@ scripts/spec_runner_adapter.py（已完成）
              （E6 收尾 1907 → E7 +7：T41-T45 5 + test_contract_gate 2）；0 失败 0 新增 skip
      session: factorpipe-govbase-step9-20261117（seq 25）
      时间: 2026-11-18T01:10:40+08:00
+
+[红] T46-T49 命令: "C:\Users\Peng\AppData\Local\Programs\Python\Python312\python.exe" -m pytest tests/test_backtest/test_governance.py tests/test_backtest/test_data_contract.py -q --tb=short
+     退出码: 1
+     关键失败行:
+       E   ValidationError: Extra inputs are not permitted [type=extra_forbidden]（T47：price_convention 字段缺失）
+       E   KeyError: 'st_source'（T48：tradable 代理口径未补默认）
+       E   AssertionError: {'barra_missing', 'industry_missing'} 不含 barra_stale/industry_stale（T49）
+     摘要: 3 failed, 2 passed in 0.35s
+     说明: T46（env_fingerprint 已实现）与 T48b 为既有实现的表征测试（先绿）；RULE-1 如实登记。
+     时间: 2026-11-18（步骤 9 §6 缺口补齐，实现前）
+
+[绿] T46-T49 命令: 同上
+     退出码: 0
+     用例计数: 22 passed in 0.61s（governance + data_contract；T50 加入后复跑）
+     联合: 五个治理测试文件 49 passed in 1.80s；六文件（+pipelines_hook）53 passed in 2.99s；
+           +test_contract_gate 2 → 55 passed / 3.13s（T50 加入前读数；含 T50 后本批新增 56 例 passed / 2.70s，七文件内筛选）
+     实现: governance.py 增 PRICE_CONVENTIONS/ST_SOURCES/SUSPEND_SOURCES/TRADABLE_SOURCE_DEFAULTS；
+           price_convention 进 ID_FIELDS（DR-25）；tradable 默认补全 + 枚举校验；
+           data_contract.py known_gap 码名 → <field>_stale（barra/industry）
+     时间: 2026-11-18（步骤 9 §6 缺口补齐后）
+
+[绿] E8 版本门禁命令: python scripts/spec_runner_adapter.py gate version-consistency --session factorpipe-govbase-step9-20261117
+     退出码: 0
+     门禁读数: gate[version-consistency] verdict=pass exit=0；7 passed in 0.17s
+     手工校验: verify_fix3_manual.py → 6/6 预期位置均为 3.6.0；无旧版本残留；
+               缓存 code_version=v2.3.0-cache 独立；__version__=3.6.0
+     锚点: pyproject.toml / __init__.py / config_v2.py / reporting.py /
+           tests/test_fix3_version_unification.py / tests/test_backtest/verify_fix3_manual.py（6 处）
+     时间: 2026-11-18（步骤 9 E8）
+
+[红] T50 命令: "C:\Users\Peng\AppData\Local\Programs\Python\Python312\python.exe" -m pytest tests/test_backtest/test_data_contract.py::test_t50_adj_alignment_severity_follows_mode -q --tb=short
+     退出码: 1
+     关键失败行: E   TypeError: check_data_contract() got an unexpected keyword argument 'mode'
+     摘要: 1 failed in 0.37s
+     时间: 2026-11-18（步骤 9 §6 缺口补齐续，实现前）
+
+[绿] T50 命令: pytest tests/test_backtest/test_data_contract.py -q --tb=short
+     退出码: 0
+     用例计数: 7 passed in 0.17s（T11-T15 + T49 + T50）
+     实现: `check_data_contract(..., mode="research")`；production 下未通过的
+           `adj_alignment` 由 warn 升级 block（`dataclasses.replace`）后再算 passed
+     时间: 2026-11-18（步骤 9 §6 缺口补齐后）
+
+[E8 验收取证] 命令: python C:\Users\Peng\AppData\Local\Temp\govbase_perf_split.py
+     退出码: 0；产物 out/govbase_perf.json
+     性能: 契约冷 0.090s / 缓存 0.0021s（达标）；record 10k 4.442s / BH 100k 0.081s /
+           RW 1000×1000 3.203s / White 与 SPA 均 >300s（300s 硬上限）/ golden 0.140s（超预算 → P2-1）
+     兼容: pyproject 仅 version 行；backtest/__init__.py 空 diff；缓存 v2.3.0-cache；
+           Python 3.9 AST 扫描 0 违规
+     数据口径: mv_gap_blocked=true；adj_alignment 可见；calendar_source=injected；
+               known_gap_codes=['industry_stale']
+     时间: 2026-11-18
+
+[绿] E8 全量回归命令: python scripts/spec_runner_adapter.py gate unit-tests --session factorpipe-govbase-step9-20261117
+     退出码: 0
+     读数: 1920 passed, 7 skipped, 167 warnings, 13 subtests passed in 742.43s (0:12:22)
+     零变更: 基线 1864 passed / 7 skipped；+56 = 本批 E1-E8 新增用例（T1-T50 + T7b）；0 失败 0 新增 skip
+     耗时: 742.43s vs 基线 1516.82s（ratio 0.49，≤1.2 预算）
+     session: factorpipe-govbase-step9-20261117（seq 28）
+     时间: 2026-11-18T02:15:24+08:00
 ```
 
 > 只有绿、无红 = 未按 TDD 执行，该行不得标 ✅（SPEC_PROCESS F5）。
@@ -985,6 +1065,16 @@ scripts/spec_runner_adapter.py（已完成）
 | 全量测试 | 不劣化 >20% | 基线（见 §0 E0）vs 实施后 | 定位慢测试 |
 
 > 性能读数记入 `out/govbase_perf.json`（不入库），作为 E2 证据；预算超限 → P2 问题，不阻断功能验收，但须登记。
+
+**实测（2026-11-18，E8 收尾）**：2/8 达标——契约冷 **0.090s**、缓存 **0.0021s**；5/8 超预算——
+记录 10k **4.442s**、BH 100k **0.081s**、RW 1000×1000 **3.203s**、White/SPA **>300s**（300s 硬上限，内存未测）、
+golden 24×300×4 **0.140s**；全量耗时 **742.43s vs 基线 1516.82s（ratio 0.49 ≤ 1.2）**。超预算项登记为 P2-1（性能债），
+原因与后续优化见 [ADD 审计 Phase 7](audit/2026-11-18-v3.6.0-governance-base-audit.md)。
+
+> **2026-11-18 性能包关闭 P2-1（3.6.0 内折入不 bump）**：5 项复测全部达标 —— append 10k **0.724s**
+> （预算重估 0.1→1.0s，序列化下界 ≈0.45s）、BH 100k **0.0156s**、RW 1000×1000 **0.0071s**、
+> White/SPA **7.56s / 3.89s**（峰值内存 170.9 / 170.2 MB）、golden 24×300×4 **0.0586s**；
+> 读数与设计决策见 [EXECUTION_V3.6.0_PERF_PACK](EXECUTION_V3.6.0_PERF_PACK.md) §5。
 
 ---
 
@@ -1040,7 +1130,7 @@ python scripts/spec_runner_adapter.py gate unit-tests --session factorpipe-govba
 |----|---------|------|
 | 模块 | 删除 4 个新文件 | 无调用方（D1），零波及 |
 | 既有代码 | 删除 `bootstrap_indices` 分支 / 删除 hook 方法 | 默认 None，行为回到 3.5.3 |
-| 版本 | 5 处字面量回退 3.5.3 | 版本测试恢复 |
+| 版本 | 6 处字面量回退 3.5.3（E8 复核；含 `verify_fix3_manual.py`） | 版本测试恢复 |
 | 数据 | `tests/golden/` 删除 | 仅测试失败，无运行时影响 |
 | 流程 | 删除 `scripts/spec_runner_adapter.py` | 仅失去门禁入口 |
 
@@ -1181,6 +1271,25 @@ DESIGN §12 测试项 **32/32** 在本文映射、三文档代码围栏全配对
 取证分级：P1-P5/P8 = E2（探针可重放）；P6/P7 = E3（文档文本核对）；gate 读数 = E1（runner seq 25）。
 E5 级推测证据未使用；发现数按实测登记（3 项，含 1 项复审员自误）。
 
+### 9.9 独立复审（T46-T50 + E8 收尾批次，RULE-5）
+
+> 基座：reviewer = GLM-5.3-Flash，implementer = DeepSeek-V4.1-Flash（异构模型家族）；
+> 权限：reviewer 只标记、**未改写实现**（RULE-5 单向权限）。
+> 方法：初扫 4 项 → 双验证器并行交叉核验（4/4 确认，0 误报）；
+> R1 附只读 python 实测复现。
+> 读数留档：[review_v360_t46_e8_results.txt](../out/review_v360_t46_e8_results.txt)。
+
+| # | 级别 | 发现 | 处置 |
+|---|------|------|------|
+| R1 | MAJOR/待修 | `build()` 在计算 `record_id` 前未对 `price_convention` 补默认：`compute_record_id` 对缺失键按 `None` 参与 SHA256 → `build(**base)` 与 `build(**base, price_convention="hfq")` 最终字段一致但 `record_id` 不同（实测 `same id: False`）；语义等价记录绕过 `on_conflict` 去重，append-only 账本可产生语义重复条目。T7 幂等两侧均不传该字段、T48b 只覆盖 tradable，恰好掩盖此场景。`gate_policy_version` 为历史既有同模式（本批未恶化） | 用户裁决：落档披露，本批不修码；下批修 `build()` 补默认（`setdefault("price_convention", "hfq")`，当前无存量治理记录、改 id 零兼容风险）+ 红→绿测试；**已修复：修复包 F1 / T51 红→绿**（[FIX_PACK §5](EXECUTION_V3.6.0_FIX_PACK.md)） |
+| R2 | MINOR/披露 | golden 场景判定用 `G4` **键存在**而非 `G4.passed`：research + G4(passed=False) + qfq 亦被拒（实测确认）。保守方向（无漏判、仅可能误拒“G4 失败留档”）；设计 §5.7.2 未精确定义 golden 判定 | 文档澄清「G4 键存在即视为 golden 场景」或下批改联合判定；T47 补 G4 失败场景；**已修复：修复包 F2 / T52 红→绿**（[FIX_PACK §5](EXECUTION_V3.6.0_FIX_PACK.md)） |
+| R3 | MINOR/披露 | `known_gaps` 码名按字段名白名单特判（`spec.name in ("barra","industry")`）；当前行为与 §5.7.4 词汇表完全对齐（default_fields 仅此二字段走 known_gap；`delist_coverage_unverified` 属专项 B 词表示例、不承诺检测） | 下批改集中映射/FieldSpec 语义标记，同步 T49；**已修复：修复包 F3 / T53 红→绿（`GAP_CODE_BY_FIELD`，对外码名不变）**（[FIX_PACK §5](EXECUTION_V3.6.0_FIX_PACK.md)） |
+| R4 | MINOR/披露 | `verify_fix3_manual.py` 的 `OLD_VERSIONS` 不含 3.5.3（本批 3.5.3→3.6.0 升级后残留不被扫描）；实测全仓无代码赋值级残留（仅 7 处 docstring 版本史描述），6 锚点均 3.6.0；缺口为本批前既有 | 下批 `OLD_VERSIONS` 追加 "3.5.3"；**已修复：修复包 F4 / T54 红→绿**（[FIX_PACK §5](EXECUTION_V3.6.0_FIX_PACK.md)） |
+
+**结论**：PASS_WITH_NOTES — 0 critical / 1 major（R1 已裁决落档）/ 3 minor。
+忠实度核对通过：adj_alignment mode 升级 = 设计 §5.3；st/suspend 默认与枚举 = §5.7.2；
+known_gaps 码名 = §5.7.4；6 版本锚点一致；py3.9 语法合规；tradable 补默认先于 id 计算。
+
 ---
 
 ## §10 设计 ↔ 实施映射（步骤 6 对齐自检）
@@ -1222,9 +1331,11 @@ E5 级推测证据未使用；发现数按实测登记（3 项，含 1 项复审
 |---|------|---------|---------|---------|
 | D-1 Hansen 是否按原文 studentize | 与 Stata 原文口径对拍 DIFF 时有消费方影响评估 | P1；本批 E5 产出双口径差异 | 不修复，先双口径披露 | E2（E5：studentized 0.548 vs 仓库 0.498，差 0.05） |
 | D-2 RW 快速核是否下沉 `multiple_testing.py` | T27 等价性 + 性能读数达标 | 步骤 9 E4 完成时 | 仅台账内使用 | E1（T27 通过，≤1e-15） |
-| D-3 golden 是否纳入 record_id 向量基线 | 基线机制能覆盖治理件自身 | 步骤 9 E3 完成时 | 纳入，作为第二基线 | E4（倾向） |
+| D-3 golden 是否纳入 record_id 向量基线 | 基线机制能覆盖治理件自身 | 步骤 10 审计裁定（2026-11-18） | **已解决**：不落 fixture 向量基线，改以 T1/T2/T3 参数化断言覆盖 `record_id` 确定性/全字段敏感性/易变字段不敏感（`record_id` 为纯函数、无环境依赖，静态向量只增维护成本） | E1（T1-T3 全绿；审计 P2-2） |
 | D-4 `ancestors()` 断链是否结构化标注 `broken_link` | T41 验收前决定签名形态 | 步骤 9 E6 完成后（2026-11-18 裁定） | **已解决**：采用 `AncestorEntry`（决策锚点：git `rev-list --missing=print` 缺失对象以 `?` 标记不中断；GraphQL 部分成功 data+errors） | E1（T41 红→绿；全仓无调用点） |
 | D-5 `default_fields()` 与真实目录布局不一致 | 直接对 `E:\Ashare_data` 调用默认字段时 | 步骤 9 E7 实施时（2026-11-18） | E7 组合层适配（排除 `list_date`/`calendar`/`barra`、字符串日期索引归一化）；核心 `default_fields()` 的修正留后续批次 | E2（dry-run BLOCK mv 被正确拦截；其余字段通过适配读取） |
+| D-6 设计 §4.3 的 `ID_FIELDS` 是否含 `price_convention` | §6 口径验收发现价格口径进 record 但未进 ID | 步骤 9 §6 缺口补齐时（2026-11-18 裁定） | **已解决**：纳入 `ID_FIELDS`（DR-25）——同一实验不同价格口径必须产生不同 `record_id`，否则可复现性被口径混用击穿 | E1（T48b 红→绿：不同 `st_source` → 不同 record_id；全仓无存量数据需迁移） |
+| D-7 设计 §5.3 `adj_alignment` 的 production=block 如何传入 | §6 验收发现接口无 `mode` 参数，严重度无法随场景升级 | 步骤 9 §6 缺口补齐续（2026-11-18 裁定） | **已解决**：`check_data_contract(..., mode="research")`；production 升级 block（DR-26） | E1（T50 红→绿：默认/research 均 warn，production block） |
 | U1 RW/White/SPA 真实 A 股 size/power | 1000 reps 拒绝率 ∈ [0.03,0.07] | 步骤 9 后 | 未知 | E5（待核） |
 | U2 PBO S 选择 | 预注册 + 敏感性 | P1 | S=10，12/16 敏感性 | E5（待核） |
 | U3 DSR 有效 N | N 敏感性报告 | P1 | 未知 | E5（待核） |
@@ -1234,7 +1345,8 @@ E5 级推测证据未使用；发现数按实测登记（3 项，含 1 项复审
 
 ## §13 下一步
 
-1. 步骤 7：`docs/audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md`（每项 DoR/DoD）；
-2. 步骤 8：四文档一致性 review（机械读数 + 双向引用 + 断言延续）；
-3. 步骤 9：TDD 实施（E1 → E2 ∥ E3 → E4 → E5 → E6），红→绿两读数入档；
-4. 步骤 10：ADD 四阶段审计 + 取证矩阵 E1-E5。
+1. 步骤 7：`docs/audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md`（每项 DoR/DoD）——**已完成**；
+2. 步骤 8：四文档一致性 review（机械读数 + 双向引用 + 断言延续）——**已完成**（CONSISTENCY_REVIEW，E8 关闭 C5）；
+3. 步骤 9：TDD 实施（E1 → E2 ∥ E3 → E4 → E5 → E6 → E7 → E8），红→绿两读数入档——**已完成**（§5.3）；
+4. 步骤 10：ADD 四阶段审计 + 取证矩阵 E1-E5——**已完成**
+   （[审计报告](audit/2026-11-18-v3.6.0-governance-base-audit.md)；P1 0 / P2 5（4 处置 + P2-5 落档）/ P3 7 披露）。

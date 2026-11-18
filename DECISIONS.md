@@ -50,7 +50,12 @@
 | ADR-047 | 多断点接入 diagnose 标签路径 — opt-in + 形式检验 + 材料性门控 | v3.5.1, 2026-11-17 |
 | ADR-048 | 多断点路径 NaN 间隙守卫 — 连续性描述 + ES 降级 suspect | v3.5.2, 2026-11-17 |
 | ADR-049 | sup-F 自相关稳健临界值 — AR(1) sieve bootstrap | v3.5.3, 2026-11-17 |
-| ADR-050 起 | 未占用 | — |
+| ADR-050 | 治理记录契约 — GovernanceRecord + AncestorEntry | v3.6.0, 2026-11-18 |
+| ADR-051 | 数据契约与 A 股口径枚举 — GR-2 + E7 组合层适配 | v3.6.0, 2026-11-18 |
+| ADR-052 | Golden master 回归基线 — parquet + manifest + 容差比较 | v3.6.0, 2026-11-18 |
+| ADR-053 | 多重检验台账与 bootstrap 索引注入 | v3.6.0, 2026-11-18 |
+| ADR-054 | 研究入口契约门禁 — 默认关闭 + FAIL exit 2 | v3.6.0, 2026-11-18 |
+| ADR-055 起 | 未占用 | — |
 
 ### 勘误表
 
@@ -3539,6 +3544,177 @@ power (Δ=1σ) 100% → **96.0%**; φ=0 size 4.7% → 4.0%。
 3 个新参数、`diagnose` 的 2 个新键; 删除 F1-F11; 版本 6 锚点回 3.5.2;
 回退 ADR-049/CHANGELOG/PROJECT_STATUS/DEV_PROGRESS/CODE_WIKI 条目。
 默认 asymptotic 路径未改动, 无需回滚。
+
+---
+
+## ADR-050: 治理记录契约 — GovernanceRecord + AncestorEntry (v3.6.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.6.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_governance.py` (T1-T10、T46-T48b) + `test_govbase_supplement.py` (T33-T45)
+**关联文档**: [设计](docs/private/DESIGN_GOVERNANCE_BASE.md) (private, 未提交) / [实施](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md) / [验收](docs/audit/CHECKLIST_V3.6.0_GOVERNANCE_BASE.md) / [一致性](docs/audit/CONSISTENCY_REVIEW_V3.6.0_GOVERNANCE_BASE.md)
+
+### 背景
+
+研究结论此前只散落在脚本输出与日志中：同一因子在不同时点的"同一实验"无法凭记录复现，
+血缘（parent）断链时仅 warning 暴露、下游无法结构化识别；口径字段为自由字符串，
+qfq/ST 代理等关键约定无法机器校验。
+
+### 决策
+
+1. `GovernanceRecord`（pydantic frozen, `extra='forbid'`）schema 1.0.0；身份字段
+   `ID_FIELDS` 决定 `record_id`（SHA256 of canonical JSON），结果字段不参与；
+   `payload_hash` 排除易变/运维字段（timestamp/reviewer/env 等）。
+2. 口径字段加入 `price_convention`（默认 `hfq`，进 `ID_FIELDS`）；
+   `tradable_convention` 的 `st_source`/`suspend_source` 在 `build()` 补默认
+   （`name_proxy`/`event_rebuild`）并强制写入记录（H1）。
+3. `ancestors()` 返回 `List[AncestorEntry]`：断链 `broken_link=True, reason='missing'`，
+   遇更新 schema `reason='schema_mismatch'`；循环/超深抛 `GovernanceError`。
+   决策锚点：git `rev-list --missing=print`（缺失对象显式标记、遍历不中断）、
+   GraphQL 部分成功（data + errors）。
+4. 存储 DuckDB 主 / JSONL fallback；`lock_path` 进程内线程锁 + Windows `msvcrt` /
+   POSIX `fcntl`；写入前深拷贝、append-only、同 id 同 payload 幂等、异 payload 抛
+   `ReproducibilityConflictError`。
+5. stage 条件校验（S0-S6/portfolio/recheck）：缺必填 → `ValidationError`；
+   production 必须 S5/S6 + 全门禁 passed + reviewer。
+
+### 后果
+
+- **正面**: 记录可确定性重算 id；断链可被程序识别；口径/门禁来源可审计。
+- **负面/披露**: `price_convention` 未列入 DESIGN §4.3 的 ID 字段清单（设计遗漏），
+  本 ADR 以可复现性优先纳入（DR-25 登记）；旧 schema 记录走宽松副本 + `legacy=True`。
+- **回滚**: 删除 `governance.py`、`test_governance.py`/`test_govbase_supplement.py`；
+  无默认调用点（E6 hook 默认 None），删除即回到 3.5.3 行为。
+
+---
+
+## ADR-051: 数据契约与 A 股口径枚举 — GR-2 + E7 组合层适配 (v3.6.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.6.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_data_contract.py` (T11-T15、T49) + `test_contract_gate.py` (E7)
+**关联文档**: [设计 §5/§5.7](docs/private/DESIGN_GOVERNANCE_BASE.md) / [实施 §2.2/§2.8](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md) / [数据层复审](docs/analysis/DATA_LAYER_GOVERNANCE_REVIEW.md)
+
+### 背景
+
+真实数据 `mv` 止于 2026-01-23（样本末 01-30，5 日缺口）、`adj` 与 `price` 缺 81 日、
+`barra`/行业断档。此前研究脚本无前置门禁，"带病数据"可静默进入结论；
+`qfq` 会随新除权事件改写全部历史价，破坏 `data_snapshot_hash` 与 golden 的可复现性。
+
+### 决策
+
+1. `check_data_contract` 对每个字段做 schema/freshness/PIT/覆盖率/值域/一致性检查；
+   `strict=False` 默认只出报告；`expected_missing_tail` 从 lag 扣减（`raw_lag` 保留）。
+2. `price_convention` 枚举（`hfq`/`raw+adj_factor`/`qfq`/`total_return`）；
+   `qfq` 在 `mode='production'` 或含 G4（golden）时**直接拒绝**，research 允许并写入记录。
+3. `known_gaps` 结构化，码与设计词汇表对齐：`barra_stale`/`industry_stale`（其余 `<field>_missing`）。
+4. E7 组合层 `scripts/contract_gate.py`：`default_fields()` 保持不动，
+   适配真实目录 `market_data/` 前缀、pkl 字符串日期索引归一化，
+   `list_date`/`calendar` 参数注入，`barra` 按 known_gap 处理。
+5. 快照 hash 排除 `as_of`、含 `content_digest`；`calendar_hash` 入快照；
+   `bdate` 兜底时 `calendar_source='bdate_fallback'` + warn。
+
+### 后果
+
+- **正面**: 当前 mv 5 日缺口被拦截（`--contract-only` exit 2）；研究口径默认零变更。
+- **负面/披露**: 核心 `default_fields()` 与真实目录布局不一致（D-5，留后续批次）；
+  `adj` 81 日不对齐为 warn（research）/block（production），当前研究记录披露。
+- **回滚**: 删除 `data_contract.py` + `contract_gate.py` + 入口 `--contract*` 参数即可。
+
+---
+
+## ADR-052: Golden master 回归基线 — parquet + manifest + 容差比较 (v3.6.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.6.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_golden_master.py` (T16-T20)
+**关联文档**: [设计 §6](docs/private/DESIGN_GOVERNANCE_BASE.md) / [实施 §2.3](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md)
+
+### 背景
+
+"默认路径零变更"此前只能靠回归全绿间接证明，缺少逐值基线；
+跨环境 bitwise 比较会因 BLAS 差异误报。
+
+### 决策
+
+1. 基线 = long-format parquet + `manifest.json`（含 pipeline_version、
+   env_fingerprint、tolerance、files digest 等）。
+2. 比较口径 `rtol=1e-10`/`atol=1e-12`，禁止跨环境 bitwise；
+   `env_fingerprint` 只披露、不阻断。
+3. `capture` 不覆盖既有基线；`force=True` 必须提供 `reason` + `reviewer`（审计）。
+4. 合成基线 `tests/golden/govbase_v1_synth`：36 月 × 20 股 × 2 因子，`seed=20261117`；
+   在 E6 hook 之后采集，作为后续回归锁（不回溯证明 hook 中性，DR-20）。
+
+### 后果
+
+- **正面**: 参数变更可被逐值发现；E6 零变更由 T31（≤1e-10）持续守门。
+- **披露**: manifest 记录采集时 `pipeline_version=3.5.3`；版本升级不复采，
+  比较不校验版本字段（只比数值 + 容差）。
+- **回滚**: 删除 `golden_master.py` 与 `tests/golden/`。
+
+---
+
+## ADR-053: 多重检验台账与 bootstrap 索引注入 (v3.6.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.6.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_multiple_testing_ledger.py` (T21-T30、T39-T40)
+**关联文档**: [设计 §7](docs/private/DESIGN_GOVERNANCE_BASE.md) / [实施 §2.4/§2.5](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md)
+
+### 背景
+
+"试了多少次"无台账，backfill 补录会混入 confirmatory 主分析；
+White RC / Hansen SPA 的 bootstrap 无共享索引，跨实现结果不可对齐复现。
+
+### 决策
+
+1. `MultipleTestingLedger`：family 必须在数据观察前预注册（`created_at < registered_at`）；
+   BH/BY/Romano-Wolf/White RC/Hansen SPA；轨-方法匹配（FDR↔BH/BY，FWER↔Bonferroni/Holm）不符抛
+   `TrackMismatchError`。
+2. 三分母 `n_trials ≥ n_testable ≥ n_hypotheses`；backfill trial 不进 confirmatory 主分析；
+   新增 exploratory 不改变主 `result_id`。
+3. `WhiteRealityCheck.test` / `HansenSPA.test` 追加 `bootstrap_indices: Optional[(B,T)] = None`；
+   `None` 走原 RNG 路径（逐值不变），注入路径按同一索引矩阵分块重抽样。
+4. 注入路径的 `individual_p_values` 为联合重抽样边际 p，与 `None` 路径逐列独立
+   block bootstrap 口径不同（F2 披露），主 `rc_p_value`/SPA 口径不变。
+
+### 后果
+
+- **正面**: 多重检验分母可审计；同一索引矩阵可在台账/White/SPA 间复现。
+- **回滚**: 删除台账模块；`bootstrap_indices=None` 即原路径。
+
+---
+
+## ADR-054: 研究入口契约门禁 — 默认关闭 + FAIL exit 2 (v3.6.0)
+
+**日期**: 2026-11-18
+**状态**: 已实施 (v3.6.0)
+**优先级**: P0
+**关联测试**: `tests/test_backtest/test_contract_gate.py` (2 例)
+**关联文档**: [设计 §10.4](docs/private/DESIGN_GOVERNANCE_BASE.md) / [实施 §2.8](docs/EXECUTION_V3.6.0_GOVERNANCE_BASE.md)
+
+### 背景
+
+GR-2 若只作为库存在，研究脚本仍可绕过；强制接入又会改变既有研究口径（零变更承诺冲突）。
+
+### 决策
+
+1. 容量/多头端研究入口 `scripts/verify_capacity_impact.py`、
+   `scripts/verify_long_side_research.py` 增加 `--contract` / `--contract-only` /
+   `--contract-sample-end` / `--contract-json`；**默认关闭**。
+2. 契约 FAIL → 退出码 2（`--contract-only` 直接返回）；报告落盘
+   `out/<prefix>_contract.{json,md}`（不入库）。
+3. 组合层适配真实数据布局（见 ADR-051），不修改核心 `default_fields()`。
+
+### 后果
+
+- **正面**: 在真实数据上正确拦截 mv 5 日缺口（两脚本 dry-run exit 2）；
+  不传参数时行为与 3.5.3 逐位一致。
+- **回滚**: 删除 `contract_gate.py` 与 4 个命令行参数（不接线即回退）。
 
 ---
 
