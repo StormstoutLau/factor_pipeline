@@ -394,7 +394,7 @@ tests/
 | `test_imputer_e2e_causal.py` | 9 | ✅ 全部通过 |
 | `test_imputer_ablation_lookahead.py` | 10 | ✅ 全部通过 |
 | `test_step3_imputer_ffill_ts.py` | 4 | ✅ 全部通过 |
-| **全量回归** | **803 passed, 10 skipped** | ✅ 0 regressions |
+| **全量回归**（as of v3.3.1） | **803 passed, 10 skipped** | ✅ 0 regressions |
 
 ### §8.3 测试运行
 

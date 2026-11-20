@@ -1,6 +1,6 @@
 # Project Status — 项目状态与待办追踪
 
-> **更新日期**: 2026-11-18
+> **更新日期**: 2026-11-20
 > **用途**: 跨会话的单一真相源 (Single Source of Truth)，所有待办写在这里，其他文档只引用不重复。
 > **更新规则**: 每次发版后划掉已完成项 + 新增下一版本待办。
 
@@ -59,25 +59,57 @@ v3.5.2 (2026-11-17) 多断点路径 NaN 间隙守卫 — 连续性描述 + ES �
 v3.5.3 (2026-11-17) sup-F 自相关稳健临界值 — AR(1) sieve bootstrap (ADR-049)  [x]
 v3.6.0 (2026-11-18) 治理底座 P0 四件套 — GR-1~GR-4 + 研究入口契约 (ADR-050~054) [x]
 v3.7.0 (2026-11-18) P1 统计证据链 — 样本外协议 + DSR/PBO + 效应量/G2 (ADR-055~058) [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.7.0
+v3.8.0 (2026-11-19) P2 多日执行模型 + Regime 容量压力测试（证据层）              [x]
+v3.9.0 (2026-11-19) P2 模拟数据验证骨架 + 步骤级追溯 + B2 修复                   [x]
+v3.8.1 (2026-11-20) 真实分钟面板编排接线 — λ 面板 + lambda_fill_ratio + partial_month [x]
+v3.9.2 (2026-11-20) 校准读数口径一致性修复 — c σ/c 门槛 + rho 日频 + temporary 标注 [x]
+v3.9.3 (2026-11-20) alpha 衰减模型选择 — 累计 alpha 曲线 + 单参数累计比 φ + 形成期 bootstrap (FO-1) [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.9.3
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
 v3.5.x (远期)     内生性-溢价诊断交互                                           [ ]
 ```
 
+> **v3.8.1 spec 状态（2026-11-20）**: **全 10 步完成（含步骤 10 审计复审）** — TDD 实施 8 文件白名单 + 21 例（19 + 2），全量 `pytest -q` **2047 passed / 15 skipped / 0 failed**（步骤 9: 808.70 s；步骤 10 审计独立复跑: 869.00 s，计数一致）；G5 日频层 exit 0（`evidence_level=ohlc`）、G6 全量 39 月 exit 0（`evidence_level=minutes`，审计以最终代码独立复跑）；默认 `out/capacity_impact.json` SHA256 `82728CE1…` 审计重跑逐位一致；单月 27.37 s / tracemalloc 峰值 296.6 MB（≤300 MB）；包版本 **3.9.1**。
+> 验收清单 [CHECKLIST_V3.8.1_MINUTE_PANEL_WIRING.md](audit/CHECKLIST_V3.8.1_MINUTE_PANEL_WIRING.md) **v1.3** 步骤 10 复核：**84 项 = 79 通过 / 0 失败 / 0 阻塞 / 5 N/A**。五项遗留全部裁决：X5 转「通过（偏差登记）」（填充值仅展示用，EXECUTION §3.5 口径改与实现对齐）；G8 残留计数修正 21→20（声明点判定维持）；G7 升级端到端证据（合成低覆盖数据默认 exit 2 / `--force-coverage` 放行留痕）；G2 替代范围有效（执行层 9 文件审计复跑 59 passed）；CHANGELOG 标题补「对应路线图批次 v3.8.1」。
+> 审计报告：[2026-11-20-v3.8.1-minute-panel-wiring-audit.md](audit/2026-11-20-v3.8.1-minute-panel-wiring-audit.md)（异构复审，5 视角 × 30+ 探针；结论 **PASS**）。审计观察（建议未来批次）：覆盖度 `universe_ratio` 可 >1（建议交集口径）；`--force-coverage` 警告未进 `evidence_warnings`。
+> 步骤 9 期间新增修复：`coverage_gate` 入参归一化（`PanelCoverage` 对象 → dict，G6 首跑暴露）；`--no-minute` 证据等级降级为 `ohlc`（不再虚报 `minutes`）；分钟加载内存优化（337.6 → 296.6 MB，`panel_hash` 不变）。
+> 批次收尾：无待办；下一候选批次见 §1 路线图。
+
+> **v3.9.2 spec 状态（2026-11-20）**: **全 10 步完成** — 诊断 c/rho/temporary 三项读数；
+> TDD 新增 8 例（T1-T7 + 审计补 T9，先红后绿）；全量 **2055 passed / 15 skipped / 0 failed**（772.15 s）；
+> 审计报告 [AUDIT.md](../spec/v392-calibration-unit-fix/AUDIT.md)：
+> PASS（本批范围），审计修复 A-1（rho 守卫）/ A-2（G3/G4 口径）/ A-3（`__all__` 越界回归）；
+> 默认 SHA `82728CE1…` 逐位不变；39 月校准：c 15.07→2.91（r2=0.561，超区间→回退 0.5）、
+> cost_by_h ↓5.9×、rho -0.147(月频)→+0.114(日频)、retention 无负值、temporary 标 `portfolio_ar1_proxy`；
+> **FO-1 未达**：net(h) 仍 ≈ −cost(h)，根因是衰减模型选择 → v3.9.3 P0。
+
+> **v3.9.3 spec 状态（2026-11-20）**: **全 10 步完成（Step 10 独立子代理审计，有条件通过）** — 累计 alpha 曲线 `A(h)` + 单参数累计比 `φ` + 形成期 block bootstrap；
+> TDD 新增 10 例（T393-1~T393-10，先红后绿）；全量 **2057 passed / 15 skipped / 0 failed**（三次一致：796.71 s / 825.00 s / 审计复跑 1025.25 s）；
+> D-3 计数差**已定位关闭**：7 个整模块级 skip 测试文件，`2065 nodes + 7 = 2072 = 2057+15` 恒等式自洽（[AUDIT.md](../spec/v393-alpha-decay-model/AUDIT.md) §4）；
+> 默认 `out/capacity_impact.json` SHA `82728CE1…` 逐位不变；校准重跑 `out/v393_decay_curve.json|md`（SHA `D06225DF…`，两次逐位一致）：
+> `n_periods=73`（观察项 D-1，口径改判已登记）、`alpha0_anchored=A(20)=0.00220065` vs 旧 `alpha0_calendar=0.00262866`（−16.3%）、
+> `phi≈1.0`（fitted/empirical）、`m(5)=0.382`（lo −3.853 / hi 1.848）、`m(10)=0.395`（lo −3.361 / hi 1.148）、`m(20)=1`（构造性）、
+> `net(5)=−7,159,077` / `net(10)=+905,290` / `net(20)=+18,115,106` → **P-002① 达成**，`verdict` 双 `flat`（「未检出衰减 ≠ 无衰减」）；
+> `evidence_warnings=[]`；装配 0.100 s / 峰值 4.4 MB。
+> 验收清单 [CHECKLIST.md](../spec/v393-alpha-decay-model/CHECKLIST.md) v1.0 **accepted**：**70/70 通过**；审计 [AUDIT.md](../spec/v393-alpha-decay-model/AUDIT.md)（独立子代理 + 同基座降级声明，D-001 整改落地）：**0 P1 / 2 P2 / 4 P3** → 遗留修复包 **P-012**（F-1 回退分支 net lo/hi 漏乘 (h_m/h)，默认调用图不可达；F-2 IMPLEMENTATION §5 通过线算术错误；F-3 phi_status 枚举未同步；F-4/F-5 裁决；F-6 退化态敏感性口径）；
+> 判读：`m(5)`/`m(10)` 点估计 <1 但 95% CI 宽覆盖 1 → 按预注册判 `flat`，不得表述为「无衰减」；`net(20)>0` 由构造性归一保证，判别力在 h=5/10。
+
 ---
 
-## §2. 当前待办 (v3.7.0 完成后)
+## §2. 当前待办 (v3.9.3 完成后)
 
-### 🔴 P0 — 阻塞/误导
+> **待办真值源已迁移**：P 级待办统一登记在 [PROGRESS.md](PROGRESS.md)（P-001 ~ P-012），本文件不再重复维护。
+> 当前优先级视图：P0 =（无，P-002 done）；P1 = P-003 / P-004 / P-005 / P-012（v3.9.3 审计遗留修复包）；P2 = P-006 ~ P-008 / P-010 / P-011；P3 = P-009。
+> 治理批 P-001（`spec/` 骨架 + 四模板 + v3.9.2 四件套迁移 + front-matter + PROGRESS + ADOPTION）已完成。
 
-| # | 任务 | 状态 |
-|---|------|------|
-| — | _(当前无 P0 阻塞项)_ | ✅ |
-
-### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点 + 治理底座 + 统计证据链 (v3.4.0 – v3.7.0)
+### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点 + 治理底座 + 统计证据链 + 执行/容量证据层 + 模拟数据验证骨架 + 真实分钟面板编排接线 (v3.4.0 – v3.9.1)
 
 | 版本 | 任务 | 变更 | ADR | 关键实测 |
 |------|------|------|-----|---------|
+| v3.9.2 (=3.9.2) | P2 校准读数口径一致性修复 | `core/impact.py` 新增 `fit_r2/C_R2_MIN/C_RANGE`；`panels.py` 冲击 σ 改日频、sqrt 增 `r2/identifiable`、c 不可识别回退 0.5、rho 改日频 + 非正回退、`temporary_basis`；`runner.py` 输出 `c_r2/c_identifiable/c_effective/temporary_basis` + rho 守卫；7 新例；版本 3.9.2 | 设计 D1-D5 | c 15.0677→**2.9107**（r2=0.5606，超区间→effective 0.5）；cost_by_h 91.54M→**15.57M**（h=5；↓5.9×）；rho **-0.147(月)→+0.114(日)**；retention 非负；temporary `[0,0,0.0042]` + 代理标注；默认 SHA `82728CE1…` 不变；**FO-1** net(h) 仍负 → v3.9.3 |
+| v3.8.1 (=3.9.1) | P2 真实分钟面板编排接线 | 新增 `backtest/execution/shell/panels.py`（`MinutePanelBuilder`：λ HAC + 缩尾/组中位填充 + 观测样本 ≤200k + 覆盖度 + `panel_hash` + 月缓存；`build_daily_panels`：temporary/rho/alpha0/cost(h)/plateau_sd/window_capacity；`assemble_panels`；`coverage_gate`）与 `tests/test_minute_panels.py`（19 例）；`loaders.py` 新增 `load_month_regression` + 代码过滤修复（`MIN_STOCK_CODE=1`）；`config.py` 16→19 字段；`runner.py` κ 接 `cfg.kappa` + `block_size_mode` 校验；`report.py` 新增四段 + R7/R9 脚注；脚本 `--no-minute/--panel-cache/--force-coverage` + `attach_panel_meta` + 证据等级降级；版本 3.9.1 | 设计 W1-W10 | 21 例全绿（19 + 2）；全量 **2047 passed / 15 skipped / 0 failed**（808.70 s）；默认 SHA256 `82728CE1…` 双跑 + 改前备份三方一致；G5 3.2 s（`ohlc`）/ G6 14.52 min（`minutes`）；单月 27.37 s、tracemalloc 296.6 MB；覆盖度中位 1.097 / 最差 1.050 / 深主板 57020；`fill_ratio=1.65%`、样本 200000；**X5 失败登记**（行业缺失两级退化链未实现） |
+| v3.9.0 | P2 模拟数据验证骨架与步骤级追溯 | 新增 `tests/synthetic`（6 场景 + ground truth）、`tests/invariants`（12 条 + 2 自检）、`backtest/trace.py`（JSONL + 首个分歧定位）、`backtest/tradability.py`（11 条限价规则 + T+1 + 成本四分项）、`scripts/verify_all.py` + 4 脚本 `--report-json`；修复 `_build_positions` NaN 排序（B2）；版本 3.9.0；**步骤 10 异构复审 PASS_WITH_FIXES**：H1 content_hash ±inf 折叠 / H2 adj_jump 网格校验次序 / H3 collect 顶层非 dict 崩溃，3 项修复 + T390-39/40/41 回归 → 40 例，+ H4 CHECKLIST 汇总勘误（108 项）+ 2 项披露 | 设计 D1-D6 | 40 例新增全绿；全量 **2026 passed / 15 skipped / 0 failed**（757.4 s）；默认快照 SHA256 `82728CE1…` 双跑一致；B2：NaN 仓位 271→0（真实单日）/ 262→0（conftest）；G8 18 文件 0 违规；探针终跑 41/41 PASS（留档 `out/review_v390_results.txt`）；CHECKLIST 102 通过 / 6 不适用 / 0 失败 |
+| v3.8.0 | P2 多日执行模型 + Regime 容量压力测试 | 新增 `backtest/execution/`（14 模块：4 端口 / 4 冲击模型 / 3 价差代理 / BVC / AR(1) 衰减 / 自动块长 / 分钟与日频加载器 / runner / report）；路径 B：`--calibrate` / `--evidence-level` / `--diagnose-window`；`pyproject` 增 `calib` extra（pyarrow）并追加进 `all`；版本 3.8.0 | ADR-055~058 后续（设计 D1-D4） | 新增 9 测试文件 56 例（先红 52 failed / 2 passed / 2 errors → 绿 56 passed）；全量 **1985 passed / 15 skipped / 0 failed**（790.5 s）；默认路径双跑 SHA256 `82728CE1…` 与 v3.7.0 逐位一致；单月分钟 23.5 s / 峰值 184 MB；校准 JSON/MD 落盘；CHECKLIST 112 通过 / 0 失败 / 2 不适用；**步骤 10 异构复审 PASS_WITH_FIXES**（H2 一字板判定修复 + T380-25b 回归 → 57 例，全量复跑 **1986 passed / 15 skipped / 0 failed**；探针留档 `out/review_v380_results.txt` 48 PASS / 4 P3 披露） |
 | v3.7.0 | P1 统计证据链 | 新增 `cross_validation.py` (PurgedKFold + CPCV N=6,k=2 + `HoldoutRegistry` DuckDB 全局锁 / 跨 batch 重叠拒绝 / `dev_mask` 裁 purge)、`overfitting.py` (DSR 逐期 SR + PBO/CSCV 严格整除 + `trim_to_divisible`)、`effect_size.py` (NW HAC + stationary bootstrap CI)；`specification_logger` v2 (逐规格序列 + `joint_inference` + `content_hash`)；台账 `stage` + `holdout_checker`；`governance` `G2Policy`/`evaluate_g2`；`scripts/verify_stat_evidence.py`；版本 3.7.0 | ADR-055~058 | 新增 55 例 + 扩展 8 例全绿; 全量 1929 passed / 15 skipped / 0 failed; 异构复审 PASS_WITH_FIXES (H1 常数序列守卫修复); 四段自检全 PASS; 性能 7 项全在预算内; 缓存代际 `v2.3.0-cache` 不变 |
 | v3.5.3 | sup-F 自相关稳健临界值 | `BreakpointDetector(..., sup_f_method='asymptotic'\|'bootstrap', n_bootstrap=1000, random_state=42)`; bootstrap 重写为 AR(1) sieve 残差自助 (OLS φ + 中心化残差重采样 + burn-in 50); `detect` 传 `y` + `critical_method`; 新增 `_sup_f_batch` 向量化; `FactorHealthDiagnoser` 透传 + `diagnose` +2 键 (`chow_critical` / `breakpoint_sup_f_method`, 28→30); 默认 asymptotic 逐位不变 | ADR-049 | F1-F11 11 passed; layer3 60 passed; size (T=240): φ=0.5 50.0%→5.3%, φ=0.8 93.3%→8.7%; power φ=0.5 93.7%; 实现口径复核 φ=0.5 size 48.7%→4.7% / power 96.0%; 真实 4 因子 \|φ̂\|≤0.21, 标签不变; 版本统一 7 passed + 手工 5/5; 异构复审 PASS_WITH_FIXES (P1-P8: 实现口径 8 配置复现 / 默认路径逐位不变 / 趋势+近单位根披露 / H8 因子名修正) |
 | v3.5.2 | 多断点路径 NaN 间隙守卫 | `detect_multiple` +5 连续性键 (13→18); `diagnose(..., breakpoint_mode='multiple')` +6 键 (22→28); `multi_break_gap_min_run=2`; 标签相关边界跨 ≥2 期缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; 默认 single 零变更 | ADR-048 | G1-G9 9 passed; layer3 49 passed; 纯噪声守卫触发 0-1.3%; 真断点远离间隙误降级 ≤0.7%; 真断点正落 g=5 间隙降级 21.7%; 端到端 single=ES / multiple=suspect; 版本统一 7 passed + 手工 5/5 |
@@ -116,13 +148,15 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | 1 | 冻结模型实证回测 (真实因子 IC/Sharpe 与旧实现对比) | ✅ **完成** (v3.4.0 A/B: 2 因子/2023; v3.4.12: 4 因子/2020-2026; 2026-11-16: 12 因子 × 三分段 + Barra 中性化 40 月, 5/12 BH / 3/12 Bonferroni; **组合层: 4 因子 + 复合 × 2 池 × 4 费率 — 全市场多空 SR 0.77-1.05 / NW t 2.4-3.0, 复合 SR 0.94 / t 3.04; 但多头超额 ≈0 (t≤0.48) → 收益来自空头端; 沪深300 内失效**; **多头端落地研究 (2026-11-17, v1.1 含异构复审): Q5 毛 16.89% 但净超额 +1.34% (t 0.48), 属低风险画像溢价 (低波动 z+0.98/无暴涨 z+0.96/低换手 z+0.67; 波动+流动性双中性后超额归零) — 非选股 alpha; 负面剔除 exQ1 净超额 +3.08% (t 4.08), TE 2.44%, 30bp 后 +2.39%, 跨基准停牌口径稳健, S1/S2 均正 (S2 边际) — 落地形态是「宽基底仓 + 排除最差 20%」, 沪深300 内仍无解; 复审 8 探针 0 推翻, PASS_WITH_FIXES (归因修正 H7 + 代码修正 H3)**; **容量/冲击成本压力测试 (2026-11-17, 已异构复审 PASS_WITH_FIXES): exQ1 现实容量约 90-100 亿 (低流动性层 10% ADV), 上限 200 亿, 盈亏平衡 200-300 亿 (c=1.0); Q5 容量 5-11 亿且 10 亿冲击后净 -0.70% → 不可产品化; exQ1 S2 在 100 亿冲击后 t 1.11 (可交易 0.65) 不显著 — alpha 集中于 S1**) | [v3.4.0 实证](analysis/V3.4.0_UNIFIED_ROUTING_EMPIRICAL_AB.md) + [Layer 3 HAC 验证](analysis/LAYER3_HAC_REAL_DATA_VERIFICATION.md) + [多因子×多年验证](analysis/MULTIFACTOR_MULTIYEAR_VERIFICATION.md) + [组合层回测](analysis/PORTFOLIO_BACKTEST_VERIFICATION.md) + [多头端落地研究](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) + [容量压力测试](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) |
 | 2 | v3.4.0 遗留选项: MAD 缩尾 (O1) | ✅ 实验完成 — 结论**不切换默认**, MAD 保留为可选项 | [实验报告](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) (ADR-042 已知遗留; O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
 | 3 | `BreakpointDetector.detect` T<30 → `_no_breakpoint_result` 缺失 (AttributeError) | ✅ v3.4.13 修复 (退化 6 键结果 + E1-E5 边界测试; 正常路径零改动) | [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) + [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md) |
-| 4 | **多日执行模型** (拆 2-3 日成交 + 延迟成本): 量化参与率下降带来的容量提升 vs 延迟 1-2 日的 alpha 衰减, 修正 exQ1「90-100 亿」口径; 前置为 P2 数据新鲜度守卫 | [ ] **回测主线下一优先** | [容量报告 §7.2-2 / §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md); [数据缺口诊断 §5](analysis/DATA_GAPS_DIAGNOSIS.md) (日频足够, 不依赖 mv/barra) |
-| 5 | **流动性 regime 容量压力测试**: 按全市场成交额 regime / 极端月 (2024-02) 重算 p95 参与率与容量, 给压力情景 | [ ] 可与 #4 合并交付 | [容量报告 §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) (ADV 未预测 / 容量对 regime 敏感) |
-| 6 | **exQ1 覆盖层工程化**: 规模/流动性下限参数 + 单测 + 与研究报告逐位对账 (不新增多头选股 API) | [ ] 待 #4/#5 容量口径定稿 | [多头端研究 §10-6](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
+| 4 | **多日执行模型** (拆 2-3 日成交 + 延迟成本): 量化参与率下降带来的容量提升 vs 延迟 1-2 日的 alpha 衰减, 修正 exQ1「90-100 亿」口径; 前置为 P2 数据新鲜度守卫 | 🟡 **v3.8.0 框架已成** (14 模块 + `net(h)`/`execution_days`/衰减核 + runner) — exQ1 真实口径复算待 v3.8.1 分钟面板接线 | [容量报告 §7.2-2 / §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md); [数据缺口诊断 §5](analysis/DATA_GAPS_DIAGNOSIS.md) (日频足够, 不依赖 mv/barra) |
+| 5 | **流动性 regime 容量压力测试**: 按全市场成交额 regime / 极端月 (2024-02) 重算 p95 参与率与容量, 给压力情景 | 🟡 **v3.8.0 机制已成** (`regime_capacity` + κ 三情景 + AveW 多窗) — 真实 regime 复算待 v3.8.1 (`out/capacity_calibration.md` 现 `min_regime=None`) | [容量报告 §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) (ADV 未预测 / 容量对 regime 敏感) |
+| 6 | **exQ1 覆盖层工程化**: 规模/流动性下限参数 + 单测 + 与研究报告逐位对账 (不新增多头选股 API) | [ ] 待 v3.8.1 真实面板复算容量口径 | [多头端研究 §10-6](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | 7 | **低风险倾斜表达研究** (Q5 替代形态): 因子倾斜/权重调整 vs 持有 Q5, 评估降波动与 TE 权衡 | [ ] 可选新方向 | [容量报告 §7.2-4](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) / [多头端研究 §10-2](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | 8 | **S2 样本外跟踪**: 2026-02 起刷新 exQ1 冲击后净超额, t<2 前对外标注「S1 证据」 | ⏸ 待数据更新 (当前止于 2026-01-30) | [容量报告 §7.2-5](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md) / [多头端研究 §7](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 
 > ⏸ **阻塞项 (仅记录, 暂不可执行)**: ① c 系数实证校准 — 无分钟/逐笔数据, 维持 c∈{0.1,0.5,1.0} 敏感性 ([容量报告 §8](analysis/PORTFOLIO_CAPACITY_IMPACT_STRESS.md)); ② 2023-06 后风格/行业中性 — barra 与行业源 2023-07-31 后停更 ([数据缺口诊断 §3](analysis/DATA_GAPS_DIAGNOSIS.md))。
+
+> 🧾 **台账校准（2026-11-19，v3.9.0 完成后）**: ① #4/#5 的**框架**已由 v3.8.0 交付（`backtest/execution/` 14 模块、`regime_capacity` + κ 三情景 + AveW），原 `[ ]` 属状态漂移；真实数据复算（exQ1「90-100 亿」口径修正、regime 重算）统一待 v3.8.1 分钟面板接线——证据：`out/capacity_calibration.md` 当前 `min_regime=None`、`c_calib_point=None`。② P2「数据新鲜度守卫」已由 v3.6.0 GR-2 实现（`FieldSpec.max_lag` 默认 mv=1 / 日频=0，`scripts/contract_gate.py` 前置），已勾销。
 
 ### 🟠 P1-A — 多因子治理体系底座 (路线图 P0 四项)
 
@@ -210,7 +244,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | — | 多断点路径 NaN 间隙守卫 | ✅ v3.5.2 (连续性描述键 + 边界跨缺失 → ES 降级 suspect, ADR-048) | v3.5.0 H7 / v3.5.1 H5 |
 | — | sup-F 自相关稳健临界值 | ✅ v3.5.3 (AR(1) sieve bootstrap, opt-in; φ=0.5 size 50%→5.3%, ADR-049) | v3.5.2 H4 / RESEARCH_V3.5.2_NAN_GAP_GUARD §8 |
 | — | 组合层容量 / 冲击成本压力测试 | ✅ 2026-11-17 (exQ1 ~90-100 亿 / 上限 200 亿; Q5 5-11 亿不可产品化; 已异构复审 PASS_WITH_FIXES) | 多头端研究 §7 落地缺口 + [复审审计](audit/2026-11-17-capacity-impact-stress-audit.md) |
-| — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − N 交易日, **默认 N=1**, 按字段可配; 原 −5 口径恰好放过 mv 5 日缺口, 以路线图 §5 P0-2 为准) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 / [路线图 P0-2](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) |
+| — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − N 交易日, **默认 N=1**, 按字段可配; 原 −5 口径恰好放过 mv 5 日缺口, 以路线图 §5 P0-2 为准) | ✅ v3.6.0 GR-2 (`data_contract.check_data_contract` 默认 `max_lag` 按字段配: mv=1 / 日频=0; `scripts/contract_gate.py` 前置; v3.8.0 E0 默认化) | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 / [路线图 P0-2](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) |
 | — | mv 重新导出至 2026-01-30 / barra+行业换源 (2024+) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
 | — | 复合因子池扩展 (4 因子 → 更多因子 / ML 组合) 的容量与可实施性 | [ ] 可选 | [多头端研究 §11 因子范围](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |

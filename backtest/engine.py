@@ -170,6 +170,7 @@ class FactorBacktestEngine:
         for t in range(n_dates):
             f = factor[t]
             valid = ~np.isnan(f)
+            valid_idx = np.flatnonzero(valid)
             n_valid = valid.sum()
 
             if n_valid < 3:
@@ -194,11 +195,11 @@ class FactorBacktestEngine:
                 if n_select < 1 or n_valid < n_select * 2:
                     continue
 
-                sorted_idx = np.argsort(f)
+                sorted_local = valid_idx[np.argsort(f[valid_idx])]
                 # bottom N → short
-                positions[t, sorted_idx[:n_select]] = -1.0 / n_select
+                positions[t, sorted_local[:n_select]] = -1.0 / n_select
                 # top N → long
-                positions[t, sorted_idx[-n_select:]] = 1.0 / n_select
+                positions[t, sorted_local[-n_select:]] = 1.0 / n_select
 
         return positions
 

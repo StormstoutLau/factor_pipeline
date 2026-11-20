@@ -1,13 +1,15 @@
 # 开发进度总览 (版本 × 模块双维度)
 
 > **版本**: v1.5 (2026-11-17; v1.4 = 2026-11-13; v1.3 = 2026-11-12; v1.2 = 2026-11-12; v1.1 = 2026-11-11; v1.0 = 2026-07-27)
-> **范围**: 跨会话单一真相源,记录每个版本每个模块的完成状态
+> **范围**: 版本 × 模块进度矩阵（已冻结：待办迁至 [PROGRESS.md](PROGRESS.md)，路标见 [PROJECT_STATUS.md](PROJECT_STATUS.md) §1）
 > **更新规则**: 每次发版 / 完成任务后更新对应单元格;新增版本时追加列
 > **关联文档**: [ARCHITECTURE.md](ARCHITECTURE.md) | [PROJECT_STATUS.md](PROJECT_STATUS.md) | [../CHANGELOG.md](../CHANGELOG.md)
 
 ---
 
 ## §1 版本路标
+
+> **已冻结**（as of 2026-11-17 / v3.5.3）：本路标不再更新；当前路线图见 [PROJECT_STATUS.md](PROJECT_STATUS.md) §1。
 
 ```
 v1.0.0 (2026-05)    统一编排层 + 顺序校验 (DAG)
@@ -183,33 +185,23 @@ v3.5.x (远期)       内生性-溢价诊断交互
 
 ---
 
-## §4 待办 (v3.4.0 后)
+## §4 待办（已迁移，本表冻结）
 
-### §4.0 P1 下一任务
+> **本表停止维护**（as of 2026-11-17）。存量 11 条未逐条裁决，整体登记为 [PROGRESS.md](PROGRESS.md) **P-011（DEV_PROGRESS §4 存量待办复核）**；
+> 当前待办真值源见 [PROGRESS.md](PROGRESS.md)（P-002 ~ P-010）。本表仅保留历史原文备查。
 
-| # | 任务 | 状态 | 依据 |
-|---|------|------|------|
-| 1 | v3.3.6 冻结模型实证回测 (真实因子 IC/Sharpe vs 旧实现) | 候选 | ADR-040 风险段 (非平稳失配未测) |
-| 2 | 非生产路径治理 (`OptimizedARDecoupler` / `TemporalDecoupler`) | 候选 | 审计遗留 (无生产调用) |
-| 3 | v3.4.0 遗留选项: MAD 缩尾 (O1) | 候选 | ADR-042 已知遗留 (O2 已由 v3.4.3 关闭, O6 已由 v3.4.2 关闭) |
+| 原 §4.0 P1 候选 | 现行处置 |
+|----------------|---------|
+| v3.3.6 冻结模型实证回测 | → P-011 复核 |
+| 非生产路径治理 | 已关闭（ADR-043 弃用） |
+| v3.4.0 遗留 MAD 缩尾 (O1) | 已关闭（v3.4.11 MAD 参数化） |
 
-### §4.1 P2 远期
-
-| # | 任务 | 来源 |
-|---|------|------|
-| 1 | 内生性-溢价诊断交互 (τ 修正因子) | DESIGN_DISCUSSION_V3.3.0 §6.1 |
-| 2 | 多断点支持 (Bai-Perron LWZ) | DESIGN_DISCUSSION_V3.3.0 §6.2 |
-| 3 | 面板 HAC 稳健估计 (Newey-West) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
-| 4 | 流式处理支持 (v3.0.0 T2) | §3 T2.1-T2.5 |
-| 5 | Anderson-Rubin 后验检验 (中性化质量监控) | v3.2.0 Step 8 |
-
-### §4.2 P3 长期
-
-| # | 任务 | 来源 |
-|---|------|------|
-| 1 | MissingTypeDiagnoser 因果版本 (expanding EM) | IMPUTER_LOOKAHEAD_FIX_PLAN §8.4 |
-| 2 | 删除非生产路径死代码 (HierarchicalImputer) | IMPUTER_LOOKAHEAD_FIX_PLAN §8.4 |
-| 3 | `types.py` 重命名 (避免遮蔽标准库) | ARCHITECTURE.md §9.1 |
+| 原 §4.1 / §4.2 远期 | 现行处置 |
+|--------------------|---------|
+| 内生性-溢价交互 | → P-009 |
+| 多断点支持 (Bai-Perron) | 已交付（v3.5.0，ADR-046） |
+| 面板 HAC 稳健估计 | 已交付（v3.4.12） |
+| 流式处理 / Anderson-Rubin / MissingTypeDiagnoser 因果版 / 删除 HierarchicalImputer / `types.py` 重命名 | → P-011 逐条复核 |
 
 ---
 

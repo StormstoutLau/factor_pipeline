@@ -23,6 +23,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -124,7 +125,7 @@ def build_panels(root):
     return dict(
         close=close, factor=factor, ret=ret, mask=mask, tradable=tradable,
         mv_m=mv_m, amt_m=amt_m, amt_rank=amt_rank, sig_m=sig_m,
-        facts=facts)
+        adj_price=adj_price, facts=facts)
 
 
 def make_weights(P, kind, kw, tradable):
@@ -138,6 +139,172 @@ def month_trades(w):
     """单边交易权重 |Δw|; 首期 = 建仓."""
     dw = w - w.shift(1).fillna(0.0)
     return dw.abs()
+
+
+def degraded_evidence(cfg):
+    """分钟层跳过/失败时的证据等级（不回 'minutes'）。
+
+    与 loaders.resolve_evidence_level 的区别：后者只判数据可用性，
+    这里判「本次实际算到了哪一层」——分钟面板缺失时不得声称 minutes。
+    """
+    return 'ohlc' if Path(getattr(cfg, 'data_root', '')).is_dir() else 'daily'
+
+
+def daily_portfolio_excess(P, w):
+    """日频超额 = 组合日收益 − 可投资域等权日收益（W7）。"""
+    price = P['adj_price']
+    r = price.pct_change(fill_method=None)
+    wd = w.reindex(r.index, method='ffill').reindex(columns=r.columns)
+    wd = wd.fillna(0.0)
+    rp = (wd * r.fillna(0.0)).sum(axis=1)
+    ub = P['mask'].fillna(False).reindex(r.index, method='ffill')
+    ub = ub.reindex(columns=r.columns).fillna(False)
+    rb = r.where(ub).mean(axis=1)
+    return (rp - rb).dropna()
+
+
+def daily_ref(P, cfg):
+    """构造 panels.DailyRef（月频 ADV / 行业 / 规模 / 交易日数）。"""
+    from backtest.execution.shell.panels import DailyRef
+    mv_rank = np.ceil(P['mv_m'].rank(axis=1, pct=True) * 5.0).clip(1, 5)
+    days = P['close'].groupby(P['close'].index.strftime('%Y-%m')).size()
+    return DailyRef(
+        adv=P['amt_m'],
+        universe=P['mask'].fillna(False) & P['ret'].notna(),
+        industry=P['facts']['ind'],
+        mv_rank=mv_rank,
+        days_by_month=dict((str(k), int(v)) for k, v in days.items()))
+
+
+def formation_decay_curve(P, w, h_max=60):
+    """形成期 t0 冻结权重的后验累计超额 A_{t0}(h)，h=1..h_max。
+
+    权重取 t0 快照后在**整个 h 窗口内不再调整**（DESIGN §2 D1「之后不再调整」）。
+    不得复用 daily_portfolio_excess 的前向填充序列——它在下一形成日切换为新月
+    权重，h 超过单月交易日数（约 21 日）后混入后续月权重，违反冻结语义（复审 I-1）。
+    基准 rb（可投资域等权）与权重无关，全局计算一次；NaN 日按
+    daily_portfolio_excess 同一 dropna 口径剔除（不计入 h 计数）。
+    形成日 t0 当日的收益不计入（无前视，side="right"）。
+    样本末端不足 h 日的形成期以 NaN 补齐（不缩短窗口、不用部分和）。
+    """
+    price = P['adj_price']
+    r = price.pct_change(fill_method=None)
+    ub = P['mask'].fillna(False).reindex(r.index, method='ffill')
+    ub = ub.reindex(columns=r.columns).fillna(False)
+    rb = r.where(ub).mean(axis=1)
+    r0 = r.fillna(0.0)
+    index = r.index
+    rows = []
+    for t0 in w.index:
+        start = int(index.searchsorted(t0, side="right"))
+        seg = r0.iloc[start:start + int(h_max)]
+        wv = w.loc[t0].reindex(seg.columns).fillna(0.0)   # 冻结快照
+        rp = seg.mul(wv, axis=1).sum(axis=1)
+        ex = (rp - rb.reindex(seg.index)).dropna()
+        row = np.full(int(h_max), np.nan)
+        vals = ex.to_numpy()
+        if vals.size:
+            row[:vals.size] = np.cumsum(vals)
+        rows.append(row)
+    return rows
+
+
+def build_portfolio_panels(P, cfg, kind='exQ1_EW_tradable', aum_ref=1e10):
+    """市场数据装配（W7）：权重 / 交易额 / 参与率 / regime / 窗口容量 / 超额。"""
+    spec = dict((name, (k, kw, tr)) for name, k, kw, tr in VARIANTS)[kind]
+    w = make_weights(P, spec[0], spec[1], spec[2])
+    universe = P['mask'] & P['tradable'] if spec[2] else P['mask']
+    base = evaluate(w, P, universe)
+    traded = month_trades(w)
+    adv = P['amt_m'].reindex_like(w)
+    part = (traded * aum_ref) / adv.where(adv > 0)
+    part = part.where(part > 0)
+
+    amt_total = adv.sum(axis=1).dropna()
+    bucket = pd.qcut(amt_total.rank(method='first'), 5,
+                     labels=['Q1', 'Q2', 'Q3', 'Q4', 'Q5'])
+    regimes = {}
+    for name in ('Q1', 'Q2', 'Q3', 'Q4', 'Q5'):
+        rows = bucket.index[bucket == name]
+        vals = part.reindex(rows).to_numpy().ravel()
+        vals = vals[np.isfinite(vals)]
+        if vals.size:
+            regimes[name] = float(np.percentile(vals, 95))
+
+    months = list(part.index)
+    window_capacity = {}
+    for width in cfg.windows:
+        points = []
+        for i in range(max(0, len(months) - int(width) + 1)):
+            vals = part.iloc[i:i + int(width)].to_numpy().ravel()
+            vals = vals[np.isfinite(vals)]
+            if vals.size:
+                points.append(float(np.percentile(vals, 95)))
+        if points:
+            window_capacity[str(int(width))] = float(np.median(points))
+
+    traded_v = traded.to_numpy()
+    adv_v = adv.reindex_like(traded).to_numpy()
+    ok = np.isfinite(traded_v) & np.isfinite(adv_v) & (adv_v > 0)
+    p_all = ((traded_v[ok] * aum_ref) / adv_v[ok])
+    p_all = p_all[np.isfinite(p_all)]
+    sigma_v = P['sig_m'].reindex_like(traded).to_numpy()
+    sigma_v = sigma_v[np.isfinite(sigma_v)]
+    turns = pd.Series(np.asarray(base['series']['t'], dtype=float),
+                      index=w.index)
+    return {
+        'aum_ref': float(aum_ref),
+        'excess_m': base['series']['ex'].dropna(),
+        'excess_d': daily_portfolio_excess(P, w),
+        'turnover_m': turns.dropna(),
+        'regime_p95': regimes,
+        'window_capacity': window_capacity,
+        'notional': (traded_v * aum_ref)[ok],
+        'adv': adv_v[ok],
+        'p_cost': float(np.median(p_all)) if p_all.size else None,
+        'sigma_port': float(np.median(sigma_v)) if sigma_v.size else None,
+        'a_by_period': formation_decay_curve(P, w),
+        'a_h_max': 60,
+    }
+
+
+def attach_panel_meta(result, minute, daily_panels, cfg):
+    """把 panels / lambda_stats / impact_samples / impact_curve 挂到 result（S3）。"""
+    from backtest.execution.core.impact import (LinearImpact, LogImpact,
+                                                PowerImpact, SqrtImpact)
+    cov = minute.get('coverage')
+    result = dict(result or {})
+    result['panels'] = dict(result.get('panels') or {})
+    result['panels'].update({
+        'evidence_level': result.get('evidence_level'),
+        'coverage': cov.as_dict() if hasattr(cov, 'as_dict') else cov,
+        'panel_hash': minute.get('panel_hash'),
+        'window_capacity': daily_panels.get('window_capacity') or {},
+    })
+    result['lambda_stats'] = minute.get('lambda_stats')
+    result['impact_samples'] = minute.get('impact_samples_meta')
+    fit = minute.get('impact_fit') or {}
+    models = dict((m.name, m) for m in (SqrtImpact(), LinearImpact(),
+                                        LogImpact(), PowerImpact()))
+    model = models.get(fit.get('primary'))
+    if model is not None and fit.get('params'):
+        grid = np.array([0.001, 0.005, 0.01, 0.02, 0.05])
+        sigma_ref = float(minute.get('sigma_median') or 0.02)
+        sigma_arr = np.full(grid.size, sigma_ref, dtype=float)
+        curve = model.predict(grid, sigma_arr, fit['params'])
+        result['impact_curve'] = {
+            'p': grid.tolist(),
+            'impact_bps': (np.asarray(curve, dtype=float) * 1e4).tolist()}
+    result['decay'] = dict(result.get('decay') or {})
+    result['decay']['alpha0'] = daily_panels.get('alpha0')
+    result['decay']['cost_by_h'] = daily_panels.get('cost_by_h') or {}
+    merged = list(result.get('evidence_warnings') or [])
+    for item in ((minute.get('evidence_warnings') or [])
+                 + (daily_panels.get('evidence_warnings') or [])):
+        if item not in merged:
+            merged.append(item)
+    result['evidence_warnings'] = merged
+    return result
 
 
 def impact_panel(traded, adv, sig, aum):
@@ -233,6 +400,128 @@ def tier_capacity(traded, part, amt_rank, aum):
     return rows
 
 
+def _write_report_json(path, tool, checks, artifacts):
+    """v3.9.0 统一验证报告（schema 见 DESIGN §8.1）；默认不写。"""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'tool': tool,
+        'generated_at': datetime.now().isoformat(),
+        'checks': checks,
+        'artifacts': artifacts,
+        'status': ('pass' if all(item['ok'] for item in checks) else 'fail'),
+    }
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                      encoding='utf-8')
+    print('report-json -> %s' % target)
+
+
+def _fmt(value):
+    """浮点展示：非有限 -> NaN，缺失 -> NA。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 'NA'
+    if not np.isfinite(v):
+        return 'NaN'
+    return '%.6g' % v
+
+
+def _decay_curve_md(payload):
+    """衰减曲线 md（口径 / m / net / verdict / bootstrap / warnings 六节）。"""
+    h_m = payload.get('h_m')
+    horizons = [int(h) for h in payload.get('horizons') or []]
+    lines = [
+        '# v3.9.3 alpha 衰减曲线（FO-1）', '',
+        '> 由 `verify_capacity_impact.py --calibrate --decay-curve-json` '
+        '生成；默认路径不产出。',
+        '> `m(20)=1` 为构造性归一 → 验收①（net(h)>0 至少一点）在修正口径下'
+        '几乎恒成立（DESIGN §10.3）；判别力在 h=5/10。', '',
+        '## 1. 口径', '',
+        '- h_m = %s 交易日；形成期数 n_periods = %s'
+        % (h_m, payload.get('n_periods')),
+        '- alpha0_anchored = A(%s) = %s（主值，锚定口径）'
+        % (h_m, _fmt(payload.get('alpha0_anchored'))),
+        '- alpha0_calendar = %s（日历月均值，对照；量纲不同，不作主值）'
+        % _fmt(payload.get('alpha0_calendar')),
+        '- phi = %s（phi_status = %s，decay_source = %s）；'
+        '先验半衰期 126 交易日（并列 252 日 = %.10f）'
+        % (_fmt(payload.get('phi')), payload.get('phi_status'),
+           payload.get('decay_source'), 2.0 ** (-1.0 / 252.0)),
+        '- horizons = %s' % horizons, '',
+        '## 2. m(h) 三值（m(h_m)=1 构造性）', '',
+        '| h | point | lo | hi | n_h |', '|---|---|---|---|---|']
+    n_by_h = payload.get('n_by_h') or {}
+    m_items = payload.get('m') or {}
+    for h in horizons:
+        item = m_items.get(str(h)) or {}
+        lines.append('| %d | %s | %s | %s | %s |'
+                     % (h, _fmt(item.get('point')), _fmt(item.get('lo')),
+                        _fmt(item.get('hi')), n_by_h.get(str(h))))
+    lines += ['', '### 2.1 A(h) 点估计 / 中位数（DR-7）', '',
+              '| h | point | median | lo | hi | n_h |',
+              '|---|---|---|---|---|---|']
+    a_items = payload.get('a') or {}
+    for h in horizons:
+        item = a_items.get(str(h)) or {}
+        lines.append('| %d | %s | %s | %s | %s | %s |'
+                     % (h, _fmt(item.get('point')), _fmt(item.get('median')),
+                        _fmt(item.get('lo')), _fmt(item.get('hi')),
+                        n_by_h.get(str(h))))
+    lines += ['', '### 2.2 bootstrap 敏感性（m 的 lo / hi）', '',
+              '| h | b=1 lo | b=1 hi | b=6 lo | b=6 hi |',
+              '|---|---|---|---|---|']
+    sens = payload.get('m_sensitivity') or {}
+    for h in horizons:
+        one = (sens.get('1') or {}).get(str(h)) or {}
+        six = (sens.get('6') or {}).get(str(h)) or {}
+        lines.append('| %d | %s | %s | %s | %s |'
+                     % (h, _fmt(one.get('lo')), _fmt(one.get('hi')),
+                        _fmt(six.get('lo')), _fmt(six.get('hi'))))
+    lines += ['', '## 3. net(h) 三值（元/期；AUM 取面板 aum_ref）', '',
+              '| h | point | lo | hi |', '|---|---|---|---|']
+    net_items = payload.get('net') or {}
+    for h in horizons:
+        item = net_items.get(str(h)) or {}
+        lines.append('| %d | %s | %s | %s |'
+                     % (h, _fmt(item.get('point')), _fmt(item.get('lo')),
+                        _fmt(item.get('hi'))))
+    lines += ['', '## 4. verdict', '',
+              '- posterior = 后置衰减（m<1 且 CI 上界<1）',
+              '- flat = 未检出衰减（CI 覆盖 1）',
+              '- anterior = 前置 alpha（m>1 且 CI 下界>1）',
+              '- unidentified = 曲线不可识别（A(h_m)<=0 或 CI 缺失）',
+              '',
+              '> 表述纪律：**未检出衰减 ≠ 无衰减**（I-7）。', '',
+              '| h | verdict |', '|---|---|']
+    verdict = payload.get('verdict') or {}
+    for h in sorted(int(k) for k in verdict):
+        lines.append('| %d | %s |' % (h, verdict.get(str(h))))
+    boot = payload.get('boot') or {}
+    lines += ['', '## 5. bootstrap', '',
+              '- block = %s；reps = %s；sensitivity = %s；seed = %s'
+              % (boot.get('block'), boot.get('reps'),
+                 boot.get('sensitivity'), boot.get('seed')),
+              '- CI 只按形成期重采（INV-8），期内日重叠不产生独立样本', '',
+              '## 6. evidence_warnings', '']
+    warnings = payload.get('evidence_warnings') or []
+    lines += ['- %s' % w for w in warnings] if warnings else ['- （无）']
+    return '\n'.join(lines) + '\n'
+
+
+def write_decay_curve(path, payload):
+    """写 out/v393_decay_curve.json + 同名 .md；payload 为 None 时跳过。"""
+    if not payload:
+        return []
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                      encoding='utf-8')
+    md = target.with_suffix('.md')
+    md.write_text(_decay_curve_md(payload), encoding='utf-8')
+    return [str(target), str(md)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data-root', default=DATA_ROOT)
@@ -246,6 +535,28 @@ def main():
                     help='契约样本末（默认取 stock_close 最后一个交易日）')
     ap.add_argument('--contract-json', default=None,
                     help='契约 JSON 输出路径（默认 out/capacity_impact_contract.json）')
+    # v3.8.0 E7 新增分支（默认路径零变更）
+    ap.add_argument('--calibrate', action='store_true',
+                    help='运行 v3.8.0 执行/容量校准，输出 out/capacity_calibration.json')
+    ap.add_argument('--evidence-level',
+                    choices=('auto', 'minutes', 'ohlc', 'daily'),
+                    default='auto', help='强制/诊断证据等级（默认 auto）')
+    ap.add_argument('--diagnose-window', action='store_true',
+                    help='诊断滚动窗长（IJR 自动窗长仅诊断，不参与主值）')
+    ap.add_argument('--calibration-json', default=None,
+                    help='校准 JSON 路径（默认 out/capacity_calibration.json）')
+    ap.add_argument('--report-json', default=None,
+                    help='v3.9.0 统一验证报告路径（默认关闭）')
+    # v3.9.3 新增（默认关闭，不改变默认路径）
+    ap.add_argument('--decay-curve-json', default=None,
+                    help='校准路径额外写出 alpha 衰减曲线工件（默认不写）')
+    # v3.8.1 新增（默认关闭，不改变默认路径）
+    ap.add_argument('--no-minute', action='store_true',
+                    help='跳过分钟层（仅日频校准）')
+    ap.add_argument('--panel-cache', action='store_true',
+                    help='启用 out/panel_cache 分钟聚合缓存')
+    ap.add_argument('--force-coverage', action='store_true',
+                    help='覆盖度门禁失败仍继续（留痕 warning）')
     args = ap.parse_args()
 
     if args.contract or args.contract_only:
@@ -257,6 +568,94 @@ def main():
             return 2
         if args.contract_only:
             return 0
+
+    if args.calibrate or args.diagnose_window:
+        if str(SCRIPTS.parent) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS.parent))
+        from backtest.execution.config import CalibrationConfig
+        from backtest.execution.shell.loaders import (MinuteLoader,
+                                                      resolve_evidence_level)
+        from backtest.execution.shell.panels import (MinutePanelBuilder,
+                                                     assemble_panels,
+                                                     build_daily_panels,
+                                                     coverage_gate)
+        from backtest.execution.shell.report import write_report
+        from backtest.execution.shell.runner import run_calibration
+
+        cfg = CalibrationConfig(data_root=args.data_root)
+        forced = None if args.evidence_level == 'auto' else args.evidence_level
+        if args.diagnose_window:
+            print('诊断: 解析证据等级 = %s' % resolve_evidence_level(cfg))
+            print('诊断: 候选窗长 = %s（IJR 自动窗长仅诊断，不参与主值）'
+                  % (list(cfg.windows),))
+            if not args.calibrate:
+                return 0
+
+        minute = {'evidence_warnings': ['分钟层跳过: --no-minute（证据等级降级）']}
+        if args.no_minute:
+            print('[minute] --no-minute：跳过分钟层面板')
+            evidence = forced or degraded_evidence(cfg)
+            panels = assemble_panels(minute, {'evidence_warnings': []},
+                                     evidence)
+        else:
+            market = build_panels(args.data_root)
+            loader = MinuteLoader(cfg.minute_root,
+                                  sigma_bars=cfg.bvc_sigma_bars)
+            cache_dir = (str(SCRIPTS.parent / 'out' / 'panel_cache')
+                         if args.panel_cache else None)
+            builder = MinutePanelBuilder(cfg, loader=loader,
+                                         daily=daily_ref(market, cfg),
+                                         cache_dir=cache_dir)
+            minute = builder.build()
+            ok, messages = coverage_gate(minute.get('coverage') or {})
+            if not ok:
+                for message in messages:
+                    print('[coverage] %s' % message)
+                if not args.force_coverage:
+                    return 2
+                print('[coverage] --force-coverage：门禁失败放行（留痕）')
+            portfolio = build_portfolio_panels(market, cfg)
+            daily_panels = build_daily_panels(
+                cfg, market, portfolio, impact_fit=minute.get('impact_fit'))
+            evidence = (forced or ('minutes' if minute.get('panel_hash')
+                                   else degraded_evidence(cfg)))
+            panels = assemble_panels(minute, daily_panels, evidence)
+
+        result = run_calibration(
+            cfg, capacity_fn=capacity_from_p95,
+            breakeven_fn=breakeven_aum, panels=panels)
+        if not args.no_minute:
+            result = attach_panel_meta(result, minute, daily_panels, cfg)
+        else:
+            result['evidence_warnings'] = list(
+                result.get('evidence_warnings') or []
+            ) + list(minute.get('evidence_warnings') or [])
+        json_path = args.calibration_json or str(
+            SCRIPTS.parent / 'out' / 'capacity_calibration.json')
+        md_path = str(Path(json_path).with_suffix('.md'))
+        written = write_report(result, json_path, md_path)
+        print('evidence_level = %s' % result['evidence_level'])
+        print('校准报告: %s' % ', '.join(written))
+        if args.decay_curve_json:
+            from backtest.execution.shell.runner import assemble_decay_curve
+            written_curve = write_decay_curve(
+                args.decay_curve_json, assemble_decay_curve(panels))
+            if written_curve:
+                print('衰减曲线: %s' % ', '.join(written_curve))
+        if args.report_json:
+            checks = [{'id': 'calibrate', 'ok': True},
+                      {'id': 'evidence_level',
+                       'ok': bool(result.get('evidence_level'))}]
+            if args.no_minute:
+                checks.append({'id': 'coverage', 'ok': True, 'skipped': True,
+                               'detail': '--no-minute'})
+            else:
+                ok, messages = coverage_gate(minute.get('coverage') or {})
+                checks.append({'id': 'coverage', 'ok': bool(ok),
+                               'detail': '; '.join(messages)})
+            _write_report_json(args.report_json, 'verify_capacity_impact',
+                               checks, [{'path': str(json_path)}])
+        return 0
 
     P = build_panels(args.data_root)
     print('=' * 120)
@@ -480,6 +879,14 @@ def main():
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                    encoding='utf-8')
     print('JSON -> %s' % out)
+    if args.report_json:
+        _write_report_json(args.report_json, 'verify_capacity_impact',
+                           [{'id': 'V1', 'ok': True},
+                            {'id': 'V2', 'ok': True},
+                            {'id': 'V3', 'ok': True},
+                            {'id': 'V4', 'ok': True},
+                            {'id': 'V5', 'ok': True}],
+                           [{'path': str(out)}])
 
 
 if __name__ == '__main__':

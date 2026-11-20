@@ -1,6 +1,6 @@
 # Factor Processing Pipeline — Code Wiki
 
-> **版本**: v3.6.0 | **构建日期**: 2026-11-18 | **状态**: STABLE (治理底座 GR-1~GR-4 + 研究入口契约 + 统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点)
+> **版本**: v3.9.2 | **构建日期**: 2026-11-20 | **状态**: STABLE (校准读数口径一致性修复 + 真实分钟面板编排接线 + 执行/容量证据层; 治理底座 GR-1~GR-4 + 研究入口契约 + 统一横截面秩管道 + 断点监控调度 + Dynamic 组件可分离 + decoupler 消融臂 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点)
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 > **作者**: Scott (Peng Liu)
 

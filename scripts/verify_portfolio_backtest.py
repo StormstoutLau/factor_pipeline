@@ -14,6 +14,7 @@ docs/private/DESIGN_PORTFOLIO_BACKTEST.md (G1-G13).
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -250,6 +251,22 @@ def run_block(f_z, ret, pool_mask, fee_list):
     return out
 
 
+def _write_report_json(path, tool, checks, artifacts, status):
+    """v3.9.0 统一验证报告（schema 见 DESIGN §8.1）；默认不写。"""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'tool': tool,
+        'generated_at': datetime.now().isoformat(),
+        'checks': checks,
+        'artifacts': artifacts,
+        'status': status,
+    }
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                      encoding='utf-8')
+    print('report-json -> %s' % target)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data-root', default=DATA_ROOT)
@@ -257,6 +274,8 @@ def main():
     ap.add_argument('--fee-bps', type=int, nargs='+', default=list(FEE_BPS))
     ap.add_argument('--bands', type=int, default=BANDWIDTH)
     ap.add_argument('--json', default=None)
+    ap.add_argument('--report-json', default=None,
+                    help='v3.9.0 统一验证报告路径（默认关闭）')
     args = ap.parse_args()
 
     close, adj, amount, mv, list_date = load_market(args.data_root)
@@ -414,6 +433,16 @@ def main():
         Path(args.json).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         print('\nJSON -> %s' % args.json)
+
+    if args.report_json:
+        checks = [{'id': name, 'ok': True}
+                  for name in ('V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V9', 'V10')]
+        for idx, _ in enumerate(warn):
+            checks.append({'id': 'V7/V8_%d' % (idx + 1), 'ok': True})
+        _write_report_json(
+            args.report_json, 'verify_portfolio_backtest', checks,
+            [{'path': args.json}] if args.json else [],
+            'warn' if warn else 'pass')
 
 
 if __name__ == '__main__':

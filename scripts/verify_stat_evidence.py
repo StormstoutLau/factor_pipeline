@@ -230,6 +230,9 @@ def main(argv=None):
     parser.add_argument(
         "--out", default="out/stat_evidence_verification.json",
         help="结果 JSON 路径")
+    parser.add_argument(
+        "--report-json", default=None,
+        help="v3.9.0 统一验证报告路径（默认关闭）")
     args = parser.parse_args(argv)
 
     if args.n_sim < 10:
@@ -260,6 +263,26 @@ def main(argv=None):
             print("  - %-42s %s"
                   % (check["name"], "ok" if check["passed"] else "FAIL"))
     print("report: %s" % out_path)
+
+    if args.report_json:
+        checks = []
+        for section in results:
+            for check in section["checks"]:
+                checks.append({"id": "%s:%s" % (section["section"], check["name"]),
+                               "ok": bool(check["passed"])})
+        payload = {
+            "tool": "verify_stat_evidence",
+            "generated_at": datetime.now().isoformat(),
+            "checks": checks,
+            "artifacts": [{"path": str(out_path)}],
+            "status": ("pass" if report["status"] == "PASS" else "fail"),
+        }
+        report_path = Path(args.report_json)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("report-json -> %s" % report_path)
+
     return 0 if report["status"] == "PASS" else 1
 
 

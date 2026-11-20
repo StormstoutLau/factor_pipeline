@@ -6,7 +6,7 @@
 
 ## 统一因子处理流水线
 
-**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.7.0 的"**统计证据链 (样本外协议 + DSR/PBO + 规格曲线联合推断 + 效应量/G2) + 治理底座 (GR-1~GR-4 + 研究入口契约) + 多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 自相关稳健断点 + 因子路由统一化治理**"（ADR-055~058：CPCV/holdout 全局锁 / DSR 与 PBO 口径 / 规格曲线 v2 联合推断 / 效应量 CI 与 G2 门禁；ADR-050~054：治理记录契约 / 数据契约与 A 股口径枚举 / golden master 基线 / 多重检验台账 / 研究入口契约门禁；ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-049：sup-F AR(1) sieve bootstrap — 自相关下 size 从 50% 回到 5%；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫 + 自相关稳健临界值)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**、**规格日志 (opt-in)**、**治理记录/数据契约/golden 基线/多重检验台账 (v3.6.0)**与**统计证据链 (v3.7.0)**。
+**Factor Processing Pipeline** 是一个面向量化投资领域的统一因子处理编排系统。系统从 v1.0 的"固定流程"演进至 v3.9.3 的"**alpha 衰减模型选择 (非参累计乘子 m(h) + 单参数累计比 φ + 形成期 block bootstrap) + 校准读数口径一致性修复 (σ 日频 + c 识别门槛 + rho 日频) + 真实分钟面板编排接线 (λ 面板 + 覆盖度门禁) + 模拟数据验证骨架 (6 场景合成面板 + 12 条常驻不变量 + 步骤级 JSONL 追溯 + 交易现实性独立函数) + 执行/容量证据层 (多日执行 + α 衰减 + regime 容量压力) + 统计证据链 (样本外协议 + DSR/PBO + 规格曲线联合推断 + 效应量/G2) + 治理底座 (GR-1~GR-4 + 研究入口契约) + 多断点支持 + 多断点标签路径 + NaN 间隙守卫 + 自相关稳健断点 + 因子路由统一化治理**"（ADR-055~058：CPCV/holdout 全局锁 / DSR 与 PBO 口径 / 规格曲线 v2 联合推断 / 效应量 CI 与 G2 门禁；ADR-050~054：治理记录契约 / 数据契约与 A 股口径枚举 / golden master 基线 / 多重检验台账 / 研究入口契约门禁；ADR-046：Bai-Perron 全局最小 SSR + Stata 对拍；ADR-047：opt-in 多断点标签路径 + 形式检验/材料性两级门控；ADR-048：NaN 间隙守卫 — 边界跨缺失时 ES 降级 suspect；ADR-049：sup-F AR(1) sieve bootstrap — 自相关下 size 从 50% 回到 5%；ADR-042–045：统一横截面秩管道、非生产解耦器弃用、断点监控节拍器、Dynamic 组件可分离），此前已完成 v3.0.0 的**指纹维度扩展与迁移检测增强** (ADR-024 指纹 21 维 + ADR-002a KS BH-FDR) 与 v3.3.1–v3.3.7 的**全链路因果性修复链**。核心能力涵盖**统一横截面秩处理管道 (默认)**、**因子指纹只读诊断层 (21 维)**、**Layer 3 溢价健康诊断 (单/多断点 + 连续性守卫 + 自相关稳健临界值)**、**`dynamic_ab` 整臂 A/B 实验管道**、**结构突变监控 (opt-in 只告警)**、**可选 GARCH 白化**、**回测引擎集成**、**L2 磁盘缓存层**、**多因子横截面正交化 (5 种算法)**、**规格日志 (opt-in)**、**治理记录/数据契约/golden 基线/多重检验台账 (v3.6.0)**、**统计证据链 (v3.7.0)** 与**模拟数据验证骨架/步骤级追溯 (v3.9.0)**。
 
 > **GitHub**: https://github.com/StormstoutLau/factor_pipeline
 
@@ -1238,13 +1238,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.6.0 (治理底座 P0 四件套 + 研究入口契约, ADR-050~054; 含 v3.5.3 sup-F AR(1) sieve bootstrap, ADR-049; v3.5.2 NaN 间隙守卫 ADR-048; v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
+- **Pipeline 版本**: v3.9.3 (alpha 衰减模型选择 — 非参累计乘子 + 单参数累计比 φ + 形成期 bootstrap + 默认路径零改动; 校准读数口径一致性修复 + 真实分钟面板编排接线 + 执行/容量证据层; v3.6.0 治理底座 P0 四件套 + 研究入口契约, ADR-050~054; 含 v3.5.3 sup-F AR(1) sieve bootstrap, ADR-049; v3.5.2 NaN 间隙守卫 ADR-048; v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: **全量回归 1920 passed / 7 skipped / 0 failed** (742.43s, 2026-11-18, v3.6.0; = v3.5.3 基线 1864 + 本批新增 56 例); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 6/6; 性能预算 3/8 达标（P2 性能债：White/SPA >300s、record 10k 4.44s 等，见 ADD 审计 Phase 7）
+- **测试基线**: **全量回归 2057 passed / 15 skipped / 0 failed** (825.00s, 2026-11-20, v3.9.3；两次独立复跑 796.71s/825.00s 计数一致；运行期条目 2072，静态 `--collect-only` 显示 2065，差异 7 已登记为观察项；历史基线见 CHANGELOG); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 6/6; 性能预算 3/8 达标（P2 性能债：White/SPA >300s、record 10k 4.44s 等，见 ADD 审计 Phase 7）
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.18 (v3.6.0 治理底座)
-- **状态**: STABLE (v3.6.0, 10 步 spec 工作流 T1 完整管线)
+- **构建日期**: 2026.11.20 (v3.9.3 alpha 衰减模型选择)
+- **状态**: STABLE (v3.9.3, 10 步 spec 工作流 T1 + `spec/` 四件套)
 
 ### 版本历史
 
@@ -1286,6 +1286,12 @@ factor_pipeline/
 | v3.5.2 | 2026.11.17 | 多断点路径 NaN 间隙守卫 (ADR-048): `multi_break_gap_min_run=2`; 标签相关边界跨缺失 → `breakpoint_gap_risk=True`, ES/ES+TD 降级 suspect; `detect_multiple` +5 键 (18), `diagnose` +6 键 (28); 默认 single 零变更; 新增 9 例 |
 | v3.5.3 | 2026.11.17 | sup-F 自相关稳健临界值 (ADR-049): `sup_f_method='bootstrap'` 重写为 AR(1) sieve 残差自助 (旧实现为 iid 高斯, 文档-实现不一致); `n_bootstrap=1000` / `random_state=42`; `detect` +`critical_method`; `FactorHealthDiagnoser` 透传 + `diagnose` +2 键 (30); φ=0.5 size 50%→5.3%, power 93.7%; 默认 asymptotic 逐位不变; 新增 11 例 |
 | v3.6.0 | 2026.11.18 | 治理底座 P0 四件套 (ADR-050~054): `governance.py` (记录契约 + `AncestorEntry` + DuckDB/JSONL) / `data_contract.py` (freshness/PIT/qfq 锁定/known_gaps) / `golden_master.py` + 合成基线 / `multiple_testing_ledger.py` (family 预注册 + 三分母 + backfill 隔离); White/SPA `bootstrap_indices` 注入 (默认 None); 管线 hook + 研究入口 `--contract*` (默认关闭, FAIL exit 2); 默认路径逐位不变; 新增 55 例 |
+| v3.7.0 | 2026.11.18 | P1 统计证据链 (ADR-055~058): PurgedKFold + CPCV + `HoldoutRegistry` / DSR + PBO / NW HAC + stationary bootstrap CI; 1929 passed |
+| v3.8.0 | 2026.11.19 | P2 多日执行模型 + Regime 容量压力测试: `backtest/execution/` 14 模块 + `--calibrate` / `--evidence-level` 路径; 默认 SHA 逐位不变; 1986 passed |
+| v3.9.0 | 2026.11.19 | 模拟数据验证骨架 + 步骤级追溯 (`backtest/trace.py`) + `tradability` 规则 + B2 NaN 排序修复; 2026 passed |
+| v3.8.1 | 2026.11.20 | 真实分钟面板编排接线: `panels.py` (λ HAC + 填充 + 覆盖度 + `panel_hash` + 月缓存); 2047 passed |
+| v3.9.2 | 2026.11.20 | 校准读数口径一致性修复: c 改日频 σ + R² 门槛回退 + rho 日频/非正守卫 + temporary 代理标注; 2055 passed |
+| v3.9.3 | 2026.11.20 | alpha 衰减模型选择 (FO-1): 累计 alpha 曲线 + 非参乘子 m(h) + 单参数累计比 φ + 形成期 bootstrap + `--decay-curve-json`; 默认 SHA 不变; 2057 passed |
 
 ---
 

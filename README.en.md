@@ -930,13 +930,13 @@ factor_pipeline/
 
 ## Version Information
 
-- **Pipeline Version**: v3.6.0 (governance base: GR-1 record contract, GR-2 data contract, GR-3 golden master, GR-4 multiple-testing ledger, plus research-entry contract gate, ADR-050~054; includes v3.5.3 autocorrelation-robust sup-F via AR(1) sieve bootstrap, ADR-049; v3.5.2 NaN gap guard, ADR-048; v3.5.1 multi-breakpoint wired into `diagnose`, ADR-047; v3.5.0 Bai-Perron multi-breakpoint + Stata 46/46 cross-check, ADR-046; v3.4.x unified cross-sectional rank pipeline / deprecated non-production decouplers / break monitor scheduler / Dynamic component separability / ablation cleanup / short-sample breakpoint degradation, ADR-042–045)
+- **Pipeline Version**: v3.9.3 (alpha decay model selection: non-parametric cumulative multiplier m(h) + single-parameter cumulative ratio φ + formation-period block bootstrap + zero change on the default path; calibration unit consistency fix + real minute-panel wiring + execution/capacity evidence layer; v3.6.0 governance base: GR-1 record contract, GR-2 data contract, GR-3 golden master, GR-4 multiple-testing ledger, plus research-entry contract gate, ADR-050~054; includes v3.5.3 autocorrelation-robust sup-F via AR(1) sieve bootstrap, ADR-049; v3.5.2 NaN gap guard, ADR-048; v3.5.1 multi-breakpoint wired into `diagnose`, ADR-047; v3.5.0 Bai-Perron multi-breakpoint + Stata 46/46 cross-check, ADR-046; v3.4.x unified cross-sectional rank pipeline / deprecated non-production decouplers / break monitor scheduler / Dynamic component separability / ablation cleanup / short-sample breakpoint degradation, ADR-042–045)
 - **Internalized Modules**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028) + **statistical_classifier** (v3.2.0 ADR-027)
 - **External Data Boundary**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **Test Baseline**: 1920 passed / 7 skipped / 0 failed (742.43s, v3.6.0; baseline 1864 + 56 new cases in this batch)
+- **Test Baseline**: 2057 passed / 15 skipped / 0 failed (825.00s, 2026-11-20, v3.9.3; two independent reruns agree; runtime items 2072 vs 2065 statically collected, 7-item gap logged as an observation; historical baselines in CHANGELOG)
 - **CI Matrix**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **Build Date**: 2026.11.18
-- **Status**: STABLE (v3.6.0)
+- **Build Date**: 2026.11.20
+- **Status**: STABLE (v3.9.3)
 
 > Detailed per-version notes for v3.4.5–v3.6.0 live in the authoritative Chinese [README.md](README.md) (this English file is auto-translated).
 

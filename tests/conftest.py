@@ -5,10 +5,19 @@ pytest 共享配置和 fixtures
 为 factor_pipeline 测试提供统一的测试数据和 mock 对象。
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 import pandas as pd
 import numpy as np
 from typing import Dict, Any
+
+# 包根目录 = F:\Coding\factor_pipeline，父目录 F:\Coding 提供 factor_pipeline 包名
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _p in (str(_REPO_ROOT), str(_REPO_ROOT.parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 # =============================================================================

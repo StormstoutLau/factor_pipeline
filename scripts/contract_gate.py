@@ -78,8 +78,12 @@ def run_contract_gate(
     prefix="research",
     json_path=None,
     markdown_path=None,
+    report_json=None,
 ) -> ContractReport:
-    """运行数据契约并落盘 JSON/Markdown 报告；不抛错，由调用方决定退出码。"""
+    """运行数据契约并落盘 JSON/Markdown 报告；不抛错，由调用方决定退出码。
+
+    ``report_json``：v3.9.0 统一验证报告路径（默认 None，不写）。
+    """
     root = Path(data_root)
     market = root / "market_data"
     if sample_end is None:
@@ -123,4 +127,42 @@ def run_contract_gate(
         if not check.passed:
             print("  [%s] %s: %s" % (
                 check.severity.upper(), check.check, check.message))
+
+    if report_json:
+        target = Path(report_json)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload_report = {
+            "tool": "contract_gate",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "checks": [{"id": check.check, "ok": bool(check.passed)}
+                       for check in report.checks],
+            "artifacts": [{"path": str(json_target)}],
+            "status": "pass" if report.passed else "fail",
+        }
+        target.write_text(
+            json.dumps(payload_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print("[contract] report-json -> %s" % target)
     return report
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="contract_gate")
+    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--sample-end", default=None)
+    parser.add_argument("--json", default=None)
+    parser.add_argument("--markdown", default=None)
+    parser.add_argument("--report-json", default=None)
+    args = parser.parse_args(argv)
+    report = run_contract_gate(
+        args.data_root, sample_end=args.sample_end, prefix="contract_gate",
+        json_path=args.json, markdown_path=args.markdown,
+        report_json=args.report_json)
+    return 0 if report.passed else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,5 +1,283 @@
 # 开发日志 (Changelog)
 
+## v3.9.3 — alpha 衰减模型选择（对应路线图批次 v3.9.3）(已实施, 2026-11-20)
+
+### 概览
+
+FO-1 根因：`rho` 衡量的是已实现日收益的 AR(1)（噪声/反转），不是 alpha 的期限结构。
+本批按 [DESIGN](../spec/v393-alpha-decay-model/DESIGN.md) D1-D5 引入**累计 alpha 曲线**
+`A(h)` + **单参数累计比** `φ` 的衰减模型：非参乘子 `m(h)=A(h)/[A(h_m)·h/h_m]`（`m(20)=1`
+构造性归一），参数乘子 `m(h;φ)=(h_m/h)(1−φ^h)/(1−φ^{h_m})`；不确定性按形成期 block
+bootstrap（39 期）；校正口径下给出 `net(h)` 三值与 verdict。默认路径零改动。
+
+### 核心产出
+
+- `backtest/execution/core/decay.py`：新增 `DecayCurve`（frozen dataclass）/
+  `decay_multiplier` / `anchored_multiplier` / `fit_phi` / `net_point` / `net_ci` /
+  `AnchoredDecay` / `EmpiricalDecay`；`__all__` 保持 5 项（DR-3）。
+- `scripts/verify_capacity_impact.py`：新增 `formation_decay_curve`（t0 冻结权重快照，
+  不复用 ffilled 序列）、`write_decay_curve` / `_decay_curve_md`、`--decay-curve-json`；
+  `build_portfolio_panels` 返回增 `a_by_period` / `a_h_max`。
+- `backtest/execution/shell/panels.py`：`build_daily_panels` 增
+  `decay_a_by_period` / `decay_h_max` / `alpha0_anchored`（仅校准分支）。
+- `backtest/execution/shell/runner.py`：新增 `assemble_decay_curve`（复用
+  `effect_size.stationary_bootstrap_indices`；主 CI b=3，b=1/6 敏感性）。
+- 包版本 **3.9.3**（6 处代码锚点 + CHANGELOG/README/PROJECT_STATUS/PROGRESS）。
+
+### 实测读数
+
+命令：`python scripts/verify_capacity_impact.py --calibrate --calibration-json out/v393_calibration.json --decay-curve-json out/v393_decay_curve.json`（exit 0，`evidence_level=minutes`）。
+
+- 工件 `out/v393_decay_curve.json|md`，SHA256 `D06225DF0BBC78584B55E6930E5B3A9B4524A749FFDEB72B8E8AE009FC9E78A4`（seed=0，两次独立运行逐位一致）；
+- 形成期数 **73**（分钟覆盖 39 月，观察项 D-1）；`alpha0_anchored = A(20) = 0.00220065` vs 旧 `alpha0_calendar = 0.00262866`（**−16.3%**）；
+- `phi = 0.9999999999999992`（`fitted`，`decay_source=empirical`）；`m(5)=0.382`（lo −3.853 / hi 1.848）、`m(10)=0.395`（lo −3.361 / hi 1.148）、`m(20)=1`（构造性）；
+- `net(5) = −7,159,077`、`net(10) = +905,290`、`net(20) = +18,115,106`（lo +1,684,760）→ **P-002① 达成**；`verdict = {5: flat, 10: flat}`（「未检出衰减 ≠ 无衰减」）；
+- `n_by_h` 5→72 / 20→71 / 60→28；`evidence_warnings=[]`；`m_sensitivity` b=1 hi 1.6244 / b=6 hi 1.7070；
+- 装配性能 0.100 s / 峰值 4.4 MB（73×60、reps=1000、3 轮块长）；
+- 默认 `out/capacity_impact.json` SHA256 `82728CE1…` 逐位不变。
+
+### 测试
+
+- 新增 10 例（T393-1 ~ T393-10），先红（10 failed）后绿；
+- 全量 `pytest -q`：**2057 passed / 15 skipped / 0 failed**（三次一致：796.71 s / 825.00 s / Step 10 审计独立复跑 1025.25 s）；
+  D-3 已定位关闭：7 个整模块级 skip 测试文件，`2065 nodes + 7 = 2072 = 2057+15` 恒等式自洽（[AUDIT.md](spec/v393-alpha-decay-model/AUDIT.md) §4）。
+
+### 步骤 10 审计（Step 10，独立子代理）
+
+- 结论 **PASS（有条件）**：0 P1 / 2 P2 / 4 P3 → 遗留修复包 **P-012**（审计不写代码，D-002 整改口径）；
+- P2：F-1 bootstrap 回退分支 net lo/hi 漏乘 (h_m/h)（默认调用图不可达）；F-2 IMPLEMENTATION §5 通过线「≥2065 passed」算术错误（passed 字面上限 2057 恰=实测）；
+- P3：F-3 phi_status 枚举未同步 DESIGN / F-4 DecayCurve 死类型 / F-5 D5 plateau 落点 / F-6 退化态 m_sensitivity 口径；
+- Iron Law 恒真式 0 项；CHECKLIST **accepted**（70/70）。
+
+
+## v3.9.2 — 校准读数口径一致性修复（对应路线图批次 v3.9.2）(已实施, 2026-11-20)
+
+### 概览
+
+v3.9.1 审计暴露三处校准读数异常：`c=15.07`、`rho=-0.147`（`retention(5)<0`）、
+`temporary≈0.4%`。诊断结论：前两者为实现层口径缺陷（σ 用分钟 bar 波动、rho 用月频序列
+且无负值守卫、c 无识别门槛），第三者为实现替代理（组合日超额 AR(1)，非 T+1 反转）。
+本批只修口径与守卫，不动模型族、不改默认输出。
+
+### 核心产出
+
+- **E0** `core/impact.py`：新增 `fit_r2`、`C_R2_MIN=0.05`、`C_RANGE=(0.1, 2.0)`。
+- **E1** `shell/panels.py`：冲击样本 σ 改为日收益 std（与 impact 同尺度）；
+  `sqrt` 输出 `r2/identifiable`；不可识别时成本回退 `c=0.5` 并留痕；
+  `rho` 改用日频 `excess_d`，`rho<=0 → 1.0`；`temporary_basis="portfolio_ar1_proxy"`。
+- **E2** `shell/runner.py`：输出 `c_r2/c_identifiable/c_effective/temporary_basis`；
+  rho 负值守卫。
+- 包版本 **3.9.2**（6 处代码锚点 + CHANGELOG）。
+
+### 实测读数
+
+- 默认 `out/capacity_impact.json` SHA256 `82728CE1…` 逐位不变；
+- 校准重跑（39 月，`out/v392_calibration.json`）：`c` **15.0677 → 2.9107**（r2=0.5606；
+  仍超 `[0.1,2.0]` → `c_effective=0.5`、`impact_bps_source=default_fallback`）；
+  `cost_by_h` **91.54M/45.77M/22.88M → 15.57M/7.78M/3.89M**；
+  `rho` **-0.147（月频）→ +0.114（日频）**，retention 无负值；
+  `temporary_share` 保持 `[0,0,0.0042]` 并标 `portfolio_ar1_proxy`；
+- **FO-1（范围外）**：日频 rho=0.114 使 `net(h)` 仍 ≈ `−cost(h)`；根因是「已实现收益 AR(1)」
+  不是 alpha 衰减，登记 v3.9.3 P0。
+
+### 测试
+
+- 新增 8 例（T1-T7 + 步骤 10 审计补 T9），先红后绿；
+- 全量 `pytest -q`：**2055 passed / 15 skipped / 0 failed**（772.15 s）；
+- 步骤 10 审计修复 3 项：A-1 rho 短序列守卫（MINOR）、A-2 G3/G4 口径勘误（文档）、
+  A-3 `impact.py __all__` 越界回归（MAJOR，首跑 1 failed → 回退 5 项后全绿）。
+
+
+### 文档与证据
+
+- 调研 / 设计 / 实施 / 验收：`spec/v392-calibration-unit-fix/RESEARCH.md`、
+  `spec/v392-calibration-unit-fix/DESIGN.md`、
+  `spec/v392-calibration-unit-fix/IMPLEMENTATION.md`、
+  `spec/v392-calibration-unit-fix/CHECKLIST.md`、
+  `spec/v392-calibration-unit-fix/CONSISTENCY_REVIEW.md`；
+- 步骤 10 审计：[AUDIT.md](spec/v392-calibration-unit-fix/AUDIT.md)
+  （本批范围 PASS；范围外失败 G5/FO-1 已披露）；
+- 工件：`out/v392_calibration.json` / `.md`、`out/v392_junit.xml`。
+
+### 已知限制
+
+- 默认路径仍不产出 `decay/temporary_share/impact_curve`（仅 `--calibrate` 分支）；
+- `temporary_share` 为组合日超额 AR(1) 代理，不是 T+1 反转，不进入容量；
+- `net(h)` 仍 ≈ `−cost(h)`（日频 rho 半衰期 0.32 天），根因见 FO-1 → v3.9.3 P0。
+
+## v3.9.1 — 真实分钟面板编排接线（对应路线图批次 v3.8.1）(已实施, 2026-11-20)
+
+### 概览
+
+v3.8.0 交付执行/容量证据层时，分钟面板尚未接线：λ 反解、`lambda_fill_ratio`、
+`partial_month` 与覆盖度门禁只停留在设计。v3.9.1 把分钟层接入 `--calibrate` 分支：
+日级「股票×日」聚合 → HAC λ 回归 → 缩尾 + 行业×规模五分位填充 → 观测样本 →
+冲击模型拟合 → 日频 temporary/rho/alpha0/cost(h)/plateau_sd → 报告四段。
+默认路径零改动。
+
+### 核心产出
+
+- **E0** `backtest/execution/config.py`：19 字段（删 `tau_max_minutes`，
+  增 `minute_start/minute_end/lambda_min_days/adv_window_days`）；
+  `shell/loaders.py`：`MIN_STOCK_CODE=1` 过滤修复、`MinuteDayAggregate`、
+  `load_month_regression`（锁定 bar 的 `s_t=0`、`amount` 全量）。
+- **E1/E2** 新增 `shell/panels.py`：`MinutePanelBuilder`（λ 仅收 `p<0.05 且 λ>0`、
+  `fill_ratio>0.30 → c_interval_only`、样本 ≤200,000、覆盖度/`panel_hash`/月缓存）、
+  `build_daily_panels`、`assemble_panels`、`coverage_gate`。
+- **E3** `shell/runner.py`：κ 情景 `sorted({1.0, cfg.kappa, 2.0})`；
+  `block_size_mode != auto` 抛 `ValueError`（2 处，默认逐位不变）。
+- **E4** `scripts/verify_capacity_impact.py`：`build_panels` 增 `adj_price` 键；
+  `build_portfolio_panels` / `daily_ref` / `attach_panel_meta`；
+  `--no-minute` / `--panel-cache` / `--force-coverage`；覆盖度不达标 `return 2`。
+- **E5** `shell/report.py`：新增面板覆盖度 / λ 显著性与填充 / 窗长容量 /
+  持有期净收益四段；缺键整段跳过，`evidence_level` 仍必填。
+- **E6** 新增 `tests/test_minute_panels.py`（19 例）+ `test_execution_capacity.py`
+  追加 2 例（T381-19/21）；T381-22 为全量门禁。
+
+### 行为变更与零变更
+
+- 默认路径 `python scripts/verify_capacity_impact.py` 输出逐位不变，
+  `out/capacity_impact.json` SHA256 `82728CE1…` 不变。
+- `--calibrate` 未加 `--no-minute` 时走真实分钟面板；覆盖度门禁失败默认 `return 2`，
+  `--force-coverage` 放行并留痕 warning。
+
+### 测试
+
+- 新增 21 个可执行用例（`test_minute_panels.py` 19 + `test_execution_capacity.py` 2；
+  T381-22 为全量门禁本身），全量 **2047 passed / 15 skipped / 0 failed**（808.70 s）。
+
+### 实测读数（2026-11-20）
+
+- 默认快照：双跑 + 改前备份三方一致 `SHA256 82728CE1…`（容差 0）。
+- 日频层：`--calibrate --no-minute` exit 0，3.2 s，`evidence_level=ohlc`（4 段按缺键跳过）。
+- 全量校准：`--calibrate` exit 0，14.52 min，`evidence_level=minutes`；
+  39 月 `missing_months=[]`、覆盖度中位 **1.097** / 最差 **1.050** / 深主板 **57020**；
+  `lambda_stats`: n_total 170761 / n_sig 167938 / fill_ratio **1.65%** / `c_interval_only=False`；
+  `impact_samples.n=200000`（cap 命中，等距抽样）。
+- 单月性能：**27.37 s**、tracemalloc 峰值 **296.6 MB**（预算 60 s / 300 MB）；
+  优化过程 337.6 → 296.6 MB（`panel_hash=ccdede88…` 不变，数值逐位等价）。
+- 步骤 9 追加修复：`coverage_gate` 入参归一化（`PanelCoverage` → dict）；
+  `--no-minute` 证据等级由 `minutes` 降为 `ohlc`；报告追加 R7/R9 脚注。
+- 已知偏差：行业表月末缺失的两级退化链未实现（`industry=None` 单独成组、无静默填 0），
+  CHECKLIST X5 登记为失败 → 步骤 10 审计裁决：填充值仅展示用（无下游数值消费），
+  改 EXECUTION §3.5 口径与实现对齐，X5 转「通过（偏差登记）」，
+  见 `docs/audit/2026-11-20-v3.8.1-minute-panel-wiring-audit.md`。
+- 步骤 10 审计复审（2026-11-20）：**PASS** — 独立复跑全量 2047/15/0（869.00 s）、
+  默认 SHA 逐位一致、G6 最终代码复跑 `lambda_stats` 与步骤 9 逐位一致、G7 升级端到端证据；
+  清单终态 79 通过 / 0 失败 / 0 阻塞 / 5 N/A；
+  审计观察：覆盖度 `universe_ratio` 可 >1、`--force-coverage` 警告未进 `evidence_warnings`（建议未来批次）。
+
+## v3.9.0 — 模拟数据验证骨架与步骤级追溯 (已实施, 2026-11-19)
+
+### 概览
+
+v3.8.0 建成执行/容量证据层，但主回测链路仍缺交易现实性建模、边界场景覆盖与步骤级追溯。
+v3.9.0 补齐验证骨架：6 场景合成面板工厂（含 ground truth）、12 条常驻不变量、
+步骤级 JSONL 追溯（首个分歧定位）、独立交易现实性层、验证报告聚合器；
+并修复 `_build_positions` 的 NaN 排序缺陷（B2）。
+
+### 核心产出
+
+- **E0** `backtest/engine.py`：B2 修复——`np.argsort` 作用域收窄到 `valid_idx`（4 insertions / 3 deletions）。
+  NaN 股票不再进入多头侧：真实单日 2023-03-01 271→0、conftest 262→0、synth:stale 339→0。
+- **E1** `tests/synthetic/`：`PanelSpec`/`SyntheticPanel` 确定性生成 + 6 场景
+  （clean / limit_heavy / suspend_gap / st_mixed / stale_factor / adj_jump），
+  `true_limit_hit` / `true_suspend` ground truth；普通日 round2 后 `high-low>=0.02`。
+- **E2** `tests/invariants/`：12 条不变量（bound / monotonic / invariant / equivalence）+ 2 项注册表自检，
+  场景与结果双缓存，`pytest tests/invariants` 14 例 < 0.5 s。
+- **E3** `backtest/trace.py`：JSONL 一行一 step（trace_version / code_version / seq / params_hash /
+  inputs / outputs / diagnostics / status），`content_hash` 对 DataFrame 追加 sum/mean/NaN 计数，
+  `find_first_divergence` 定位首个分歧；`enabled=False` 零 IO。
+- **E4** `backtest/tradability.py`：`DEFAULT_LIMIT_RULES` 11 条版本化规则、
+  `apply_tradability` 七步权重推进（涨停禁买 / 跌停禁卖 / 停牌冻结 / pending 补单 / T+1）、
+  `CostModel` 四项成本（佣金 2.5bp 最低 5 元 / 印花税 5bp 仅卖出 / 过户费 0.1bp 双向 / slippage 0）。
+- **E5** `scripts/verify_all.py` + 4 脚本 `--report-json`（默认 `None`）：
+  `summary.json` 聚合 `overall` / `missing`，缺失容忍，`--strict` 可升级为失败。
+
+### 行为变更与零变更
+
+- B2 改变含 NaN 因子时的历史仓位与 turnover；方向依数据而定（conftest 均值 +0.009、
+  synth:stale −0.087），量化见 `out/v390_b2_impact.txt`。
+- 默认路径 `out/capacity_impact.json` 双跑 SHA256 `82728CE1…` 逐位不变；
+  `backtest/__init__.py` / `backtest/data_contract.py` 零 diff；`--report-json` 默认不写盘。
+
+### 测试
+
+- 新增 18 个文件（生产 2 / 测试 3 包 + 5 测试文件 / 聚合脚本 1），40 例新增测试
+  （37 例 TDD + 步骤 10 异构审计回归 3 例：content_hash ±inf 区分 / adj_jump 网格校验次序 /
+  verify_all.collect 顶层非 dict 容错）；
+  分模块耗时：build 5.7 ms、invariants 415 ms、tradability 9.5 ms、trace 0.4 ms/step、verify_all 91 ms。
+- 全量回归 **2026 passed / 15 skipped / 0 failed**（757.4 s，junit tests=2041；步骤 10 异构审计复跑）；
+  门禁 G1-G8 全部通过，读数见 `docs/audit/CHECKLIST_V3.9.0_VALIDATION_SKELETON.md` §6
+  （CHECKLIST 终态：102 通过 / 0 失败 / 6 不适用，108 项）。
+
+### 已知限制
+
+- `tradability` 为独立函数，默认不接入引擎（P-1 裁决）；引擎集成留待后续批次。
+- 新股上市初期不设涨跌幅、停牌复牌首日、盘中临停、集合竞价细则未建模。
+- 过户费采用 2022-04-29 起现行费率，历史回测按现值近似，不做费率版本化（U13）。
+
+## v3.8.0 — 多日执行模型 + Regime 容量压力测试 (已实施, 2026-11-19)
+
+### 概览
+
+v3.7.0 解决了统计证据链，但容量口径仍是 stylized（sqrt 与 linear 内部差 4 倍、
+无 regime 压力、无冲击参数校准）。v3.8.0 新增 `backtest/execution/` 证据层：
+4 个 Protocol 端口、4 个冲击模型、3 个价差代理、BVC 分类、AR(1) 衰减核、
+regime 容量与 κ 情景、AveW 多窗平均。**默认无参数路径输出逐位不变**（D2），
+校准结果只进 `out/capacity_calibration.*`，不回写 `SQRT_C`。
+
+### 核心产出
+
+- **E0** `backtest/execution/{ports,config,registry}.py` + `core/{bootstrap,spread}.py`
+  + `shell/loaders.py`：4 端口纯契约；`CalibrationConfig.config_hash()` 为
+  sha256(canonical json)；`MinuteLoader` 逐日流式聚合（月 σ 由 rsum/r2sum 反解）、
+  `DailyLoader`、`has_pyarrow()` 能力探测；CS/AR/Amihud 三代理
+- **E1** `core/classification.py`：`normal_cdf`（`math.erf`）、无前视
+  `rolling_sigma`、`BVC.classify`、`detect_limit_lock`（`h==l` 或零量平盘）
+- **E2** `core/impact.py`：sqrt/linear/log/power 四模型 + CV-RMSE 选型（容差 10%）
+  + 三档 `c`（`c_stress = max(0.5, c_ci_upper)`）
+- **E3** `core/impact.py::temporary_share`：T+1 reversal 分离，bootstrap 块长取
+  `auto_block_size`，返回 `(share, ci_lo, ci_hi)`
+- **E4** `core/decay.py`：`estimate_rho`（NW HAC，CI 覆盖 1 时退化 `rho=1`）、
+  `retention`/`half_life`/`execution_days`（超 `d_max` 标未成交）/`net_curve`/`plateau`
+- **E5** `shell/runner.py`：`regime_capacity` 主值取 `min` 并同时报 median；
+  κ ∈ {1.0, 1.5, 2.0} 三情景
+- **E6** `shell/runner.py::average_capacity`：4 窗对**预测容量**等权平均；
+  `spread>0.30` 降级为最差窗并写 `evidence_warnings`
+- **E7** `scripts/verify_capacity_impact.py`：新增 `--calibrate` /
+  `--evidence-level {auto,minutes,ohlc,daily}` / `--diagnose-window` /
+  `--calibration-json`；校准报告含 `ratio(p)` 诊断（design §9.5）与「报告限制」
+- **E8** 版本号统一 3.8.0（6 处锚点）；`pyproject` 新增 optional extra
+  `calib = ["pyarrow>=14.0.0"]`，`all` 追加 pyarrow，核心依赖零变化
+
+### 口径与零变更
+
+- `out/capacity_impact.json`（无参数）键集合与数值逐位不变（T380-51/52 双跑比对）。
+- `backtest/__init__.py` / `backtest/data_contract.py` 零 diff；`SQRT_C` /
+  `LINEAR_K` / `CAP_LEVELS` 原值不动，校准不回写默认 `c`（D2）。
+- 证据等级三级降级（minutes / ohlc / daily），输出必带 `evidence_level`。
+
+### 测试
+
+- 新增测试文件 9 个共 **56 例**（T380-01~56）：先红（52 failed / 2 passed / 2 errors）
+  后绿（56 passed / 0 failed，3.74 s）。全量回归见 CHECKLIST §5.1 G4。
+
+### 步骤 10 异构复审（2026-11-19）
+
+- **PASS_WITH_FIXES**：5 视角 × 48 探针终跑 **48 PASS / 0 FAIL / 4 P3 披露**
+  （探针勘误 9 项留档定性）；唯一真实缺陷 **H2** —— `detect_limit_lock` 零量分支
+  缺 `c==l`（EXECUTION §2.7 spec 偏离），已修复并新增回归 **T380-25b**（56→57 例）；
+  修复后 9 文件 57 例全绿（3.53 s），全量复跑 **1986 passed / 15 skipped / 0 failed**
+  （junit tests=2001）。真实数据零影响核验：2023-03-01 单日 frozen_old=new=168,391 bar。
+  探针留档 `out/review_v380_results.txt`；详见
+  `docs/audit/2026-11-19-v3.8.0-execution-capacity-audit.md`。
+
+### 已知限制（v3.8.1 待办）
+
+- 真实分钟面板编排未接入 `run_calibration`（当前仅消费注入 `panels`）：
+  λ 面板端到端、`lambda_fill_ratio` 降级、`partial_month` 标记随接线落地。
+
 ## v3.7.0 — P1 统计证据链: 样本外协议 + 选择偏差 + 效应量/门禁 (已实施, 2026-11-18)
 
 ### 概览
