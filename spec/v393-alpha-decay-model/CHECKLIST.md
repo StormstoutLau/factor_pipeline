@@ -266,6 +266,8 @@ python scripts/verify_capacity_impact.py --calibrate --calibration-json out/v393
 | Step 9 TDD 实施 + 证据回填（F1-F11 / INV / §5 / §6） | — | 本批 | done |
 | Step 10 独立子代理 AUDIT + §9/§11 回填 | — | 本批 | done（[AUDIT.md](./AUDIT.md) v1.0） |
 | 更新 PROGRESS.md（P-002 → done、新增 P-012）/ 记录开发日志 | — | Step 10 | done |
-| **P-012**：审计遗留修复包（F-1~F-6，见 [AUDIT.md](./AUDIT.md) §5） | — | 下一批 | pending |
-| 遗留：`RESEARCH_V3.8.0_EXECUTION_CAPACITY.md` L699/L860 Chen & Velikov 元数据订正（RFS→JFQA） | — | 单列 T3 批 | pending |
-| 遗留：`backtest/execution/` 提交后重绑 E3 锚点 commit hash | — | 后续批 | pending |
+| **P-012**：审计遗留修复包（F-1~F-6，见 [AUDIT.md](./AUDIT.md) §5） | — | 下一批（v3.9.4 批次 A） | [PROGRESS P-012](../../docs/PROGRESS.md) pending |
+| 遗留：`RESEARCH_V3.8.0_EXECUTION_CAPACITY.md` L699/L860 Chen & Velikov 元数据订正（RFS→JFQA） | — | 单列 T3 批 | [PROGRESS P-014](../../docs/PROGRESS.md) pending（P2） |
+| 遗留：`backtest/execution/` 提交后重绑 E3 锚点 commit hash | — | 后续批 | [PROGRESS P-013](../../docs/PROGRESS.md) **done**（已绑 `a0cf914`） |
+
+> **E-TODO 映射**：上表两条遗留已纳入 PROGRESS（P-013 已 done、P-014 pending），映射缺口关闭；AUDIT §7 E3 声明同步改为绑定 commit `a0cf914`。

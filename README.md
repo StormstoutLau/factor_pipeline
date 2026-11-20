@@ -1238,13 +1238,13 @@ factor_pipeline/
 
 ## 版本信息
 
-- **Pipeline 版本**: v3.9.3 (alpha 衰减模型选择 — 非参累计乘子 + 单参数累计比 φ + 形成期 bootstrap + 默认路径零改动; 校准读数口径一致性修复 + 真实分钟面板编排接线 + 执行/容量证据层; v3.6.0 治理底座 P0 四件套 + 研究入口契约, ADR-050~054; 含 v3.5.3 sup-F AR(1) sieve bootstrap, ADR-049; v3.5.2 NaN 间隙守卫 ADR-048; v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
+- **Pipeline 版本**: v3.9.4 (批次 A 口径收口包 — 审计遗留修复 F-1~F-6 + 覆盖度交集口径 `|M∩U|/|U|` + `ratio_raw` 披露 + 强制放行留痕; alpha 衰减模型选择 — 非参累计乘子 + 单参数累计比 φ + 形成期 bootstrap + 默认路径零改动; 校准读数口径一致性修复 + 真实分钟面板编排接线 + 执行/容量证据层; v3.6.0 治理底座 P0 四件套 + 研究入口契约, ADR-050~054; 含 v3.5.3 sup-F AR(1) sieve bootstrap, ADR-049; v3.5.2 NaN 间隙守卫 ADR-048; v3.5.1 多断点接入诊断 + 两级门控, ADR-047; v3.5.0 多断点支持 Bai-Perron + Stata 46/46 对拍, ADR-046; v3.4.x: 统一横截面秩管道 / 非生产解耦器弃用 / 断点监控节拍器 / Dynamic 组件可分离 / 消融收口 / 短样本断点退化, ADR-042–045)
 - **内化模块**: factor_fingerprint / factor_decoupler / factor_adaptive_winsor / factor_imputer / factor_neutralizer / factor_orthogonalizer / factor_health (v2.4.0 ADR-019 + v2.5.0 ADR-020 + v3.3.0 ADR-028)
 - **外部数据边界**: Factor_DB / Factor_Trading (DataLoaderV3)
-- **测试基线**: **全量回归 2057 passed / 15 skipped / 0 failed** (825.00s, 2026-11-20, v3.9.3；两次独立复跑 796.71s/825.00s 计数一致；运行期条目 2072，静态 `--collect-only` 显示 2065，差异 7 已登记为观察项；历史基线见 CHANGELOG); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 6/6; 性能预算 3/8 达标（P2 性能债：White/SPA >300s、record 10k 4.44s 等，见 ADD 审计 Phase 7）
+- **测试基线**: **全量回归 2065 passed / 15 skipped / 0 failed** (850.84s, 2026-11-20, v3.9.4；v3.9.3 基线 2057 + 本批新增 8 例 T394-1~8；运行期条目 2080，静态 `--collect-only` 显示 2073，差异 7 已登记为观察项；历史基线见 CHANGELOG); 外部数据测试默认跳过 — `tests/test_backtest/test_p0_duckdb_pivot.py` 需 `RUN_DUCKDB_INTEGRATION=1` 且 DB 非空, `tests/verify_integration_real_data.py` 为手动运行脚本; 版本统一 7 passed + 手工 6/6; 性能预算 3/8 达标（P2 性能债：White/SPA >300s、record 10k 4.44s 等，见 ADD 审计 Phase 7）
 - **CI 矩阵**: Python 3.10/3.11/3.12 × ubuntu-latest (ADR-017)
-- **构建日期**: 2026.11.20 (v3.9.3 alpha 衰减模型选择)
-- **状态**: STABLE (v3.9.3, 10 步 spec 工作流 T1 + `spec/` 四件套)
+- **构建日期**: 2026.11.20 (v3.9.4 批次 A 口径收口包)
+- **状态**: STABLE (v3.9.4, 10 步 spec 工作流 T1 + `spec/` 四件套)
 
 ### 版本历史
 
@@ -1292,6 +1292,7 @@ factor_pipeline/
 | v3.8.1 | 2026.11.20 | 真实分钟面板编排接线: `panels.py` (λ HAC + 填充 + 覆盖度 + `panel_hash` + 月缓存); 2047 passed |
 | v3.9.2 | 2026.11.20 | 校准读数口径一致性修复: c 改日频 σ + R² 门槛回退 + rho 日频/非正守卫 + temporary 代理标注; 2055 passed |
 | v3.9.3 | 2026.11.20 | alpha 衰减模型选择 (FO-1): 累计 alpha 曲线 + 非参乘子 m(h) + 单参数累计比 φ + 形成期 bootstrap + `--decay-curve-json`; 默认 SHA 不变; 2057 passed |
+| v3.9.4 | 2026.11.20 | 批次 A 口径收口包: 覆盖度交集口径 `|M∩U|/|U|` + `ratio_raw` 披露 (P-004) + 强制放行留痕 (P-005) + 审计遗留 F-1~F-6 (bootstrap 回退 m 形式区间 / `net[h].sd` + `plateau` / 退化守卫 / `DecayCurve` 接线); 39 月 `universe_ratio` 39/39 ≤1、`panel_hash` 逐位不变; 默认 SHA 不变; 2065 passed |
 
 ---
 

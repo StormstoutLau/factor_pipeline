@@ -578,7 +578,8 @@ def main():
         from backtest.execution.shell.panels import (MinutePanelBuilder,
                                                      assemble_panels,
                                                      build_daily_panels,
-                                                     coverage_gate)
+                                                     coverage_gate,
+                                                     force_coverage_warning)
         from backtest.execution.shell.report import write_report
         from backtest.execution.shell.runner import run_calibration
 
@@ -613,6 +614,8 @@ def main():
                     print('[coverage] %s' % message)
                 if not args.force_coverage:
                     return 2
+                minute.setdefault('evidence_warnings', []).append(
+                    force_coverage_warning(messages))
                 print('[coverage] --force-coverage：门禁失败放行（留痕）')
             portfolio = build_portfolio_panels(market, cfg)
             daily_panels = build_daily_panels(

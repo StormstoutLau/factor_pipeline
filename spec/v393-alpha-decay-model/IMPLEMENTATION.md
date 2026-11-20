@@ -457,7 +457,7 @@ python scripts/verify_capacity_impact.py --calibrate --calibration-json out/v393
 
 **通过线**：
 
-- 全量 ≥ **2055 + 10 = 2065** passed / 15 skipped / **0 failed**（T393-1~T393-10 为 pytest 用例；T393-11 命令级不计入，I-3）；
+- 全量 ≥ **2057** passed / 15 skipped / **0 failed**（恒等式：`2065 collected + 7 模块级 skip = 2072 = 2057 passed + 15 skipped`；T393-1~T393-10 为 pytest 用例、T393-11 命令级不计入〔I-3 注记保留〕；旧文「2065 passed」为 collected 数误用，AUDIT F-2）
 - 默认 `out/capacity_impact.json` SHA = `82728CE103D49AF211DD12DE87D9784040FC909C83FB7A88D521AF30A89B2548`；
 - `out/v393_decay_curve.json` 含 `m`/`a`/`net` 三值，`m["20"]["point"] == 1.0`（1e-12），`verdict` 两键（`5`/`10`，I-4）齐全。
 

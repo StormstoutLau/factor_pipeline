@@ -1,5 +1,53 @@
 # 开发日志 (Changelog)
 
+## v3.9.4 — 批次 A 口径收口包：审计遗留修复 + 覆盖度交集口径 + 强制放行留痕（对应路线图批次 v3.9.4）(已实施, 2026-11-20)
+
+### 概览
+
+合并三项：**P-012**（v3.9.3 审计遗留 F-1~F-6）、**P-004**（覆盖度 `universe_ratio` 可 >1 的口径缺陷）、
+**P-005**（`--force-coverage` 放行未留痕）。按 [DESIGN](spec/v394-audit-coverage-fix/DESIGN.md) D1-D11 实施，
+全部改动落在校准分支与覆盖度装配，默认回测路径不进入任何新代码。
+
+- **P-004**：`universe_ratio` 由「分钟 uniq 码数 / 日频域计数」改为交集口径 `|分钟码 ∩ 域码| / |域码|`，
+  同时用新字段 `ratio_raw` 披露旧式分子（同分母，可 >1）；`counts` 语义冻结（D11）。
+- **P-012 F-1**：回退分支 net 区间由 `aum·A(h)` 改为 m 形式 `aum·A(h_m)·(m ∓ t·m_se) − cost`，与 point 同一条代数路径。
+- **P-012 F-2/F-3**：v393 IMPLEMENTATION 通过线勘误落盘（`2065 collected + 7 = 2072 = 2057 + 15`，I-3 注记保留）。
+- **P-012 F-4**：`DecayCurve` 由死类型改为内部接线（`assemble_decay_curve` 构造 1 次，payload 由其字段组装）。
+- **P-012 F-5**：payload 增 `net[h].sd` 与顶层 `plateau`（复用既有 `a_boot`/`m_boot`，不新增重采样）。
+- **P-012 F-6**：退化态守卫 `m_sensitivity={}`，不再产出 `{"1":{},"6":{}}` 伪敏感性。
+- **P-005**：新增纯函数 `force_coverage_warning`，force 分支把门禁文案 token 化写入 `minute["evidence_warnings"]`。
+
+### 核心产出
+
+- `backtest/execution/shell/panels.py`：`PanelCoverage.ratio_raw`（末位字段 + `as_dict` 增键）、
+  `_universe_codes`（新增，`set[int]`）、`_universe_count`（薄封装）、`_coverage` 交集口径、
+  `force_coverage_warning`（新增）+ `__all__` 增项。
+- `backtest/execution/shell/runner.py`：F-1 m 形式区间、F-5 `net[h].sd` + 顶层 `plateau`、
+  F-6 退化守卫、F-4 `DecayCurve` 接线（`core/decay.py` 零改动，`__all__` 仍 5 项）。
+- `scripts/verify_capacity_impact.py`：懒加载 import 增 `force_coverage_warning`；force 分支追加留痕。
+- `spec/v393-alpha-decay-model/IMPLEMENTATION.md`：§5 通过线勘误（F-2）。
+- 包版本 **3.9.4**（`pyproject.toml` / `__init__.py` / `config_v2.py` / `reporting.py` + 两处版本测试断言）。
+
+### 实测读数
+
+命令：`python scripts/verify_capacity_impact.py --calibrate --calibration-json out/v394_calibration.json --decay-curve-json out/v394_decay_curve.json`（exit 0，`evidence_level=minutes`）。
+
+- **P-004 修正生效**：39 月 `universe_ratio` ∈ **[0.981548, 0.999739]**（均值 0.993133，39/39 ≤1）；
+  改前同一工件区间为 **[1.049629, 1.139838]**（旧口径全部 >1），**39/39 `ratio ≤ ratio_raw`**；
+- `ratio_raw` ∈ [1.049629, 1.139838]，与改前旧 `universe_ratio` 逐位吻合 → 旧值可由新键完整复现（披露无损）；
+- `stock_median = 4454.0` 与改前一致（仍取原始 `counts`）；
+- **`panels.panel_hash` = `dfcc4e1dea9e4b4f82b73137b75ce8d59620a0d655d265780f8e52a935f85e3f`**，与改前工件逐位一致（INV-2 第二源）；
+- 衰减曲线：`net(5) = −7,159,077`（sd 2.09e7）、`net(10) = +905,290`（sd 1.45e7）、`net(20) = +18,115,106`（sd 8.47e6）；
+  顶层 **`plateau = [20]`**；`phi = 0.9999999999999992`（`fitted`）、`decay_source=empirical`、`evidence_warnings=[]`；
+- 默认 `out/capacity_impact.json` SHA256 `82728CE1…`：跑前 / 实跑 / 复跑三方逐位一致（INV-1）；
+- `_universe_codes` 合成基准（5000 列 × 31 行）39 次调用 0.0316 s（均值 0.8 ms）。
+
+### 测试
+
+- 新增 8 例（T394-1 ~ T394-8），先红 **7 failed + 1 passed**（T394-7 为回归护栏、按设计非红），实施后 **8 passed**；
+- 相关三文件 `tests/test_execution_decay.py` / `tests/test_minute_panels.py` / `tests/test_execution_capacity.py`：**57 passed**；
+- 全量 `pytest -q`：**2065 passed / 15 skipped / 0 failed**（850.84s，172 warnings）；即 v3.9.3 基线 2057 + 本批新增 8 例，与预注册通过线逐位一致。
+
 ## v3.9.3 — alpha 衰减模型选择（对应路线图批次 v3.9.3）(已实施, 2026-11-20)
 
 ### 概览

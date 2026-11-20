@@ -191,3 +191,87 @@ def test_assemble_degradations():
     assert payload_neg["verdict"]["5"] == "unidentified"
     assert payload_neg["verdict"]["10"] == "unidentified"
     assert "decay_curve_unidentified" in payload_neg["evidence_warnings"]
+
+
+# ---------------------------------------------------------------- v3.9.4
+def _net_panels(rows, h_max=60):
+    return {"decay_a_by_period": rows, "decay_h_max": h_max,
+            "alpha0": 0.002629, "aum_ref": 1e10,
+            "cost_by_h": {5: 1e6, 10: 2e6, 20: 4e6}}
+
+
+def _varied_rows(n=20, h_max=60):
+    base = np.arange(1, h_max + 1, dtype=float) * 1e-3
+    noise = np.linspace(-2e-3, 2e-3, n)[:, None]
+    return (base[None, :] + noise).tolist()
+
+
+def test_fallback_net_interval_m_form():
+    """T394-1: n_bootstrap=50 → 回退分支；lo/hi 与 m 形式独立复算一致。"""
+    from backtest.execution.shell.runner import assemble_decay_curve
+
+    rows = _varied_rows()
+    payload = assemble_decay_curve(_net_panels(rows), n_bootstrap=50)
+    assert "decay_ci_analytic_fallback" in payload["evidence_warnings"]
+    aum, hm = 1e10, 20
+    a_hm = payload["a"][str(hm)]["point"]
+    nu = len(rows) - 1
+    z = 1.959963984540054
+    t_crit = (z + (z ** 3 + z) / (4.0 * nu)
+              + (5 * z ** 5 + 16 * z ** 3 + 3 * z) / (96.0 * nu ** 2))
+    mat = np.asarray(rows, dtype=float)
+    for h, cost in ((5, 1e6), (10, 2e6), (20, 4e6)):
+        col = mat[:, h - 1]
+        ok = np.isfinite(col)
+        se_a = float(np.std(col[ok], ddof=1) / np.sqrt(ok.sum()))
+        m_se = se_a / (a_hm * float(h) / float(hm))
+        m = payload["m"][str(h)]["point"]
+        base_net = aum * a_hm
+        item = payload["net"][str(h)]
+        assert item["lo"] == pytest.approx(
+            base_net * (m - t_crit * m_se) - cost, rel=1e-9, abs=1e-6)
+        assert item["hi"] == pytest.approx(
+            base_net * (m + t_crit * m_se) - cost, rel=1e-9, abs=1e-6)
+        assert item["lo"] <= item["point"] <= item["hi"]
+
+
+def test_degenerate_skips_sensitivity():
+    """T394-2: A(h_m)<0 → m_sensitivity == {}、不抛异常。"""
+    from backtest.execution.shell.runner import assemble_decay_curve
+
+    rows = np.full((20, 60), -1e-3).tolist()
+    payload = assemble_decay_curve(_net_panels(rows), n_bootstrap=50)
+    assert payload["m_sensitivity"] == {}
+    assert "decay_curve_unidentified" in payload["evidence_warnings"]
+
+
+def test_decay_curve_constructed(monkeypatch):
+    """T394-3: assemble_decay_curve 构造 DecayCurve 恰好 1 次。"""
+    from backtest.execution.core import decay as decay_mod
+    from backtest.execution.shell.runner import assemble_decay_curve
+
+    calls = []
+    real = decay_mod.DecayCurve
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(decay_mod, "DecayCurve", spy)
+    payload = assemble_decay_curve(_net_panels(_varied_rows()))
+    assert len(calls) == 1
+    assert payload["phi_status"] == "fitted"
+
+
+def test_net_sd_and_plateau():
+    """T394-4: 主路径 net[h].sd 有限、plateau 含 argmax 且 ⊆ horizons。"""
+    from backtest.execution.shell.runner import assemble_decay_curve
+
+    payload = assemble_decay_curve(_net_panels(_varied_rows()))
+    for h in ("5", "10", "20"):
+        assert np.isfinite(payload["net"][h]["sd"])
+        assert payload["net"][h]["sd"] >= 0.0
+    assert set(payload["plateau"]) <= {5, 10, 20}
+    nets = payload["net"]
+    h_star = max(nets, key=lambda k: nets[k]["point"])
+    assert int(h_star) in payload["plateau"]

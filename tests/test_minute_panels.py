@@ -312,6 +312,48 @@ def test_coverage_gate():
     assert msgs_obj == msgs
 
 
+# ---------------------------------------------------------------- v3.9.4
+def test_coverage_intersection(cfg, daily_ref):
+    """T394-5: 交集比值 + 原式披露；stock_median 仍取 counts。"""
+    from backtest.execution.shell.panels import MinutePanelBuilder
+
+    builder = MinutePanelBuilder(cfg, loader=FakeLoader({}), daily=daily_ref)
+    builder._month_codes = {"2023-01": np.asarray([1, 2, 999999])}
+    cov = builder._coverage(["2023-01"], [], [], {"2023-01": 6},
+                            {"2023-01": 0.0})
+    assert cov.universe_ratio["2023-01"] == 0.5       # |{1,2}| / 4
+    assert cov.ratio_raw["2023-01"] == 1.5            # 6 / 4（旧式分子）
+    assert cov.stock_median == 6.0                    # INV-4
+    assert cov.as_dict()["ratio_raw"]["2023-01"] == 1.5
+
+
+def test_panel_coverage_ratio_raw_default():
+    """T394-8: 旧构造（不传 ratio_raw）可用；as_dict 含空 dict。"""
+    from backtest.execution.shell.panels import PanelCoverage
+
+    cov = PanelCoverage(window=("2023-01", "2023-01"), months=["2023-01"],
+                        partial_months=[], missing_months=[],
+                        stock_median=1.0,
+                        universe_ratio={"2023-01": 0.5},
+                        limit_lock_ratio=0.0, board_counts={"深主板": 1})
+    assert cov.ratio_raw == {}
+    assert cov.as_dict()["ratio_raw"] == {}
+
+
+def test_panel_hash_stable(cfg, daily_ref):
+    """T394-7: 同一输入两次 _panel_hash 相同；payload 无 coverage 键（回归护栏，非红）。"""
+    import inspect
+    from backtest.execution.shell.panels import MinutePanelBuilder
+
+    b1 = MinutePanelBuilder(cfg, loader=FakeLoader({}), daily=daily_ref)
+    b2 = MinutePanelBuilder(cfg, loader=FakeLoader({}), daily=daily_ref)
+    assert b1._panel_hash(["2023-01"], 3, 100) == b2._panel_hash(
+        ["2023-01"], 3, 100)
+    # INV-2/D8：hash payload 不含覆盖度键（复审 F2，以源码文本断言补齐）
+    src = inspect.getsource(MinutePanelBuilder._panel_hash)
+    assert "coverage" not in src
+
+
 # ---------------------------------------------------------------- R4
 def _impact_fit(p, impact, sigma):
     from backtest.execution.core.impact import (LinearImpact, LogImpact,

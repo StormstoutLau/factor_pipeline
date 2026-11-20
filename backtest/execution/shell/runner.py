@@ -197,7 +197,8 @@ def assemble_decay_curve(panels, h_m=20, n_bootstrap=1000, block_size=3,
     CI 只按形成期重采（INV-8），主 CI 取 ``block_size=3``，b=1/6 作敏感性附表。
     """
     from ...effect_size import stationary_bootstrap_indices
-    from ..core.decay import decay_multiplier, fit_phi, net_ci, net_point
+    from ..core.decay import (DecayCurve, decay_multiplier, fit_phi, net_ci,
+                              net_point, plateau)
 
     rows = panels.get("decay_a_by_period")
     if not rows:
@@ -313,11 +314,12 @@ def assemble_decay_curve(panels, h_m=20, n_bootstrap=1000, block_size=3,
                     if ok.sum() > 1 else float("nan"))
             scale = a_mean[hm] * float(h) / float(hm)
             m_se = se_a / scale if np.isfinite(se_a) and scale > 0 else float("nan")
+            base_net = aum * float(a_mean[hm])
             net_out[str(h)] = {
                 "point": float(point[h]),
-                "lo": float(aum * (a_mean[h] - t_crit * se_a)
+                "lo": float(base_net * (m_point[h] - t_crit * m_se)
                             - cost_by_h[h]),
-                "hi": float(aum * (a_mean[h] + t_crit * se_a)
+                "hi": float(base_net * (m_point[h] + t_crit * m_se)
                             - cost_by_h[h])}
             m_out[str(h)]["lo"] = float(m_point[h] - t_crit * m_se)
             m_out[str(h)]["hi"] = float(m_point[h] + t_crit * m_se)
@@ -328,6 +330,30 @@ def assemble_decay_curve(panels, h_m=20, n_bootstrap=1000, block_size=3,
         for h in horizons:
             net_out[str(h)] = {"point": float("nan"), "lo": float("nan"),
                                "hi": float("nan")}
+
+    net_sd = dict((int(h), float("nan")) for h in horizons)
+    if not degenerate and a_boot is not None:
+        base_rep = np.asarray(a_boot[hm], dtype=float)
+        for h in horizons:
+            if h not in cost_by_h:
+                continue
+            values = (aum * base_rep * np.asarray(m_boot[h], dtype=float)
+                      - cost_by_h[h])
+            values = values[np.isfinite(values)]
+            net_sd[int(h)] = (float(np.std(values, ddof=1))
+                              if values.size > 1 else float("nan"))
+    for key, item in net_out.items():
+        item["sd"] = net_sd.get(int(key), float("nan"))
+
+    point_map = dict((int(k), float(v["point"])) for k, v in net_out.items()
+                     if int(k) in horizons
+                     and np.isfinite(float(v["point"])))
+    plateau_h = []
+    if point_map:
+        h_star = max(point_map, key=lambda key: point_map[key])
+        sd_star = net_sd.get(int(h_star), float("nan"))
+        if np.isfinite(sd_star):
+            plateau_h = plateau(point_map, sd_star)
 
     phi_status = "unidentified"
     decay_source = "empirical"
@@ -351,18 +377,32 @@ def assemble_decay_curve(panels, h_m=20, n_bootstrap=1000, block_size=3,
     if 10 <= n_anchor < 39:
         warnings.append("decay_small_sample")
 
+    curve = DecayCurve(
+        h_m=hm,
+        horizons=tuple(horizons),
+        a_mean=dict(a_mean),
+        m_point=dict(m_point),
+        m_lo=dict((h, float(m_out[str(h)]["lo"])) for h in horizons),
+        m_hi=dict((h, float(m_out[str(h)]["hi"])) for h in horizons),
+        phi=float(phi),
+        phi_status=phi_status,
+        n_periods=n_periods,
+        boot={"block": int(block_size), "reps": int(n_bootstrap),
+              "sensitivity": [1, 6], "seed": int(seed)})
+
     m_sensitivity = {}
-    for block in (1, 6):
-        try:
-            _, m_b = _boot(block)
-        except Exception:
-            m_sensitivity[str(block)] = {}
-            continue
-        item = {}
-        for h in horizons:
-            lo, hi = _quantiles(m_b[h])
-            item[str(h)] = {"lo": lo, "hi": hi}
-        m_sensitivity[str(block)] = item
+    if not degenerate:
+        for block in (1, 6):
+            try:
+                _, m_b = _boot(block)
+            except Exception:
+                m_sensitivity[str(block)] = {}
+                continue
+            item = {}
+            for h in horizons:
+                lo, hi = _quantiles(m_b[h])
+                item[str(h)] = {"lo": lo, "hi": hi}
+            m_sensitivity[str(block)] = item
 
     verdict = {}
     for h in (5, 10):
@@ -378,20 +418,24 @@ def assemble_decay_curve(panels, h_m=20, n_bootstrap=1000, block_size=3,
             verdict[str(h)] = "flat"
 
     alpha0 = a_mean[hm]
+    m_payload = dict((str(h), {"point": float(curve.m_point[h]),
+                               "lo": float(curve.m_lo[h]),
+                               "hi": float(curve.m_hi[h])})
+                     for h in curve.horizons)
     return {
-        "h_m": hm,
-        "n_periods": n_periods,
+        "h_m": curve.h_m,
+        "n_periods": curve.n_periods,
         "alpha0_anchored": float(alpha0) if np.isfinite(alpha0) else None,
         "alpha0_calendar": panels.get("alpha0"),
-        "phi": float(phi),
-        "phi_status": phi_status,
+        "phi": curve.phi,
+        "phi_status": curve.phi_status,
         "decay_source": decay_source,
         "horizons": horizons,
-        "m": m_out,
+        "m": m_payload,
         "a": a_out,
         "net": net_out,
-        "boot": {"block": int(block_size), "reps": int(n_bootstrap),
-                 "sensitivity": [1, 6], "seed": int(seed)},
+        "plateau": plateau_h,
+        "boot": dict(curve.boot),
         "verdict": verdict,
         "evidence_warnings": warnings,
         "n_by_h": dict((str(h), int(v)) for h, v in n_by_h.items()),

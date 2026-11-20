@@ -7,7 +7,7 @@
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -25,6 +25,7 @@ from .runner import fit_lambda_hac
 
 __all__ = ["DailyRef", "PanelCoverage", "MinutePanelBuilder",
            "build_daily_panels", "assemble_panels", "coverage_gate",
+           "force_coverage_warning",
            "PARTIAL_MIN_DAYS", "SAMPLE_CAP", "FEE_BPS", "COST_HORIZONS"]
 
 PARTIAL_MIN_DAYS = 20          # 文件数 < 交易日数但 >= 20 -> partial
@@ -59,6 +60,7 @@ class PanelCoverage(object):
     universe_ratio: dict
     limit_lock_ratio: float
     board_counts: dict
+    ratio_raw: dict = field(default_factory=dict)   # v3.9.4：原式披露（可 >1）
 
     def as_dict(self):
         return {"window": list(self.window),
@@ -67,6 +69,7 @@ class PanelCoverage(object):
                 "missing_months": list(self.missing_months),
                 "stock_median": float(self.stock_median),
                 "universe_ratio": dict(self.universe_ratio),
+                "ratio_raw": dict(self.ratio_raw),
                 "limit_lock_ratio": float(self.limit_lock_ratio),
                 "board_counts": dict(self.board_counts)}
 
@@ -229,14 +232,24 @@ class MinutePanelBuilder(object):
                 out[code] = number
         return out
 
-    def _universe_count(self, ym):
+    def _universe_codes(self, ym):
+        """日频可投资域码集（int 归一，与 _adv_lookup 同款）。"""
         if self.daily is None or self.daily.universe is None:
-            return 0
+            return set()
         row = self._month_row(self.daily.universe, ym)
         if row is None:
-            return 0
-        values = row.fillna(False).to_numpy()
-        return int(np.asarray(values, dtype=bool).sum())
+            return set()
+        keep = np.asarray(row.fillna(False).to_numpy(), dtype=bool)
+        codes = set()
+        for key in row.index[keep]:
+            try:
+                codes.add(int(str(key)))
+            except (TypeError, ValueError):
+                continue
+        return codes
+
+    def _universe_count(self, ym):
+        return len(self._universe_codes(ym))
 
     # ------------------------------------------------------------ 缓存
     def _read_cache(self, ym):
@@ -380,10 +393,17 @@ class MinutePanelBuilder(object):
 
     # ------------------------------------------------------------ 组装
     def _coverage(self, usable, partial, missing, counts, locks):
-        ratio = {}
+        ratio, raw = {}, {}
         for ym in usable:
-            denom = self._universe_count(ym)
-            ratio[ym] = (float(counts[ym]) / float(denom)) if denom > 0 else None
+            universe = self._universe_codes(ym)
+            denom = len(universe)
+            if denom <= 0:
+                ratio[ym] = None
+                raw[ym] = None
+                continue
+            codes = set(int(c) for c in self._month_codes.get(ym, ()))
+            ratio[ym] = float(len(codes & universe)) / float(denom)
+            raw[ym] = float(counts[ym]) / float(denom)
         boards = {"沪主板": 0, "深主板": 0, "创业板": 0, "科创板": 0, "其他": 0}
         for ym in usable:
             for code in self._month_codes.get(ym, []):
@@ -396,6 +416,7 @@ class MinutePanelBuilder(object):
             missing_months=list(missing),
             stock_median=float(np.median(values)) if values else 0.0,
             universe_ratio=ratio,
+            ratio_raw=raw,
             limit_lock_ratio=(float(np.mean(lock_values))
                               if lock_values else 0.0),
             board_counts=boards)
@@ -644,6 +665,11 @@ def assemble_panels(minute, daily_panels, evidence_level):
             merged[key] = value
     merged["evidence_level"] = evidence_level
     return merged
+
+
+def force_coverage_warning(messages):
+    """--force-coverage 放行留痕文案（token 化，便于 grep 与断言）。"""
+    return "coverage_gate_forced: " + "; ".join(str(m) for m in messages)
 
 
 def coverage_gate(cov):

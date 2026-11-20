@@ -31,7 +31,7 @@ for ext in ["F:/Coding/Factor_Fingerprint", "F:/Coding/Factor_Decoupler"]:
         sys.path.insert(0, ext)
 
 # 期望的统一版本号
-EXPECTED_VERSION = "3.9.3"
+EXPECTED_VERSION = "3.9.4"
 
 
 class TestFix3VersionUnification(unittest.TestCase):

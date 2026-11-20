@@ -3,14 +3,15 @@
 ---
 id: v393-alpha-decay-model-DESIGN
 type: design
-version: 1.1
+version: 1.2
 status: verified
 date: 2026-11-20
 depends: [v393-alpha-decay-model-RESEARCH]
 upstream: null
 ---
 
-> **版本**: v1.1（2026-11-20；Step 3 产出 + Step 4 异构复审通过，见 §12）
+> **版本**: v1.2（2026-11-20；**v3.9.4 批次 A 勘误**：`phi_status` 枚举补 `prior`、D5 plateau 落点注记、§7 错误表同步——仅同步实现事实，不改任何决策与结论，见 §13）
+> **版本历史**: v1.0（Step 3 产出）→ v1.1（Step 4 异构复审通过，见 §12）→ v1.2（勘误，见 §13）
 > **批次**: v3.9.3（P-002，P0）
 > **批次档位**: **T1**（改动路径命中 `backtest/`、`scripts/`、`tests/` → Layer-1）
 > **基于调研**: [RESEARCH.md](./RESEARCH.md) **v1.3 verified**（§9 补充调研 + §11 异构复审 PASS_WITH_FIXES）
@@ -119,6 +120,8 @@ m(h;φ) = (h_m/h) · (1−φ^h)/(1−φ^{h_m}),   0 < φ ≤ 1
 
 **决策**：所有 h 输出 `{"point","lo","hi"}` 三值（由 bootstrap 重采样 `A` 曲线后重算）；`plateau` 用 `net` 的 bootstrap 标准差；h=5/10/20 全部报告，`h*` 仅作摘要，禁止只报使 `net>0` 的 h。
 
+> **v1.2 勘误注记**：plateau 的「net bootstrap sd」口径在 v3.9.3 实现中未落 payload（AUDIT F-5）。v3.9.4 批次 A 以**校准工件**形态落地（`net[h].sd` + 顶层 `plateau`，见 [v394 DESIGN §4.4](../v394-audit-coverage-fix/DESIGN.md)）；默认路径的 `plateau()`（rho 口径）不变。
+
 ---
 
 ## 3. 架构设计
@@ -219,7 +222,7 @@ lo, hi = np.quantile(samples, [0.025, 0.975])   # 百分位 CI，不新增函数
   "alpha0_anchored": 0.0,
   "alpha0_calendar": 0.002629,
   "phi": 1.0,
-  "phi_status": "fitted | unidentified",
+  "phi_status": "fitted | unidentified | prior",
   "decay_source": "empirical | prior",
   "horizons": [5, 10, 20],
   "m": {"5": {"point": 0, "lo": 0, "hi": 0}, "10": {}, "20": {}},
@@ -275,7 +278,7 @@ class DecayCurve:
     m_lo: Mapping[int, float]
     m_hi: Mapping[int, float]
     phi: float
-    phi_status: str                  # "fitted" | "unidentified"
+    phi_status: str                  # "fitted" | "unidentified" | "prior"
     n_periods: int
     boot: Mapping[str, object]
 ```
@@ -286,7 +289,7 @@ class DecayCurve:
 
 | 错误场景 | 处理方式 | 用户可见信息 |
 |---------|---------|------------|
-| `A_by_period` 期数 <10 | 走 S3 文献先验：半衰期 6/12 个月 ≈ 126/252 交易日，`φ_prior = 2^(−1/HL)`（HL 为先验半衰期交易日数；v1.1 复审 S4），`decay_source="prior"` | `evidence_warnings: decay_prior_fallback` |
+| `A_by_period` 期数 <10 | 走 S3 文献先验：半衰期 6/12 个月 ≈ 126/252 交易日，`φ_prior = 2^(−1/HL)`（HL 为先验半衰期交易日数；v1.1 复审 S4），`decay_source="prior"`、`phi_status="prior"`（v1.2 勘误） | `evidence_warnings: decay_prior_fallback` |
 | 期数 10 ≤ n < 39 | 正常估计，但低于预注册样本量 39，不作豁免解释（v1.1 复审 S3） | `evidence_warnings: decay_small_sample` |
 | `A(h)` 出现 NaN / 符号翻转（`A(20)<=0`） | 不估 φ，`phi_status="unidentified"`，`m` 输出 NaN 并标注 | `decay_curve_unidentified` |
 | φ 拟合失败（网格无有限 SSE） | `phi=1.0` + `phi_status="unidentified"` | `decay_phi_fit_failed` |
@@ -440,4 +443,20 @@ class DecayCurve:
 
 ---
 
-**Review 签字**: 异构复审 pass（RULE-5 · 独立新会话 · 见 §12）｜Step 4 复审 2026-11-20｜结论: PASS_WITH_FIXES → `verified`
+## 13. v1.2 勘误记录（v3.9.4 批次 A，2026-11-20）
+
+> **性质**: 文档勘误，**不改任何决策与结论**；仅把实现事实同步进设计，供 v3.9.4 实施对齐。
+> **触发**: v3.9.3 Step 10 审计发现 F-3（枚举缺 `prior`）/ F-5（D5 plateau 无落点）→ v3.9.4 RESEARCH §3.2。
+
+| # | 位置 | 勘误 | 依据 |
+|---|------|------|------|
+| E-1 | §4.4 L223 | `phi_status` 枚举补 `"prior"`（期数 <10 时实现写该值） | AUDIT F-3；runner.py prior 分支 |
+| E-2 | §6 L279 | `DecayCurve.phi_status` 注释同步 | 同上 |
+| E-3 | §7 L292 | 期数 <10 行补 `phi_status="prior"` | 同上 |
+| E-4 | §2 D5 L121 后 | 加注：plateau 的 net bootstrap sd 由 v3.9.4 以校准工件落地（`net[h].sd` + 顶层 `plateau`），默认 `plateau()` 不动 | AUDIT F-5；[v394 DESIGN §4.4](../v394-audit-coverage-fix/DESIGN.md) |
+
+**未改动**: §2 D1-D4、§8 不变式、§10 白名单、§12 复审结论。
+
+---
+
+**Review 签字**: 异构复审 pass（RULE-5 · 独立新会话 · 见 §12）｜Step 4 复审 2026-11-20｜结论: PASS_WITH_FIXES → `verified`｜v1.2 勘误：v3.9.4 Step 3（文档同步，无需复审）

@@ -5,6 +5,7 @@
 """
 import dataclasses
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -238,3 +239,14 @@ def test_assemble_decay_curve_payload():
     assert "lo" in payload["m_sensitivity"]["1"]["5"]
     assert isinstance(payload["alpha0_anchored"], float)
     json.dumps(payload)
+
+
+# ---------------------------------------------------------------- v3.9.4
+def test_force_coverage_warning_contract():
+    """T394-6: 留痕文案 token 化 + 脚本 force 分支已接线（源码文本断言）。"""
+    from backtest.execution.shell.panels import force_coverage_warning
+
+    assert force_coverage_warning(["a", "b"]) == "coverage_gate_forced: a; b"
+    src = (Path(__file__).resolve().parent.parent
+           / "scripts" / "verify_capacity_impact.py").read_text(encoding="utf-8")
+    assert "force_coverage_warning(messages)" in src
