@@ -1,5 +1,32 @@
 # 开发日志 (Changelog)
 
+## v3.9.7 — P-017 审计遗留清尾：恒真断言整改 + 空 minute-root exit 2 + 文档勘误 (已实施, 2026-11-21)
+
+### 概览
+
+承接 v3.9.6 Step 10 审计遗留 **P-017**（[spec/v397-p017-cleanup](spec/v397-p017-cleanup/) 四件套：RESEARCH v1.2 / DESIGN v1.0 / IMPLEMENTATION v1.2 / CHECKLIST v1.2），包版本 **3.9.7**（patch 级）。生产代码唯一改动 `scripts/verify_capacity_impact.py` 一处捕获；`backtest/execution/core/` 与 `shell/panels.py` 零改动，默认工件逐位不变。
+
+- **P2①（D1）**：T3100_3 删除恒真断言段（`base = raw - raw.mean()` 为测试本地 numpy 运算不经过实现）与误导注释；docstring 如实化（v396 RESEARCH F-1 一并订正）；保留不同 seed 的非恒真平移对照断言。
+- **P3②（D2）**：T396_9 删除 `_find_key` 递归模糊查找，改为精确键路径断言（`payload["panels"]["coverage"]["universe_ratio"]` 等），防止键改名时断言静默放过。
+- **P3③（D3）**：新增 T397_1 落实 INV-4 持久断言——显式空展开与缺省 cfg 逐字段等价、`config_hash()` 相等、默认 `minute_root=None`（审计 F5：a==b 与 hash 相等为语义级恒真、捕获力低，登记为已知局限）。
+- **P3④（D4/D9 + D6/D7/D8）**：v396 DESIGN 注释行号与 §6.2 plateau 用例矩阵、§7 空 `--minute-root` 表述勘误；error-path 补测三例——T397_2（空根 → `CalibrationUnavailable`「无可用月份」）、T397_3（包导入失败 → ImportError）、T397_4（进程内 CLI：monkeypatch `sys.argv` + stub `build_panels`/`daily_ref`，断言 `main()==2` + stdout 含 `[minute]` + 无 Traceback）。
+- **D5（现状修复）**：script 局部 import 追加 `CalibrationUnavailable`，`build_panels → builder.build()` 包 try，`except CalibrationUnavailable → print('[minute] %s' % exc) + return 2`——消除空 `--minute-root` 时的 traceback + exit 1（调研：v3.8.1 计划文档 L796-803 原有 catch 原型，属实施漂移；外部锚点 glibc/GNU/argparse + 仓内 3 处 gate=2 先例支持 exit 2）。
+
+### 核心产出
+
+- `scripts/verify_capacity_impact.py`：空 `--minute-root` → `[minute] <msg>` + exit 2（唯一生产改动；`coverage_gate` 在 try 之外不受影响，正常路径零变化）。
+- 测试：新增 4 例（T397_1/2/3/4）+ T3100_3 重写 + T396_9 精确键路径改写（`_find_key` 删除，换 `_vci` 助手）。
+- 包版本 **3.9.7**（pyproject / `__init__` / config_v2 / reporting + 两处版本测试锚点）。
+- 文档勘误：v396 DESIGN（注释行号 L304-306 + §6.2/§7）；IMPLEMENTATION §3.3/§4（T397_1 实际插入位置 + 定向命令期望 5→4 passed）；CHECKLIST §1.5 F-A 勘误（4 项锚点漂移）。
+
+### 实测读数
+
+- 定向：minute_panels 4 passed（3.21 s）/ decay 1 passed / capacity T3100 9 passed；三文件回归 **84 passed**（134.44 s）；
+- 全量 `pytest -q`：**2092 passed / 15 skipped / 0 failed**（910.12 s；基线 2088 + 4 新增，与预注册通过线逐位一致）；
+- 默认 `out/capacity_impact.json` SHA `82728CE1…` 逐位不变；`core/panels` 零 diff、CLI 参数集合不变；
+- Step 10 独立只读审计 **PASS_WITH_FIXES**（4.6/5；0×P1、0×P2、5×P3：F1-F4 文档类就地核销 + F5 已知局限登记，无新增 backlog）；
+- 流程偏差 **D-397-1**（Step 6 实施文档 Review 与 Step 9 TDD 时序合并执行）如实登记于 CHECKLIST §12.1；补救：IMPLEMENTATION §9 retro 复核（明示事后性质）+ §12.2 TDD 留痕核验（红 1 failed → D5 实现 → 绿 4 passed → 回归 2092）。
+
 ## v3.9.6 — 清尾包：P-016 测试有效性补强 + P-015 审计遗留 + P-014 文献订正 (已实施, 2026-11-21)
 
 ### 概览

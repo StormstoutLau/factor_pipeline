@@ -3,8 +3,8 @@
 ---
 id: v396-audit-backlog-cleanup-DESIGN
 type: design
-version: 1.3
-status: verified（Step 4 复审 PASS；v1.3 Step 8 勘误 D2 行表述，见修订）
+version: 1.4
+status: verified（Step 4 复审 PASS；v1.4 = v3.9.7 批次勘误 §6.2 用例矩阵与 §7 空根机制，见 P-017）
 date: 2026-11-21
 depends: [v396-audit-backlog-cleanup-RESEARCH]
 upstream: null
@@ -274,12 +274,14 @@ _REVERSAL_COUNT_KEYS = {
 
 | 用例 | net | sd | 期望 | 覆盖语义 |
 |---|---|---|---|---|
-| 空 | `{}` | 1.0 | `[]` | 空输入 |
-| sd=0 并列 | `{5:1.0, 10:1.0, 20:0.5}` | 0.0 | `[5, 10]` | `>=` 含并列 |
-| 恰在边界 | `{5:10.0, 10:8.0, 20:5.0}` | 2.0 | `[5, 10]` | `v >= max−sd` 取等 |
-| 边界外 | 同上 | 2.0001 | `[5]` | 严格小于被排除 |
-| 排序 | `{20:5.0, 5:10.0, 10:8.0}` | 2.0 | `[5, 10]` | 输出升序 |
-| 单点 | `{10:3.0}` | 9.9 | `[10]` | `h*` 恒含 |
+| 空 | `{}` | 0.0 | `[]` | 空输入 |
+| sd=0 只留 argmax | `{5:2.0, 10:1.0, 20:0.5}` | 0.0 | `[5]` | 阈值 = argmax |
+| 并列 + 排序 | `{20:1.0, 5:1.0, 10:0.5}` | 0.0 | `[5, 20]` | `>=` 含并列、输出升序 |
+| ≥ 边界包含 | `{5:1.0, 10:0.9}` | 0.1 | `[5, 10]` | `v >= max−sd` 取等 |
+| 边界外剔除 | `{5:1.0, 10:0.89}` | 0.1 | `[5]` | 严格小于被排除 |
+| 单点 | `{20:3.0}` | 100.0 | `[20]` | `h*` 恒含 |
+
+> v1.4 勘误：上表与实现测试 T396_6 逐例对齐（v1.3 原表数值与测试不一致，语义类别等价）。
 
 ### 6.3 md 标题（D7）
 
@@ -295,8 +297,8 @@ _REVERSAL_COUNT_KEYS = {
 |---|---|---|
 | `E:\Level 1 Data` 缺失 / `pyarrow` 缺失 | `@needs_minutes` 跳过 | pytest skippy 原因（既有） |
 | `E:\Ashare_data` 缺失 | `@needs_daily` 跳过 | pytest skip 原因（既有） |
-| `--minute-root` 指向空目录 | `available_months()==[]` → 无面板 → 门禁失败 | `[coverage] …`；无 force 则 exit 2 |
-| `--minute-root` 不存在 | 同上（`root.is_dir()` 为 False） | 同上 |
+| `--minute-root` 指向空目录 | `builder.build()` 抛 `CalibrationUnavailable` → script 捕获 | `[minute] 分钟窗口内无可用月份`；exit 2 |
+| `--minute-root` 不存在 | 同上（`available_months()==[]` → 同一异常） | 同上 |
 | 子进程超时 | `subprocess.TimeoutExpired` 直接失败 | 测试输出 tail |
 | `factor_pipeline` 导入失败 | 不吞异常，显式抛 | traceback（曲线分支） |
 | feather 裁剪后 schema 变化 | 用 pyarrow 读表→过滤行→原 schema 写回 | 若失败测试立即红 |

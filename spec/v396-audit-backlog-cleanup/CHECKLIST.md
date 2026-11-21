@@ -3,8 +3,8 @@
 ---
 id: v396-audit-backlog-cleanup-CHECKLIST
 type: design
-version: 1.3
-status: done（Step 10 完成：64/64 通过；审计 PASS_WITH_FIXES → 有条件通过，遗留 P-017：1×P2 + 3×P3）
+version: 1.4
+status: done（Step 10 完成：64/64 通过；审计 PASS_WITH_FIXES → 有条件通过，遗留 P-017：1×P2 + 3×P3。v1.4 = v3.9.7 批次勘误 §5 空根行）
 date: 2026-11-21
 depends: [v396-audit-backlog-cleanup-IMPLEMENTATION, v396-audit-backlog-cleanup-DESIGN]
 upstream: null
@@ -156,7 +156,7 @@ upstream: null
 | 分钟数据缺失 | 无 `E:\Level 1 Data` | `skip`（`needs_minutes`） | ☑ 源码：`test_minute_panels.py` L30 `skipif(not MINUTE_ROOT.is_dir())`，T396-9 于 L750 挂载 |
 | pyarrow 缺失 | 卸载/隔离环境 | `skip`（`needs_pyarrow`） | ☑ 源码：L28 `skipif(not has_pyarrow())`；`_trim_month` 内另用 `importorskip("pyarrow.feather")` 双重兜底 |
 | 日频数据缺失 | 无 `E:\Ashare_data` | `skip`（`needs_daily`） | ☑ 源码：L32 `skipif(not DATA_ROOT.is_dir())`，T396-9 于 L751 挂载 |
-| `--minute-root` 空/不存在 | 传空目录 | 门禁失败，无 force `return 2` | ☑ 源码：script L758-763 门禁失败 → `return 2`；空根使全月份进 `missing_months` 走同一分支，T396-9 严格分支实测 exit 2 |
+| `--minute-root` 空/不存在 | 传空目录 | `CalibrationUnavailable` → 提示 → `return 2` | ☑ v3.9.7 勘误（P-017④）：空根在 `build()` 抛异常、**不进入门禁**（原「走同一分支」失真）；捕获见 script L750-764，测试 T397_2/T397_4 |
 | 子进程超时 | 人为缩短 timeout | `TimeoutExpired` 显式失败 | ☑ 源码：T396-9 两次 `subprocess.run` 均 `timeout=1800`（L762/L770），T396-8 `timeout=120`（L742），超时由 `subprocess` 抛 `TimeoutExpired` 不被吞 |
 | 包导入失败 | 隔离 `factor_pipeline` | `ImportError` 上抛（不静默） | ☑ 源码：`_decay_curve_md` 内 `from factor_pipeline import __version__` 无 try/except，隔离环境下 `ImportError` 直接上抛 |
 

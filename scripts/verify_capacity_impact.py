@@ -717,6 +717,7 @@ def main():
         if str(SCRIPTS.parent) not in sys.path:
             sys.path.insert(0, str(SCRIPTS.parent))
         from backtest.execution.config import CalibrationConfig
+        from backtest.execution.ports import CalibrationUnavailable
         from backtest.execution.shell.loaders import (MinuteLoader,
                                                       resolve_evidence_level)
         from backtest.execution.shell.panels import (MinutePanelBuilder,
@@ -746,15 +747,21 @@ def main():
             panels = assemble_panels(minute, {'evidence_warnings': []},
                                      evidence)
         else:
-            market = build_panels(args.data_root)
-            loader = MinuteLoader(cfg.minute_root,
-                                  sigma_bars=cfg.bvc_sigma_bars)
-            cache_dir = (str(SCRIPTS.parent / 'out' / 'panel_cache')
-                         if args.panel_cache else None)
-            builder = MinutePanelBuilder(cfg, loader=loader,
-                                         daily=daily_ref(market, cfg),
-                                         cache_dir=cache_dir)
-            minute = builder.build()
+            try:
+                market = build_panels(args.data_root)
+                loader = MinuteLoader(cfg.minute_root,
+                                      sigma_bars=cfg.bvc_sigma_bars)
+                cache_dir = (str(SCRIPTS.parent / 'out' / 'panel_cache')
+                             if args.panel_cache else None)
+                builder = MinutePanelBuilder(cfg, loader=loader,
+                                             daily=daily_ref(market, cfg),
+                                             cache_dir=cache_dir)
+                minute = builder.build()
+            except CalibrationUnavailable as exc:
+                # v3.9.7 P-017④：分钟面板不可用（空/缺失根、pyarrow 缺失、
+                # 日频缺失）→ 一行提示 + 退出码 2，不再 traceback。
+                print('[minute] %s' % exc)
+                return 2
             ok, messages = coverage_gate(minute.get('coverage') or {})
             if not ok:
                 for message in messages:

@@ -325,3 +325,13 @@ def test_T396_7_decay_curve_md_title_uses_package_version():
     expected = "# v%s alpha 衰减曲线（FO-1）" % factor_pipeline.__version__
     assert md.splitlines()[0] == expected
     assert "v3.9.3 alpha" not in md
+
+
+def test_T397_3_decay_md_import_failure(monkeypatch):
+    """T397-3: 包不可导入时 _decay_curve_md 不吞异常（ImportError 上抛）。"""
+    import sys
+
+    vci = _vci_script()
+    monkeypatch.setitem(sys.modules, "factor_pipeline", None)
+    with pytest.raises(ImportError):
+        vci._decay_curve_md({})

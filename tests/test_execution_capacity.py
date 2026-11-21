@@ -291,7 +291,7 @@ def test_T3100_2_sell_reversal_positive():
 
 
 def test_T3100_3_shift_invariance_after_demean():
-    """T3100-3: demean 幅度可断言（非恒真）；未 demean 的平移对照会改变读数。"""
+    """T3100-3: 未 demean 的平移对照非恒真（demean 本身由 T396_2 在脚本层覆盖）。"""
     from backtest.execution.core.impact import cross_section_reversal
 
     rng = np.random.default_rng(7)
@@ -301,13 +301,8 @@ def test_T3100_3_shift_invariance_after_demean():
     weight = np.full(n, 0.1)
     month = np.repeat(np.arange(4), n // 4)
 
-    base = raw - raw.mean()
-    # v3.9.6 P-016③：删除恒真 allclose(base, shifted) 与同输入 a/b 对照，
-    # 改断言 demean 幅度（误用 median 等公式漂移会被捕获）。
-    assert abs(float(base.mean())) < 1e-12
-    assert float(np.max(np.abs(base - raw))) == pytest.approx(
-        abs(float(raw.mean())))
-
+    # v3.9.7 P-017①：demean 幅度类断言由定义恒真（base = raw - raw.mean()），
+    # 无判别力，已删除；保留下列对实现的非恒真平移对照。
     # 非恒真对照：未 demean 且买卖不平衡时，平移会改变读数
     n_unbal = n - 1
     c = cross_section_reversal(rt[:n_unbal], raw[:n_unbal],

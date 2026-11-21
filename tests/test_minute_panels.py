@@ -718,21 +718,13 @@ def _trim_month(tmp_path, ym="2020-02"):
     return dst
 
 
-def _find_key(obj, key):
-    """递归查找嵌套 dict/list 中的首个 key。"""
-    if isinstance(obj, dict):
-        if key in obj:
-            return obj[key]
-        for value in obj.values():
-            got = _find_key(value, key)
-            if got is not None:
-                return got
-    elif isinstance(obj, list):
-        for value in obj:
-            got = _find_key(value, key)
-            if got is not None:
-                return got
-    return None
+def _vci():
+    """导入 scripts/verify_capacity_impact.py（进程内 CLI 测试用）。"""
+    for path in (str(ROOT), str(ROOT / "scripts")):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    import verify_capacity_impact as vci
+    return vci
 
 
 def test_T396_8_minute_root_cli_contract():
@@ -775,6 +767,54 @@ def test_T396_9_force_coverage_e2e(tmp_path):
     text = forced_json.read_text(encoding="utf-8")
     assert "coverage_gate_forced:" in text
     payload = json.loads(text)
-    ratio = _find_key(payload, "universe_ratio")
+    ratio = payload["panels"]["coverage"]["universe_ratio"]
     assert ratio, "校准工件缺 universe_ratio"
     assert min(ratio.values()) < 0.90
+
+
+def test_T397_1_empty_overrides_equivalence():
+    """T397-1: 不传 --minute-root 时 cfg 与 **{} 完全等价（INV-4）。"""
+    from backtest.execution.config import CalibrationConfig
+
+    root = r"E:\Ashare_data"
+    a = CalibrationConfig(data_root=root)
+    b = CalibrationConfig(data_root=root, **{})
+    assert a == b
+    assert a.config_hash() == b.config_hash()
+    assert a.minute_root == r"E:\Level 1 Data"
+
+
+@needs_pyarrow
+def test_T397_2_empty_minute_root_raises(tmp_path):
+    """T397-2: 空分钟根 → build() 抛 CalibrationUnavailable（不静默返回空面板）。"""
+    from backtest.execution.config import CalibrationConfig
+    from backtest.execution.ports import CalibrationUnavailable
+    from backtest.execution.shell.loaders import MinuteLoader
+    from backtest.execution.shell.panels import DailyRef, MinutePanelBuilder
+
+    cfg = CalibrationConfig(minute_root=str(tmp_path))
+    builder = MinutePanelBuilder(
+        cfg,
+        loader=MinuteLoader(str(tmp_path), sigma_bars=cfg.bvc_sigma_bars),
+        daily=DailyRef(days_by_month={}))
+    with pytest.raises(CalibrationUnavailable, match="无可用月份"):
+        builder.build()
+
+
+@needs_pyarrow
+def test_T397_4_minute_unavailable_exit2(tmp_path, monkeypatch, capsys):
+    """T397-4: 空分钟根 → 一行 [minute] 提示 + 返回 2（无 traceback）。"""
+    from backtest.execution.shell.panels import DailyRef
+
+    vci = _vci()
+    monkeypatch.setattr(sys, "argv", [
+        "verify_capacity_impact.py", "--calibrate",
+        "--minute-root", str(tmp_path)])
+    monkeypatch.setattr(vci, "build_panels", lambda root: {})
+    monkeypatch.setattr(vci, "daily_ref", lambda market, cfg: DailyRef())
+
+    rc = vci.main()
+    out = capsys.readouterr().out
+    assert rc == 2, out[-2000:]
+    assert "[minute]" in out and "无可用月份" in out
+    assert "Traceback" not in out
