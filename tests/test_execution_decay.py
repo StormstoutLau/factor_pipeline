@@ -275,3 +275,53 @@ def test_net_sd_and_plateau():
     nets = payload["net"]
     h_star = max(nets, key=lambda k: nets[k]["point"])
     assert int(h_star) in payload["plateau"]
+
+
+# ---------------------------------------------------------------- v3.9.6 P-015
+def _vci_script():
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for p in (str(root), str(root / "scripts")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    import verify_capacity_impact as vci
+    return vci
+
+
+@pytest.mark.parametrize("net,sd,expected", [
+    ({}, 0.0, []),                                   # 空 → []
+    ({5: 2.0, 10: 1.0, 20: 0.5}, 0.0, [5]),          # sd=0 只留 argmax
+    ({20: 1.0, 5: 1.0, 10: 0.5}, 0.0, [5, 20]),      # 并列 + 排序
+    ({5: 1.0, 10: 0.9}, 0.1, [5, 10]),               # >= 边界包含
+    ({5: 1.0, 10: 0.89}, 0.1, [5]),                  # 边界外剔除
+    ({20: 3.0}, 100.0, [20]),                        # 单点
+])
+def test_T396_6_plateau_contract(net, sd, expected):
+    """T396-6: plateau(net, sd) 契约 6 例（P-015①）。"""
+    from backtest.execution.core.decay import plateau
+    got = plateau(net, sd)
+    assert got == expected
+    if net:
+        assert max(net, key=lambda h: net[h]) in got
+
+
+def test_T396_7_decay_curve_md_title_uses_package_version():
+    """T396-7: 衰减曲线 md 首行标题跟随包版本（不硬编码）。"""
+    import factor_pipeline
+    from backtest.execution.shell.runner import assemble_decay_curve
+
+    rows = np.arange(1, 61, dtype=float)[None, :] * 1e-3
+    mat = np.repeat(rows, 39, axis=0)
+    panels = {
+        "decay_a_by_period": mat.tolist(),
+        "decay_h_max": 60,
+        "alpha0": 0.002629,
+        "aum_ref": 1e10,
+        "cost_by_h": {5: 1e6, 10: 2e6, 20: 4e6},
+    }
+    payload = assemble_decay_curve(panels)
+    md = _vci_script()._decay_curve_md(payload)
+    expected = "# v%s alpha 衰减曲线（FO-1）" % factor_pipeline.__version__
+    assert md.splitlines()[0] == expected
+    assert "v3.9.3 alpha" not in md

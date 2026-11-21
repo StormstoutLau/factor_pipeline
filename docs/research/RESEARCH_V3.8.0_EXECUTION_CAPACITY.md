@@ -696,7 +696,7 @@ co-impact 说明该假设在组合层面会**低估**冲击。处置：
   ① 持有期越长 → 交易越便宜 → 容量越高；② 因此慢策略吸引更多套利资本，**发表后衰减更快**；③ 每十年适用 haircut 约减半（与 McLean-Pontiff 2016 量级一致）。
   → 持有期与衰减互为因果，单点持有期会把反馈回路截断。
 - Novy-Marx & Velikov (2016, NBER w20721 / *RFS*)：按换手分低/中/高三组，成本对高换手策略的侵蚀最严重；
-  其后 *Zeroing In on the Expected Returns of Anomalies*（RFS 2023）把「降低再平衡频率（3/6/12 月）」列为标准净收益改进手段。
+  其后 *Zeroing In on the Expected Returns of Anomalies*（Journal of Financial and Quantitative Analysis, 58(3), 968-1004, 2023）把「降低再平衡频率（3/6/12 月）」列为标准净收益改进手段。
   → 持有期必须与成本**联合**评估，只看 IC 衰减会系统性选短。
 
 **本地证据**
@@ -857,7 +857,7 @@ class ModelRegistry(object):
     Quantitative Finance, doi:10.1080/14697688.2022.2098810 — arXiv:2105.01380
 37. Novy-Marx, R. & Velikov, M. (2016), *A Taxonomy of Anomalies and Their Trading Costs*,
     Review of Financial Studies 29(5), NBER w20721
-38. *Zeroing In on the Expected Returns of Anomalies*, Review of Financial Studies (2023) — 降低再平衡频率作为净收益改进手段
+38. Chen, A. Y., & Velikov, M. (2023). *Zeroing In on the Expected Returns of Anomalies*. Journal of Financial and Quantitative Analysis, 58(3), 968-1004. DOI: 10.1017/S0022109022000874 — 降低再平衡频率作为净收益改进手段
 39. *The cost of misspecifying price impact* — arXiv:2306.00599（保守端取参的稳健性结论）
 40. *On Parametric Optimal Execution and Machine Learning Surrogates* — arXiv:2204.08581（冲击/韧性的校准困难与敏感性）
 41. Python Packaging User Guide：`[project.optional-dependencies]` 与 *Creating and discovering plugins*（entry points 的适用边界）；

@@ -1,5 +1,40 @@
 # 开发日志 (Changelog)
 
+## v3.9.6 — 清尾包：P-016 测试有效性补强 + P-015 审计遗留 + P-014 文献订正 (已实施, 2026-11-21)
+
+### 概览
+
+合并三项遗留（[spec/v396-audit-backlog-cleanup](spec/v396-audit-backlog-cleanup/) 四件套 v1.4/v1.3/v1.2/v1.3），包版本 **3.9.6**（patch 级）。生产代码唯一改动文件 `scripts/verify_capacity_impact.py`：`backtest/execution/core/` 与 `shell/panels.py` 零改动，默认工件逐位不变。
+
+- **P-016**（v3.9.5 Step 10 审计遗留 2×P2 + 3×P3，测试有效性补强）：T396_1 共享重抽样索引
+  （monkeypatch 断言 buy/sell 合计仅调用 1 次、两读数取同一 idx：calls==1、buy 200/sell 300、lo==hi==point）；
+  T396_2 脚本层截面 demean（`build_reversal_events` 事件 Σrt≈0）；T3100_3 删除两条恒真断言与死变量
+  （保留非恒真平移对照）；T3100_9 补常数输入（rt≡+2% → lo=hi=point=100、degraded=False）；
+  T396_5 `reversal_counts` 15 键字面量集合断言。
+- **P-015**（v3.9.4 Step 10 审计遗留 3×P3）：T396_6 `decay.plateau` core 契约 6 例参数化
+  （空/sd=0/≥边界/边界外/并列排序/单点）；T396_7 `_decay_curve_md` 标题改由 `factor_pipeline.__version__`
+  驱动（函数内延迟导入），修复硬编码「v3.9.3」；T396_9 `--force-coverage` 真实低覆盖 E2E
+  （复制 2020-02 真实 feather 20 文件 ≈233 MB 至 tmp_path、按代码尾号跨文件裁剪 30% → `universe_ratio` 0.713：
+  严格分支 exit 2、force 分支 exit 0 + `coverage_gate_forced:` 留痕）。
+- **P-014**：`RESEARCH_V3.8.0_EXECUTION_CAPACITY.md` L699/L860 Chen & Velikov 期刊元数据 RFS→JFQA 订正
+  （58(3), 968-1004 + DOI 10.1017/S0022109022000874）。
+- **新增 CLI**：`--minute-root`（`default=None`，help 标「测试/诊断用」；不传时 `overrides=={}`，
+  cfg 与默认路径零变更）。
+
+### 核心产出
+
+- `scripts/verify_capacity_impact.py`：`--minute-root` 参数 + overrides 构造；`_decay_curve_md` 版本参数化。
+- 测试：新增 9 例（T396-1/2/5/6/7/8/9 + T3100_3 重写 + T3100_9 追加）；E2E 仅写 pytest `tmp_path`。
+- 包版本 **3.9.6**（pyproject / `__init__` / config_v2 / reporting + 两处版本测试锚点）。
+
+### 实测读数
+
+- 默认 `out/capacity_impact.json` SHA `82728CE1…` 与 `out/v394_calibration.json` 内 `panel_hash dfcc4e1d…`
+  逐位不变（INV-1/2，实施方 + 审计方双重复核）；
+- E2E 严格+force 合计 86.84 s（单次 ≈43 s，≤180/600 s 预算）；新增非 E2E 用例合计 0.64 s；
+- 全量 `pytest -q`：**2088 passed / 15 skipped / 0 failed**（938.81 s）；
+- Step 10 独立只读审计 **PASS_WITH_FIXES**（4.75/5，A；0×P1、1×P2、3×P3）→ 遗留登记 **P-017**。
+
 ## v3.9.5 — P-003 截面 T+1 reversal 证据层真实现（口径 A）(已实施, 2026-11-21)
 
 ### 概览

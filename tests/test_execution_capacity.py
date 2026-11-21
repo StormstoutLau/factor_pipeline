@@ -291,24 +291,22 @@ def test_T3100_2_sell_reversal_positive():
 
 
 def test_T3100_3_shift_invariance_after_demean():
-    """T3100-3: 全体 t+1 收益平移 +c，截面 demean 后 point 不变（<1e-12）。"""
+    """T3100-3: demean 幅度可断言（非恒真）；未 demean 的平移对照会改变读数。"""
     from backtest.execution.core.impact import cross_section_reversal
 
     rng = np.random.default_rng(7)
     n = 60
     rt = rng.normal(0.0, 0.02, n)
     raw = rng.normal(0.001, 0.02, n)
-    side = np.array([1.0, -1.0] * (n // 2))
     weight = np.full(n, 0.1)
     month = np.repeat(np.arange(4), n // 4)
 
     base = raw - raw.mean()
-    shifted = (raw + 0.5) - (raw + 0.5).mean()
-    assert np.allclose(base, shifted)
-    a = cross_section_reversal(rt, base, side, weight, month)
-    b = cross_section_reversal(rt, shifted, side, weight, month)
-    assert abs(a["reversal_bps"]["point"]
-               - b["reversal_bps"]["point"]) < 1e-12
+    # v3.9.6 P-016③：删除恒真 allclose(base, shifted) 与同输入 a/b 对照，
+    # 改断言 demean 幅度（误用 median 等公式漂移会被捕获）。
+    assert abs(float(base.mean())) < 1e-12
+    assert float(np.max(np.abs(base - raw))) == pytest.approx(
+        abs(float(raw.mean())))
 
     # 非恒真对照：未 demean 且买卖不平衡时，平移会改变读数
     n_unbal = n - 1
@@ -368,6 +366,16 @@ def test_T3100_9_bootstrap_endpoint_and_reproducible():
         assert a[key]["lo"] <= a[key]["point"] <= a[key]["hi"]
     other = cross_section_reversal(rt, rt1, side, weight, month, seed=1)
     assert other["temporary_share"][1:] != a["temporary_share"][1:]
+
+    # v3.9.6 P-016④：常数输入 → 分位退化，lo == point == hi == 100.0
+    # （rt 必须非零，否则 Σa·x²=0 走退化分支返回 NaN）
+    const = cross_section_reversal(np.full(8, 0.02), np.full(8, -0.01),
+                                   np.ones(8), np.full(8, 0.5),
+                                   np.array([0, 0, 1, 1, 2, 2, 3, 3]))
+    assert const["degraded"] is False
+    assert const["reversal_bps"]["point"] == pytest.approx(100.0)
+    assert const["reversal_bps"]["lo"] == pytest.approx(100.0)
+    assert const["reversal_bps"]["hi"] == pytest.approx(100.0)
 
 
 def _vci():
@@ -520,3 +528,62 @@ def test_runner_reversal_branch(cfg):
         panels=panels)
     assert fallback["reversal_bps"] is None
     assert fallback["reversal_price_basis"] is None
+
+
+# ---------------------------------------------------------------- v3.9.6 P-016
+def test_T396_1_bootstrap_shared_index(monkeypatch):
+    """T396-1: bootstrap 只抽 1 次，buy/sell 共用同一索引（n_months=4 绕开退化分支）。"""
+    import backtest.effect_size as es
+    from backtest.execution.core.impact import cross_section_reversal
+
+    n_boot, n_months = 50, 4
+    calls = []
+    plan = [np.ones((n_boot, n_months), dtype=np.int64),
+            np.zeros((n_boot, n_months), dtype=np.int64)]
+
+    def spy(n, n_bootstrap=1000, block_size=1, seed=None):
+        calls.append(1)
+        return plan[len(calls) - 1]
+
+    monkeypatch.setattr(es, "stationary_bootstrap_indices", spy)
+
+    rt = np.full(5, 0.02)
+    rt1 = np.array([-0.02, -0.02, 0.03, -0.02, -0.02])
+    side = np.array([1.0, 1.0, -1.0, 1.0, 1.0])
+    weight = np.full(5, 0.5)
+    month = np.array([0, 1, 1, 2, 3], dtype=np.int64)
+
+    out = cross_section_reversal(rt, rt1, side, weight, month, n_bootstrap=50)
+    assert len(calls) == 1                    # 共享 ⇔ 只抽一次
+    assert out["degraded"] is False
+    assert out["buy"]["point"] == pytest.approx(200.0)
+    assert out["buy"]["lo"] == pytest.approx(200.0)
+    assert out["buy"]["hi"] == pytest.approx(200.0)
+    assert out["sell"]["point"] == pytest.approx(300.0)
+    assert out["sell"]["lo"] == pytest.approx(300.0)
+    assert out["sell"]["hi"] == pytest.approx(300.0)
+
+
+def test_T396_2_script_demean_zero_mean():
+    """T396-2: 形成日截面 demean 后 Σrt≈0，且逐值等于 ret − mean(ret)。"""
+    vci, P, w0, _dates, form_dates = _event_panel()
+    w = pd.DataFrame(0.25, index=form_dates, columns=w0.columns)
+    out = vci.build_reversal_events(P, w)
+    raw = np.array([0.02, 0.01, 0.03, 0.00])
+    expected = raw - raw.mean()
+    assert out["counts"]["n_events"] == 4
+    assert np.allclose(np.sort(out["rt"]), np.sort(expected))
+    assert abs(float(np.sum(out["rt"]))) < 1e-12
+
+
+def test_T396_5_reversal_counts_key_set():
+    """T396-5: counts 键集恰为 15 键字面量，n_months 与权重期数一致。"""
+    vci, P, w, _dates, _form_dates = _event_panel()
+    out = vci.build_reversal_events(P, w)
+    expected = {"n_events", "n_months", "n_buy", "n_sell",
+                "n_first_period", "n_suspended_t", "n_suspended_t1",
+                "n_limit_up_t", "n_limit_down_t", "n_limit_t1",
+                "n_st", "n_tiny", "n_extreme", "n_missing",
+                "n_limit_down_unavailable"}
+    assert set(out["counts"]) == expected
+    assert out["counts"]["n_months"] == len(w.index)

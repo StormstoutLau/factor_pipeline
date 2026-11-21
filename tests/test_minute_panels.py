@@ -694,3 +694,87 @@ def test_T3100_10_panels_fallback_and_real_branch(cfg):
     assert real["reversal_counts"]["n_events"] == 2
     assert any("截面 T+1 反转" in w for w in real["evidence_warnings"])
     assert not any("非 T+1" in w for w in real["evidence_warnings"])
+
+
+# ---------------------------------------------------------------- v3.9.6 P-015
+def _trim_month(tmp_path, ym="2020-02"):
+    """复制一个月 feather 到 tmp，按代码排序后裁掉约 30%（保留 ≈70%）。"""
+    pyarrow_feather = pytest.importorskip("pyarrow.feather")
+    src = MINUTE_ROOT
+    dst = tmp_path / "minutes"
+    dst.mkdir(parents=True, exist_ok=True)
+    files = sorted(src.glob("%s-*.feather" % ym))
+    assert files, "无 %s 分钟文件" % ym
+    for f in files:
+        frame = pyarrow_feather.read_table(str(f)).to_pandas()
+        codes = np.sort(frame["stock_code"].unique())
+        # 按代码尾号裁剪（跨文件一致）；若按文件内下标裁，
+        # 月度并集会重新补回被裁代码，覆盖度近似不变。
+        drop = set(int(c) for c in codes.tolist() if int(c) % 10 <= 2)
+        keep = [c for c in codes if int(c) not in drop]
+        pyarrow_feather.write_feather(
+            frame[frame["stock_code"].isin(keep)], str(dst / f.name))
+    assert len(list(dst.glob("*.feather"))) == len(files)
+    return dst
+
+
+def _find_key(obj, key):
+    """递归查找嵌套 dict/list 中的首个 key。"""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for value in obj.values():
+            got = _find_key(value, key)
+            if got is not None:
+                return got
+    elif isinstance(obj, list):
+        for value in obj:
+            got = _find_key(value, key)
+            if got is not None:
+                return got
+    return None
+
+
+def test_T396_8_minute_root_cli_contract():
+    """T396-8: --minute-root 参数存在且默认 None（不传时 cfg 默认值不变）。"""
+    script = ROOT / "scripts" / "verify_capacity_impact.py"
+    proc = subprocess.run([sys.executable, str(script), "--help"],
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert "--minute-root" in proc.stdout
+    from backtest.execution.config import CalibrationConfig
+    assert CalibrationConfig().minute_root == r"E:\Level 1 Data"
+
+
+@needs_pyarrow
+@needs_minutes
+@needs_daily
+def test_T396_9_force_coverage_e2e(tmp_path):
+    """T396-9: 真实低覆盖 → 严格 exit 2；--force-coverage → exit 0 且留痕。"""
+    minutes = _trim_month(tmp_path)
+    script = ROOT / "scripts" / "verify_capacity_impact.py"
+    base = [sys.executable, str(script), "--calibrate",
+            "--minute-root", str(minutes)]
+
+    strict_json = tmp_path / "strict.json"
+    strict = subprocess.run(
+        base + ["--calibration-json", str(strict_json)],
+        capture_output=True, text=True, timeout=1800)
+    assert strict.returncode == 2, (strict.stdout[-2000:],
+                                    strict.stderr[-2000:])
+    assert "coverage_gate_forced" not in strict.stdout
+
+    forced_json = tmp_path / "forced.json"
+    forced = subprocess.run(
+        base + ["--calibration-json", str(forced_json), "--force-coverage"],
+        capture_output=True, text=True, timeout=1800)
+    assert forced.returncode == 0, (forced.stdout[-2000:],
+                                    forced.stderr[-2000:])
+    assert "门禁失败放行" in forced.stdout
+
+    text = forced_json.read_text(encoding="utf-8")
+    assert "coverage_gate_forced:" in text
+    payload = json.loads(text)
+    ratio = _find_key(payload, "universe_ratio")
+    assert ratio, "校准工件缺 universe_ratio"
+    assert min(ratio.values()) < 0.90

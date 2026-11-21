@@ -564,10 +564,11 @@ def _fmt(value):
 
 def _decay_curve_md(payload):
     """衰减曲线 md（口径 / m / net / verdict / bootstrap / warnings 六节）。"""
+    from factor_pipeline import __version__ as _pkg_version
     h_m = payload.get('h_m')
     horizons = [int(h) for h in payload.get('horizons') or []]
     lines = [
-        '# v3.9.3 alpha 衰减曲线（FO-1）', '',
+        '# v%s alpha 衰减曲线（FO-1）' % _pkg_version, '',
         '> 由 `verify_capacity_impact.py --calibrate --decay-curve-json` '
         '生成；默认路径不产出。',
         '> `m(20)=1` 为构造性归一 → 验收①（net(h)>0 至少一点）在修正口径下'
@@ -692,6 +693,9 @@ def main():
                     help='启用 out/panel_cache 分钟聚合缓存')
     ap.add_argument('--force-coverage', action='store_true',
                     help='覆盖度门禁失败仍继续（留痕 warning）')
+    # v3.9.6 新增（默认 None：不改变默认路径；仅供测试/诊断指定分钟数据根）
+    ap.add_argument('--minute-root', default=None,
+                    help='分钟数据根目录（测试/诊断用；默认沿用 CalibrationConfig）')
     ap.add_argument('--reversal-price-basis',
                     choices=('adj_close_to_close_cs',
                              'adj_intraday_open_close'),
@@ -723,7 +727,10 @@ def main():
         from backtest.execution.shell.report import write_report
         from backtest.execution.shell.runner import run_calibration
 
-        cfg = CalibrationConfig(data_root=args.data_root)
+        overrides = {}
+        if args.minute_root:
+            overrides['minute_root'] = args.minute_root
+        cfg = CalibrationConfig(data_root=args.data_root, **overrides)
         forced = None if args.evidence_level == 'auto' else args.evidence_level
         if args.diagnose_window:
             print('诊断: 解析证据等级 = %s' % resolve_evidence_level(cfg))
