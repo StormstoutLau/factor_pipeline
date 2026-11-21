@@ -113,11 +113,25 @@ def load_implementability(root, close):
     # 收盘钉在最高价 + 涨幅达阈值附近 → 视为涨停买不进
     is_lu = (raw_ret >= thr - 0.3) & (close >= high * 0.999)
 
+    # 跌停镜像（v3.9.5 P-003）：收盘钉在最低价 + 跌幅达阈值附近
+    # 数据缺失/单位不符 → limit_down=None，由调用方披露退化
+    try:
+        low = pd.read_pickle(md / 'stock_low.pkl')
+        low.index = pd.to_datetime(low.index)
+        low = low.reindex(index=dates, columns=cols)
+        if low.notna().sum().sum() == 0:
+            is_ld = None
+        else:
+            is_ld = (raw_ret <= -(thr - 0.3)) & (close <= low * 1.001)
+    except (OSError, ValueError, KeyError, TypeError):
+        is_ld = None
+
     ind = pd.read_pickle(md / 'stock_ind.pkl')
     ind.index = pd.to_datetime(ind.index)
     ind = ind.sort_index()
     ind = ind[~ind.index.duplicated(keep='last')]
-    return {'suspend': is_sus, 'st': is_st, 'limit_up': is_lu, 'ind': ind}
+    return {'suspend': is_sus, 'st': is_st, 'limit_up': is_lu,
+            'limit_down': is_ld, 'ind': ind}
 
 
 def last_trading_days(daily_index, panel_index):

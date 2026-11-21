@@ -225,3 +225,113 @@ def temporary_share(r1, rev1):
     lo = float(np.clip(np.percentile(reps, 2.5), 0.0, 1.0))
     hi = float(np.clip(np.percentile(reps, 97.5), 0.0, 1.0))
     return point, min(lo, point), max(hi, point)
+
+
+def _degraded_reversal(n=0, n_months=0):
+    """退化结构：share=0、bps 三值 NaN、degraded=True（不抛异常）。"""
+    nan = float("nan")
+    return {
+        "temporary_share": [0.0, 0.0, 0.0],
+        "reversal_bps": {"point": nan, "lo": nan, "hi": nan},
+        "buy": {"point": nan, "lo": nan, "hi": nan, "n": 0},
+        "sell": {"point": nan, "lo": nan, "hi": nan, "n": 0},
+        "n": int(n),
+        "n_months": int(n_months),
+        "degraded": True,
+    }
+
+
+def _interval(values, point, lower=None, upper=None):
+    """2.5/97.5 百分位区间；端点夹逼 point，空样本回退 point。"""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0 or not np.isfinite(point):
+        return point, point
+    lo = float(np.percentile(arr, 2.5))
+    hi = float(np.percentile(arr, 97.5))
+    if lower is not None:
+        lo = max(float(lower), lo)
+        hi = max(float(lower), hi)
+    if upper is not None:
+        lo = min(float(upper), lo)
+        hi = min(float(upper), hi)
+    return min(lo, point), max(hi, point)
+
+
+def cross_section_reversal(rt, rt1, side, weight, month,
+                           n_bootstrap=1000, seed=20261121):
+    """事件加权截面 T+1 反转统计量（纯 numpy，无 IO）。
+
+    x = side·rt、y = side·rt1；share = clip(-Σa·x·y/Σa·x², 0, 1)；
+    reversal_bps = -(Σa·y/Σa)×1e4（>0 = 交易后不利回落）。
+    月度充分统计量聚合后按形成月聚类重采样，买/卖共用同一组索引。
+    """
+    from ...effect_size import stationary_bootstrap_indices
+
+    a = _as_1d(rt)
+    b = _as_1d(rt1)
+    s = np.asarray(side, dtype=float).ravel()
+    w = _as_1d(weight)
+    m = np.asarray(month, dtype=np.int64).ravel()
+    n = a.size
+    if not (b.size == s.size == w.size == m.size == n) or n == 0:
+        return _degraded_reversal()
+
+    ok = np.isfinite(a) & np.isfinite(b) & np.isfinite(w) & (w > 0.0)
+    n_ok = int(ok.sum())
+    if n_ok == 0 or int(m[ok].min()) < 0:
+        return _degraded_reversal(n=n_ok)
+    n_months = int(m[ok].max()) + 1
+    x, y = s * a, s * b
+
+    def _agg(mask):
+        sel = ok & mask
+        mm = m[sel]
+        return (
+            np.bincount(mm, weights=w[sel], minlength=n_months),
+            np.bincount(mm, weights=w[sel] * x[sel] ** 2,
+                        minlength=n_months),
+            np.bincount(mm, weights=w[sel] * x[sel] * y[sel],
+                        minlength=n_months),
+            np.bincount(mm, weights=w[sel] * y[sel], minlength=n_months))
+
+    groups = {"all": _agg(np.ones(n, dtype=bool)),
+              "buy": _agg(s > 0),
+              "sell": _agg(s < 0)}
+
+    def _point(agg):
+        sa, sax2, saxy, say = (float(v.sum()) for v in agg)
+        share = (0.0 if sax2 <= 0.0
+                 else float(np.clip(-saxy / sax2, 0.0, 1.0)))
+        bps = np.nan if sa <= 0.0 else float(-(say / sa) * 1e4)
+        return share, bps
+
+    if n_months < 3 or float(groups["all"][1].sum()) <= 0.0:
+        return _degraded_reversal(n=n_ok, n_months=n_months)
+
+    share_pt, bps_pt = _point(groups["all"])
+    idx = stationary_bootstrap_indices(n_months, n_bootstrap=n_bootstrap,
+                                       block_size=1, seed=seed)
+    reps = {}
+    for key, agg in groups.items():
+        sa, sax2, saxy, say = (v[idx].sum(axis=1) for v in agg)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            share = np.where(sax2 > 0.0, np.clip(-saxy / sax2, 0.0, 1.0), 0.0)
+            bps = np.where(sa > 0.0, -(say / sa) * 1e4, np.nan)
+        reps[key] = (share, bps)
+
+    share_lo, share_hi = _interval(reps["all"][0], share_pt, 0.0, 1.0)
+    bps_lo, bps_hi = _interval(reps["all"][1], bps_pt)
+    out = {
+        "temporary_share": [share_pt, share_lo, share_hi],
+        "reversal_bps": {"point": bps_pt, "lo": bps_lo, "hi": bps_hi},
+        "n": n_ok,
+        "n_months": n_months,
+        "degraded": False,
+    }
+    for key in ("buy", "sell"):
+        point = _point(groups[key])[1]
+        lo, hi = _interval(reps[key][1], point)
+        out[key] = {"point": point, "lo": lo, "hi": hi,
+                    "n": int((ok & (s > 0 if key == "buy" else s < 0)).sum())}
+    return out

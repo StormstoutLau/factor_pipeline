@@ -17,7 +17,7 @@ import pandas as pd
 from ..core.decay import estimate_rho
 from ..core.impact import (C_R2_MIN, C_RANGE, LinearImpact, LogImpact,
                            PowerImpact, SqrtImpact, cross_val_rmse, fit_r2,
-                           select_models)
+                           select_models, temporary_share)
 from ..ports import CalibrationUnavailable
 from .loaders import (MAX_STOCK_CODE, MIN_STOCK_CODE, MinuteDayAggregate,
                       MinuteLoader, has_pyarrow)
@@ -540,6 +540,17 @@ class MinutePanelBuilder(object):
         }
 
 
+def _has_reversal_events(portfolio):
+    """portfolio['reversal'] 五键齐备且等长且有样本 → True。"""
+    ev = portfolio.get("reversal") or {}
+    keys = ("rt", "rt1", "side", "weight", "month")
+    try:
+        sizes = {len(ev[k]) for k in keys}
+    except (KeyError, TypeError):
+        return False
+    return len(sizes) == 1 and sizes.pop() > 0
+
+
 def build_daily_panels(cfg, daily, portfolio, impact_fit=None):
     """日频层统计映射（E1）：temporary / rho / alpha0 / cost(h) / plateau_sd。"""
     out = {"evidence_warnings": []}
@@ -549,13 +560,39 @@ def build_daily_panels(cfg, daily, portfolio, impact_fit=None):
 
     r1 = ex_d.to_numpy()[:-1]
     rev1 = ex_d.to_numpy()[1:]
-    out["temporary"] = ({"r1": [float(v) for v in r1],
-                         "rev1": [float(v) for v in rev1]}
-                        if r1.size else {})
-    out["temporary_basis"] = "portfolio_ar1_proxy"
-    if r1.size:
+    proxy = None
+    if r1.size >= 3:
+        try:
+            proxy = [float(v) for v in temporary_share(r1, rev1)]
+        except ValueError:
+            proxy = None
+    if _has_reversal_events(portfolio):
+        ev = portfolio["reversal"]
+        out["temporary"] = {
+            "rt": [float(v) for v in ev["rt"]],
+            "rt1": [float(v) for v in ev["rt1"]],
+            "side": [int(v) for v in ev["side"]],
+            "weight": [float(v) for v in ev["weight"]],
+            "month": [int(v) for v in ev["month"]],
+            "price_basis": ev.get("price_basis"),
+        }
+        out["temporary_basis"] = "cross_section_t1"
         out["evidence_warnings"].append(
-            "temporary_share 为组合日超额 AR(1) 代理，非 T+1 反转，不进入容量")
+            "temporary_share 为截面 T+1 反转（事件级），证据层，不进入容量")
+    else:
+        out["temporary"] = ({"r1": [float(v) for v in r1],
+                             "rev1": [float(v) for v in rev1]}
+                            if r1.size else {})
+        out["temporary_basis"] = "portfolio_ar1_proxy"
+        if r1.size:
+            out["evidence_warnings"].append(
+                "temporary_share 为组合日超额 AR(1) 代理，非 T+1 反转，不进入容量")
+    if proxy is not None:
+        out["temporary_proxy_ar1"] = proxy
+        out["temporary_proxy_basis"] = "portfolio_ar1_proxy"
+    out["reversal_counts"] = portfolio.get("reversal_counts") or {}
+    if out["reversal_counts"].get("n_limit_down_unavailable"):
+        out["evidence_warnings"].append("limit_down_unavailable")
 
     rho, lo, hi = 1.0, 1.0, 1.0
     if ex_d.size >= 3:

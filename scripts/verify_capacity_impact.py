@@ -110,6 +110,13 @@ def build_panels(root):
         fidx, fcols, close.index)
     tradable = ~(facts['st'] | facts['suspend'] | facts['limit_up'])
 
+    # v3.9.5 P-003：日频事件过滤字段（不进 facts，避免污染形成日选股语义）
+    open_raw = pd.read_pickle(Path(root) / 'market_data' / 'stock_open.pkl')
+    open_raw.index = pd.to_datetime(open_raw.index)
+    open_raw = open_raw.reindex(index=close.index, columns=close.columns)
+    impl_daily = {k: impl.get(k)
+                  for k in ('suspend', 'st', 'limit_up', 'limit_down')}
+
     mv_m = month_end(mv).reindex(index=fidx, columns=fcols) * MV_SCALE
     amt_daily = amount.where(amount > 0).rolling(21, min_periods=10).mean()
     amt_m = month_end(amt_daily).reindex(index=fidx, columns=fcols) * AMT_SCALE
@@ -125,7 +132,8 @@ def build_panels(root):
     return dict(
         close=close, factor=factor, ret=ret, mask=mask, tradable=tradable,
         mv_m=mv_m, amt_m=amt_m, amt_rank=amt_rank, sig_m=sig_m,
-        adj_price=adj_price, facts=facts)
+        adj_price=adj_price, facts=facts,
+        open_adj=open_raw * adj, impl_daily=impl_daily)
 
 
 def make_weights(P, kind, kw, tradable):
@@ -161,6 +169,125 @@ def daily_portfolio_excess(P, w):
     ub = ub.reindex(columns=r.columns).fillna(False)
     rb = r.where(ub).mean(axis=1)
     return (rp - rb).dropna()
+
+
+def build_reversal_events(P, w, price_basis='adj_close_to_close_cs'):
+    """形成日 Δw × 截面收益 → 事件样本；无事件返回 None。
+
+    C1 主口径 ``adj_close_to_close_cs``（adj_price 日收益 + 截面 demean）；
+    C2 对照 ``adj_intraday_open_close``（close/open_adj - 1，同样 demean）。
+    t+1 取 close.index 的下一交易日（searchsorted 精确前移，不用自然日）。
+    过滤九步顺序见 DESIGN §4.3，逐步累计 ``counts``。
+    """
+    if w is None or getattr(w, 'empty', True):
+        return None
+    if price_basis == 'adj_intraday_open_close':
+        # 同日复权因子相消：adj_price/(open·adj) ≡ close/open（Step 9 勘误 E-3）
+        r = P['adj_price'] / P['open_adj'] - 1.0
+        r = r.replace([np.inf, -np.inf], np.nan)
+    else:
+        r = P['adj_price'].pct_change(fill_method=None)
+    ub = P['mask'].astype(float).reindex(index=r.index, method='ffill')
+    ub = ub.reindex(columns=r.columns).fillna(0.0) > 0.5
+    r_t = r.sub(r.where(ub).mean(axis=1), axis=0)   # 截面 demean（C1/C2 共用）
+
+    dates = P['close'].index
+    cols = P['close'].columns
+    r_np = r_t.reindex(index=dates, columns=cols).to_numpy(dtype=float)
+    wf = w.reindex(columns=cols)
+    dwf = wf - wf.shift(1).fillna(0.0)
+    impl = P.get('impl_daily') or {}
+    frames = {}
+    for key in ('suspend', 'st', 'limit_up', 'limit_down'):
+        df = impl.get(key)
+        frames[key] = (None if df is None
+                       else df.reindex(index=dates, columns=cols)
+                       .fillna(False).to_numpy(dtype=bool))
+    ld_ok = frames['limit_down'] is not None
+    counts = {
+        'n_events': 0, 'n_months': int(len(w.index)), 'n_buy': 0,
+        'n_sell': 0, 'n_first_period': 0, 'n_suspended_t': 0,
+        'n_suspended_t1': 0, 'n_limit_up_t': 0, 'n_limit_down_t': 0,
+        'n_limit_t1': 0, 'n_st': 0, 'n_tiny': 0, 'n_extreme': 0,
+        'n_missing': 0, 'n_limit_down_unavailable': not ld_ok,
+    }
+    parts = []  # (rt, rt1, side, weight, month) 块
+    for i, day in enumerate(w.index):
+        if i > 0:
+            assert bool((wf.iloc[i - 1].to_numpy(dtype=float) >= 0.0).all()), \
+                'w_{t-1} 存在负权重'
+        d = dwf.iloc[i].to_numpy(dtype=float)
+        keep = np.abs(d) >= 1e-8
+        counts['n_tiny'] += int(np.sum(~keep))
+        if i == 0:
+            counts['n_first_period'] += int(keep.sum())
+        pos = int(dates.searchsorted(day, side='right')) - 1
+        if pos < 0:
+            counts['n_missing'] += int(keep.sum())
+            continue
+        if keep.any() and frames['suspend'] is not None:
+            bad = frames['suspend'][pos]
+            counts['n_suspended_t'] += int((keep & bad).sum())
+            keep &= ~bad
+        if keep.any() and frames['limit_up'] is not None:
+            bad = frames['limit_up'][pos] & (d > 0)
+            counts['n_limit_up_t'] += int((keep & bad).sum())
+            keep &= ~bad
+        if keep.any() and ld_ok:
+            bad = frames['limit_down'][pos] & (d < 0)
+            counts['n_limit_down_t'] += int((keep & bad).sum())
+            keep &= ~bad
+        if keep.any() and frames['st'] is not None:
+            bad = frames['st'][pos]
+            counts['n_st'] += int((keep & bad).sum())
+            keep &= ~bad
+        if not keep.any():
+            continue
+        rt = r_np[pos]
+        bad = ~np.isfinite(rt)
+        counts['n_missing'] += int((keep & bad).sum())
+        keep &= ~bad
+        if not keep.any():
+            continue
+        if pos + 1 >= len(dates):
+            counts['n_missing'] += int(keep.sum())
+            continue
+        nxt = pos + 1
+        if frames['suspend'] is not None:
+            bad = frames['suspend'][nxt]
+            counts['n_suspended_t1'] += int((keep & bad).sum())
+            keep &= ~bad
+        rt1 = r_np[nxt]
+        bad = ~np.isfinite(rt1)
+        counts['n_missing'] += int((keep & bad).sum())
+        keep &= ~bad
+        if not keep.any():
+            continue
+        lim = np.zeros(len(cols), dtype=bool)
+        if frames['limit_up'] is not None:
+            lim |= frames['limit_up'][nxt]
+        if ld_ok:
+            lim |= frames['limit_down'][nxt]
+        counts['n_limit_t1'] += int((keep & lim).sum())
+        keep &= ~lim
+        extreme = keep & ((np.abs(rt) > 0.5) | (np.abs(rt1) > 0.5))
+        counts['n_extreme'] += int(extreme.sum())
+        keep &= ~extreme
+        if keep.any():
+            parts.append((rt[keep], rt1[keep], np.sign(d[keep]),
+                          np.abs(d[keep]), np.full(int(keep.sum()), i)))
+    if not parts:
+        return None
+    rt_arr = np.concatenate([p[0] for p in parts])
+    rt1_arr = np.concatenate([p[1] for p in parts])
+    side = np.concatenate([p[2] for p in parts]).astype(np.int8)
+    weight = np.concatenate([p[3] for p in parts])
+    month = np.concatenate([p[4] for p in parts]).astype(np.int32)
+    counts['n_events'] = int(rt_arr.size)
+    counts['n_buy'] = int((side > 0).sum())
+    counts['n_sell'] = int((side < 0).sum())
+    return {'rt': rt_arr, 'rt1': rt1_arr, 'side': side, 'weight': weight,
+            'month': month, 'price_basis': price_basis, 'counts': counts}
 
 
 def daily_ref(P, cfg):
@@ -209,7 +336,8 @@ def formation_decay_curve(P, w, h_max=60):
     return rows
 
 
-def build_portfolio_panels(P, cfg, kind='exQ1_EW_tradable', aum_ref=1e10):
+def build_portfolio_panels(P, cfg, kind='exQ1_EW_tradable', aum_ref=1e10,
+                           price_basis='adj_close_to_close_cs'):
     """市场数据装配（W7）：权重 / 交易额 / 参与率 / regime / 窗口容量 / 超额。"""
     spec = dict((name, (k, kw, tr)) for name, k, kw, tr in VARIANTS)[kind]
     w = make_weights(P, spec[0], spec[1], spec[2])
@@ -252,6 +380,7 @@ def build_portfolio_panels(P, cfg, kind='exQ1_EW_tradable', aum_ref=1e10):
     sigma_v = sigma_v[np.isfinite(sigma_v)]
     turns = pd.Series(np.asarray(base['series']['t'], dtype=float),
                       index=w.index)
+    rev = build_reversal_events(P, w, price_basis=price_basis)
     return {
         'aum_ref': float(aum_ref),
         'excess_m': base['series']['ex'].dropna(),
@@ -265,6 +394,10 @@ def build_portfolio_panels(P, cfg, kind='exQ1_EW_tradable', aum_ref=1e10):
         'sigma_port': float(np.median(sigma_v)) if sigma_v.size else None,
         'a_by_period': formation_decay_curve(P, w),
         'a_h_max': 60,
+        'reversal': ({k: rev[k] for k in
+                      ('rt', 'rt1', 'side', 'weight', 'month', 'price_basis')}
+                     if rev else None),
+        'reversal_counts': (rev or {}).get('counts') or {},
     }
 
 
@@ -298,6 +431,8 @@ def attach_panel_meta(result, minute, daily_panels, cfg):
     result['decay'] = dict(result.get('decay') or {})
     result['decay']['alpha0'] = daily_panels.get('alpha0')
     result['decay']['cost_by_h'] = daily_panels.get('cost_by_h') or {}
+    result['temporary_proxy_ar1'] = daily_panels.get('temporary_proxy_ar1')
+    result['reversal_counts'] = daily_panels.get('reversal_counts') or {}
     merged = list(result.get('evidence_warnings') or [])
     for item in ((minute.get('evidence_warnings') or [])
                  + (daily_panels.get('evidence_warnings') or [])):
@@ -557,6 +692,11 @@ def main():
                     help='启用 out/panel_cache 分钟聚合缓存')
     ap.add_argument('--force-coverage', action='store_true',
                     help='覆盖度门禁失败仍继续（留痕 warning）')
+    ap.add_argument('--reversal-price-basis',
+                    choices=('adj_close_to_close_cs',
+                             'adj_intraday_open_close'),
+                    default='adj_close_to_close_cs',
+                    help='截面 T+1 反转价格口径（默认 C1；C2 仅稳健性对照）')
     args = ap.parse_args()
 
     if args.contract or args.contract_only:
@@ -617,7 +757,8 @@ def main():
                 minute.setdefault('evidence_warnings', []).append(
                     force_coverage_warning(messages))
                 print('[coverage] --force-coverage：门禁失败放行（留痕）')
-            portfolio = build_portfolio_panels(market, cfg)
+            portfolio = build_portfolio_panels(
+                market, cfg, price_basis=args.reversal_price_basis)
             daily_panels = build_daily_panels(
                 cfg, market, portfolio, impact_fit=minute.get('impact_fit'))
             evidence = (forced or ('minutes' if minute.get('panel_hash')

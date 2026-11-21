@@ -13,8 +13,9 @@ from ..core.classification import normal_cdf
 from ..core.decay import (ExponentialDecay, estimate_rho, execution_days,
                           half_life, net_curve, plateau, retention)
 from ..core.impact import (C_R2_MIN, C_RANGE, LinearImpact, LogImpact,
-                           PowerImpact, SqrtImpact, cross_val_rmse, fit_r2,
-                           select_models, temporary_share)
+                           PowerImpact, SqrtImpact, cross_section_reversal,
+                           cross_val_rmse, fit_r2, select_models,
+                           temporary_share)
 from ..core.spread import AbdiRanaldo, Amihud, CorwinSchultz
 from ..registry import ModelRegistry
 from .loaders import resolve_evidence_level
@@ -521,8 +522,20 @@ def run_calibration(cfg, capacity_fn=None, breakeven_fn=None, panels=None):
             lam_ratio = float(np.mean(arr < cfg.lambda_p_threshold))
 
     ts = None
-    temp = panels.get("temporary")
-    if temp:
+    reversal = None
+    temp = panels.get("temporary") or {}
+    if {"rt", "rt1", "side", "weight", "month"} <= set(temp):
+        res = cross_section_reversal(
+            temp["rt"], temp["rt1"], temp["side"],
+            temp["weight"], temp["month"])
+        ts = list(res["temporary_share"])
+        reversal = {**res["reversal_bps"], "buy": res["buy"],
+                    "sell": res["sell"], "n": res["n"],
+                    "n_months": res["n_months"],
+                    "price_basis": temp.get("price_basis")}
+        if res["degraded"]:
+            warnings.append("cross_section_reversal_degraded")
+    elif temp:
         ts = list(temporary_share(
             np.asarray(temp["r1"], dtype=float),
             np.asarray(temp["rev1"], dtype=float)))
@@ -597,6 +610,9 @@ def run_calibration(cfg, capacity_fn=None, breakeven_fn=None, panels=None):
         "lambda_significant_ratio": lam_ratio,
         "temporary_share": ts,
         "temporary_basis": panels.get("temporary_basis"),
+        "reversal_bps": reversal,
+        "reversal_price_basis": (temp.get("price_basis")
+                                 if reversal is not None else None),
         "kappa": float(cfg.kappa),
         "capacity": {
             "regimes": reg["regimes"],

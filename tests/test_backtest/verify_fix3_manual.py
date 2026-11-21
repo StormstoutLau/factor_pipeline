@@ -18,7 +18,7 @@ _PROJECT_ROOT = _PROJECT_PARENT / "factor_pipeline"
 if str(_PROJECT_PARENT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_PARENT))
 
-EXPECTED_VERSION = "3.9.4"
+EXPECTED_VERSION = "3.9.5"
 OLD_VERSIONS = ["3.6.0", "3.5.3", "2.0.0", "2.1.0"]
 
 

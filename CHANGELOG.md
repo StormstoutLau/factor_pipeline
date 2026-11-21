@@ -1,5 +1,50 @@
 # 开发日志 (Changelog)
 
+## v3.9.5 — P-003 截面 T+1 reversal 证据层真实现（口径 A）(已实施, 2026-11-21)
+
+### 概览
+
+`temporary_share` 由「组合日超额 AR(1) 代理」升级为**交易事件级截面 T+1 反转**读数：事件 = 形成日权重变动
+（`s=sign(Δw)`、`a=|Δw|`），度量被交易股票次日是否朝不利方向回落。按用户裁决**口径 A**：只做证据层，
+`reversal_bps` **不进** `cost_by_h`，`net(h)` / 容量读数逐位不变；旧代理降级为 `temporary_proxy_ar1` 仅作对照。
+
+- **core**：新增 `cross_section_reversal`（事件加权 `share=clip(-Σaxy/Σax²,0,1)`、`reversal_bps=-(Σay/Σa)×1e4`，
+  按形成月聚类 bootstrap，`block_size=1 / seed=20261121`，三个读数均 `min(lo,point)/max(hi,point)` 夹逼）；
+  未加入 `__all__`（仍 5 项）。
+- **脚本层**：`build_panels` 增 `open_adj` / `impl_daily`；新增 `build_reversal_events`（C1/C2 两种价格口径、
+  九步过滤 + 15 键 counts、`t+1` 交易日 `searchsorted`）；`load_implementability` 增 `limit_down` 镜像。
+- **装配/透传**：`panels` 真/回退双分支（回退 warning 逐字保留）；`runner` 输出 `reversal_bps` /
+  `reversal_price_basis`，退化追加 `cross_section_reversal_degraded`。
+- **勘误**：E-2 证据层实际覆盖 73 个形成月 / 72 有效聚类（39 为分钟层口径）；E-3 C2 公式改为
+  `adj_price/open_adj-1`（同日复权因子相消），修复首轮重复乘复权因子导致的假读数。
+
+### 核心产出
+
+- `backtest/execution/core/impact.py`：`_degraded_reversal` / `_interval` / `cross_section_reversal`（新增）。
+- `scripts/verify_capacity_impact.py`：`build_panels` 增 `open_adj`/`impl_daily`、`build_reversal_events`、
+  `--reversal-price-basis`、`attach_panel_meta` 增 `temporary_proxy_ar1`/`reversal_counts`（仅 calibrate 分支）。
+- `backtest/execution/shell/panels.py`：`_has_reversal_events` + 真实现装配（`cost_by_h` 段零改动）。
+- `backtest/execution/shell/runner.py`：真/回退分支与结果键。
+- `scripts/verify_long_side_research.py`：`limit_down` 镜像（`stock_low.pkl`，失败降级 `None`）。
+- 测试：T3100-1~10 + `test_runner_reversal_branch`（11 例）。
+- 包版本 **3.9.5**（`pyproject.toml` / `__init__.py` / `config_v2.py` / `reporting.py` + 两处版本测试断言）。
+
+### 实测读数
+
+命令：`python scripts/verify_capacity_impact.py --calibrate --calibration-json out/v3100_calibration.json`（exit 0，`evidence_level=minutes`，**16 min 06 s**，基线≈14.5 min → +11%）。
+
+- **C1（主口径 `adj_close_to_close_cs`）**：`temporary_share=[0, 0, 0.038326]`；`reversal_bps` point **−2.842**
+  〔−14.974, +10.366〕；buy **+11.878**（n=76 420）、sell **−18.637**（n=175 258）；n=251 678、n_months=72。
+- **C2（稳健性 `adj_intraday_open_close`）**：point **−2.420**〔−11.810, +5.938〕；buy +10.344、sell −16.115；
+  与 C1 相对差 14.8% / 12.9% / 13.5% → **U-1 自动通过**。
+- **过滤计数**：`n_limit_down_t=595`、`n_limit_up_t=0`（预期：形成日持仓取自 `tradable`）、`n_st=121`、
+  `n_suspended_t=414`、`n_suspended_t1=163`、`n_missing=30 872`、`n_tiny=126 966`、`n_extreme=0`。
+- **不变式**：默认 `out/capacity_impact.json` SHA `82728CE1…`、`panel_hash dfcc4e1d…` 逐位不变；
+  `panels/capacity/decay/models/impact_curve/impact_samples/config_hash` 与 v3.9.4 全部相等；C1 双跑 JSON 逐键相等。
+- **敏感性**：U-3 端点极差 0.005508（≤0.01）；U-5 外部基准 0.2%（≤10%），事件自指基准 33.3%（口径性质）。
+- **测试**：全量 `pytest -q` **2076 passed / 15 skipped / 0 failed**（861.28 s）。
+- **Step 10 审计**：独立只读子代理 **PASS_WITH_FIXES**（4.60/5，A；0×P1、2×P2、6×P3）→ 遗留登记 **P-016**。
+
 ## v3.9.4 — 批次 A 口径收口包：审计遗留修复 + 覆盖度交集口径 + 强制放行留痕（对应路线图批次 v3.9.4）(已实施, 2026-11-20)
 
 ### 概览

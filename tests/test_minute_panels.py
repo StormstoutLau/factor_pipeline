@@ -653,3 +653,44 @@ def test_daily_panels_emit_decay_matrix(cfg):
                                _panel_portfolio([0.01, -0.01] * 50))
     for key in ("decay_a_by_period", "decay_h_max", "alpha0_anchored"):
         assert key not in plain
+
+
+# ---------------------------------------------------------------- v3.9.5 P-003
+def test_T3100_10_panels_fallback_and_real_branch(cfg):
+    """T3100-10: 无事件 → 回退旧代理（warning 逐字）；有事件 → 真实现装配。"""
+    from backtest.execution.shell.panels import (_has_reversal_events,
+                                                 build_daily_panels)
+
+    fallback = build_daily_panels(
+        cfg, None, _panel_portfolio([0.01, -0.01] * 50))
+    assert fallback["temporary_basis"] == "portfolio_ar1_proxy"
+    assert set(fallback["temporary"]) == {"r1", "rev1"}
+    assert ("temporary_share 为组合日超额 AR(1) 代理，非 T+1 反转，不进入容量"
+            in fallback["evidence_warnings"])
+    assert len(fallback["temporary_proxy_ar1"]) == 3
+    assert fallback["temporary_proxy_basis"] == "portfolio_ar1_proxy"
+    assert fallback["reversal_counts"] == {}
+
+    ev = {"rt": [0.02, 0.01], "rt1": [-0.01, 0.02],
+          "side": [1, -1], "weight": [0.5, 0.5], "month": [0, 1]}
+    assert _has_reversal_events({"reversal": ev}) is True
+    assert _has_reversal_events({"reversal": {"r1": [0.1], "rev1": [0.1]}}) \
+        is False
+    assert _has_reversal_events({"reversal": dict(ev, month=[0])}) is False
+
+    portfolio = _panel_portfolio([0.01, -0.01] * 50)
+    portfolio["reversal"] = dict(ev, price_basis="adj_close_to_close_cs")
+    portfolio["reversal_counts"] = {
+        "n_events": 2, "n_months": 2, "n_buy": 1, "n_sell": 1,
+        "n_first_period": 0, "n_suspended_t": 0, "n_suspended_t1": 0,
+        "n_limit_up_t": 0, "n_limit_down_t": 0, "n_limit_t1": 0,
+        "n_st": 0, "n_tiny": 0, "n_extreme": 0, "n_missing": 0,
+        "n_limit_down_unavailable": False}
+    real = build_daily_panels(cfg, None, portfolio)
+    assert real["temporary_basis"] == "cross_section_t1"
+    assert set(real["temporary"]) == {"rt", "rt1", "side", "weight",
+                                      "month", "price_basis"}
+    assert real["temporary"]["price_basis"] == "adj_close_to_close_cs"
+    assert real["reversal_counts"]["n_events"] == 2
+    assert any("截面 T+1 反转" in w for w in real["evidence_warnings"])
+    assert not any("非 T+1" in w for w in real["evidence_warnings"])
