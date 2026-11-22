@@ -1,6 +1,6 @@
 # 开发日志 (Changelog)
 
-## v3.9.8 — P-010 月聚类 CI + 粒度披露 (已实施, 2026-11-23)
+## v3.9.8 — 月聚类 CI + 粒度披露（P-010）/ 数据行数对齐（P-008）/ 存量待办裁决（P-011）(已实施, 2026-11-23)
 
 ### 概览
 
@@ -21,6 +21,19 @@
 - 测试：TP10-1~5/7/8/9 新增（容量 30→39 项），TP10-5 build meta（分钟面板 40→41 项）。
 - 包版本 **3.9.8**（pyproject / `__init__` / config_v2 / reporting + 两处版本测试锚点）。
 - 文档：`docs/EXECUTION_V3.8.1_MINUTE_PANEL_WIRING.md` 观测样本分层段改写（函数已删、排序等距内联）；`spec/v392-calibration-unit-fix/DESIGN.md` §5.2 加勘误指针（superseded by P-010 D6）。
+
+### P-008 数据行数对齐（同版本发版，2026-11-22 实施，补记于本条目）
+
+P-008（[spec/v399-p008-data-row-alignment](spec/v399-p008-data-row-alignment/) 四件套）为 Layer-1 **T1** 批次，**未单独 bump 包版本**，随本 **3.9.8** 发版号一并发布。原提交信息 `587b7f8 feat(v3.9.9)` 的批次标签为笔误（包版本四处锚点从未出现 3.9.9），已在 P-008 CLOSURE_REPORT 登记勘误 **E-1**；**git 历史不改写**。
+
+- 运行时 counts-only 对齐证据层：`backtest/execution/shell/panels.py` 增 `_align_month` / `_finalize_alignment`；`shell/runner.py` 输出对齐节；离线 `alignment.py` 三方分解 + `--alignment-audit` CLI 分支。
+- 39 月读数：交易日 786/787/786；股票×日 3,442,081 vs 3,523,738 = **−2.32%**（月度全部 <5%）；日级仅 2020-02-26/27 截断 + 03-31 整日缺失，已归因。
+- 硬不变式：默认 `out/capacity_impact.json` SHA `82728CE1…` 逐位不变；`panel_hash` `dfcc4e1d…`。
+- 验收：CHECKLIST v1.2 **71/71 accepted**；Step 10 ADD 审计 PASS_WITH_FIXES（0×P1 / 2×P2 / 3×P3，P2 与 P3-1 已修复）。
+
+### P-011 存量待办裁决（同版本发版，2026-11-22，补记于本条目）
+
+P-011（[spec/v398-p011-dev-backlog-triage](spec/v398-p011-dev-backlog-triage/)）为 **T3** Layer-0 文档裁决批，零代码 / 零门禁；11 条存量待办 = 6 关闭 / 2 转 P（P-009、P-018）/ 2 不修复 / 1 不修复 + 触发条件。验收 CHECKLIST v1.1 **63/63 accepted**，Step 10 审计 ADD 质量门 6.0/6.0 档位 A。
 
 ## v3.9.7 — P-017 审计遗留清尾：恒真断言整改 + 空 minute-root exit 2 + 文档勘误 (已实施, 2026-11-21)
 

@@ -271,4 +271,4 @@ upstream: null
 | Step 10 CHECKLIST 全项 + ADD 审计 | — | — | 已完成（71/71；ADD PASS_WITH_FIXES 2×P2 + 1×P3 修复 / 2×P3 登记，T398-9 红→绿） |
 | 更新 PROGRESS.md | — | — | 已完成（P-008 → done） |
 | 记录开发日志 | — | — | 已完成（见头部 Step 9/10 记录 + IMPLEMENTATION §8.4） |
-| git 提交 | 待用户指令 | 提交时 | done（`587b7f8` feat(v3.9.9)，2026-11-22 已推送 origin/master） |
+| git 提交 | 待用户指令 | 提交时 | done（`587b7f8`，提交信息标 feat(v3.9.9)，包版本实际 3.9.8，见 CLOSURE_REPORT §8 E-1；2026-11-22 已推送 origin/master） |

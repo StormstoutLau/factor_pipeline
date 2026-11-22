@@ -1,7 +1,7 @@
 # P-008 批次全流程闭环总结报告
 
 - **Feature**: 数据行数对齐（分钟 / 日频覆盖核对）——运行时 counts-only 对齐证据层 + 离线三方分解审计
-- **批次**: v3.9.9（spec 目录 `spec/v399-p008-data-row-alignment/`）
+- **批次**: v3.9.8（spec 目录 `spec/v399-p008-data-row-alignment/`；包版本未 bump，随 v3.9.8 发版，见 §8 勘误 E-1）
 - **档位**: T1（Layer-1 代码改动：`backtest/execution/shell/` + `scripts/` + `tests/`）
 - **周期**: 2026-11-22（Step 1 ~ Step 10 单日完成）
 - **状态**: **已闭环**——CHECKLIST v1.2 accepted（71/71），git `587b7f8` + `9be0bf8` 已推送 origin/master
@@ -128,7 +128,7 @@ totals: minute 3,442,081 | daily_matched 3,523,738 | daily_full 3,528,865
 - spec 文档 4 份：RESEARCH v1.5 / DESIGN v1.1 / IMPLEMENTATION v1.1 / CHECKLIST v1.2（均 accepted/verified）
 - 代码 4 文件（3 改 1 新）+ 测试 2 文件（1 改 1 新）+ 探针 `probe_alignment.py`
 - 证据产物：`out/data_alignment.json/.md`、`out/capacity_calibration.json/.md`（含对齐节）
-- git：**`587b7f8`** feat(v3.9.9)（12 文件，+2853 行）+ **`9be0bf8`** docs（哈希补记），已推送 origin/master
+- git：**`587b7f8`**（提交信息标 `feat(v3.9.9)`，包版本实际 3.9.8，见 §8 勘误 E-1；12 文件，+2853 行）+ **`9be0bf8`** docs（哈希补记），已推送 origin/master
 
 ## 7. 遗留与后续
 
@@ -139,3 +139,16 @@ totals: minute 3,442,081 | daily_matched 3,523,738 | daily_full 3,528,865
 | 待办 | **无**——P-008 无剩余待验收项 |
 
 > 结论：P-008 十步全流程闭环。运行时对齐为 counts-only 证据层（λ/σ/impact/coverage/panel_hash/默认 SHA 逐位不变），离线审计提供 A/B/C/D 归因与双口径恒等式防线；四项裁决（不剔除 / 不过滤 / 不补 / 三方分解）在实现与证据层面完整落地。
+
+## 8. 勘误与台账对账（P-019，2026-11-23）
+
+> **触发**：P-010（v3.9.8）完成后对账发现本报告与 CHECKLIST 以 `v3.9.9` 作批次标签，而包版本四处锚点（`pyproject.toml` L7 / `__init__.py` L58 / `config_v2.py` L371 / `reporting.py` L40）自 v3.9.7 起一直为 **3.9.8**——P-008 从未 bump 版本。**裁决**：不改写已推送的 git 历史，以本文档勘误对账（依据 [P-019 SESSION](../p019-version-ledger-reconcile/SESSION.md)，T3 Layer-0 纯文档）。
+
+| 编号 | 位置 | 原文 | 订正 |
+|---|---|---|---|
+| E-1 | 本报告 L4 | 批次 v3.9.9 | 批次 **v3.9.8**（包版本未 bump，随 3.9.8 发版） |
+| E-1 | 本报告 §6 git 行 | `587b7f8` feat(v3.9.9) | `587b7f8`（提交信息标 v3.9.9 为笔误，包版本实际 3.9.8） |
+| E-1 | CHECKLIST §11 git 行 | `587b7f8` feat(v3.9.9) | 同上 |
+
+- **发版口径**：**v3.9.8 = 覆盖 P-011（`decc96c`）/ P-008（`587b7f8`）/ P-010（`3dabaff`）三批的同一发版号**；`CHANGELOG.md` v3.9.8 条目已补 P-008 / P-011 两小节。
+- **不改写历史**：`587b7f8` 提交信息保留原文；以本条勘误为唯一权威解释。
