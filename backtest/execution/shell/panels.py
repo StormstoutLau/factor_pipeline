@@ -46,6 +46,9 @@ class DailyRef(object):
     industry: Optional[pd.DataFrame] = None       # 月频行业
     mv_rank: Optional[pd.DataFrame] = None        # 月频规模五分位 1..5
     days_by_month: Optional[Dict[str, int]] = None
+    # v399 P-008（D1/D3）：逐日行数与交易日列表；默认 None 保持向后兼容
+    rows_by_day: Optional[Dict[str, int]] = None
+    dates_by_month: Optional[Dict[str, List[str]]] = None
 
 
 @dataclass
@@ -113,6 +116,31 @@ def _cell(row, key):
     except (TypeError, ValueError):
         pass
     return value
+
+
+def _pct(a, b):
+    """(a - b) / b * 100，保留 2 位；b<=0 返回 None。"""
+    if b is None or b <= 0:
+        return None
+    return round((float(a) - float(b)) / float(b) * 100.0, 2)
+
+
+def _alignment_warnings(align):
+    """P-008 非阻断 warning（纯函数；DESIGN §4.4 token 契约）。"""
+    if not align:
+        return []
+    if not align.get("daily_rows_available"):
+        return ["data_alignment_partial: 缺少日频逐日行数，仅记录分钟侧"]
+    out = []
+    outliers = align.get("outlier_days") or []
+    if outliers:
+        out.append("data_alignment_truncation: " + "; ".join(
+            "%s (%+.2f%%)" % (o["date"], o["diff_pct"]) for o in outliers))
+    missing = align.get("missing_minute_days") or []
+    if missing:
+        out.append("data_alignment_missing_day: " + "; ".join(
+            "%s (daily=%d)" % (m["date"], m["daily"]) for m in missing))
+    return out
 
 
 def _sample_indices(p, sigma, cap):
@@ -250,6 +278,106 @@ class MinutePanelBuilder(object):
 
     def _universe_count(self, ym):
         return len(self._universe_codes(ym))
+
+    # ------------------------------------------------- P-008 数据行数对齐
+    def _align_month(self, ym, agg):
+        """单月 counts-only 对齐；复用已加载 agg，不读盘（D5/INV-7）。"""
+        dates = [str(x) for x in np.asarray(agg.date, dtype=object)]
+        frame = pd.DataFrame({"d": dates,
+                              "c": np.asarray(agg.stock_code,
+                                              dtype=np.int64)})
+        day_counts = frame.groupby("d", sort=True)["c"].nunique()
+        has_daily = (self.daily is not None
+                     and self.daily.rows_by_day is not None)
+        rows_by_day = (self.daily.rows_by_day or {}) if self.daily else {}
+        month_dates = ((self.daily.dates_by_month or {}).get(ym, [])
+                       if self.daily else [])
+        days_by_month = (self.daily.days_by_month or {}) if self.daily else {}
+        matched = ([d for d in day_counts.index if d in rows_by_day]
+                   if has_daily else list(day_counts.index))
+        minute_sd = int(day_counts.loc[matched].sum()) if matched else 0
+        daily_sd = (int(sum(int(rows_by_day[d]) for d in matched))
+                    if has_daily else 0)
+        diff = ((minute_sd - daily_sd) / float(daily_sd) * 100.0
+                if daily_sd else None)
+        outliers = []
+        for d in matched:
+            n = int(rows_by_day.get(d, 0))
+            if not n:
+                continue
+            dev = (int(day_counts.loc[d]) - n) / float(n) * 100.0
+            if abs(dev) > 5.0:
+                outliers.append({"date": d,
+                                 "minute": int(day_counts.loc[d]),
+                                 "daily": n, "diff_pct": round(dev, 2)})
+        missing = ([{"date": d, "daily": int(rows_by_day[d])}
+                    for d in month_dates
+                    if d in rows_by_day and d not in day_counts.index]
+                   if has_daily else [])
+        return {"month": ym, "minute": minute_sd, "daily": daily_sd,
+                "diff_pct": (round(diff, 2) if diff is not None else None),
+                "minute_days": int(day_counts.size),
+                "daily_days": (int(len(month_dates)) if month_dates
+                               else int(days_by_month.get(ym,
+                                                          day_counts.size))),
+                "zero_amount": int((np.asarray(agg.amount_day, dtype=float)
+                                    == 0.0).sum()),
+                "_outliers": outliers, "_missing": missing,
+                "_unmatched": (int(sum(1 for d in day_counts.index
+                                       if d not in rows_by_day))
+                               if has_daily else 0)}
+
+    def _finalize_alignment(self, rows, unmatched_minute):
+        """月行汇总为 data_alignment（DESIGN §4.2 schema）。"""
+        has = bool(self.daily is not None
+                   and self.daily.rows_by_day is not None)
+        public = [dict((k, v) for k, v in r.items() if not k.startswith("_"))
+                  for r in rows]
+        total_minute = int(sum(r["minute"] for r in rows))
+        total_daily = int(sum(r["daily"] for r in rows))
+        missing = [m for r in rows for m in r["_missing"]]
+        daily_full = int(total_daily + sum(m["daily"] for m in missing))
+        zero = int(sum(r["zero_amount"] for r in rows))
+        peak = max(rows,
+                   key=lambda r: (r["zero_amount"] / float(r["minute"])
+                                  if r["minute"] else 0.0),
+                   default=None)
+        return {
+            "scope": "matched_days",
+            "window": [self.cfg.minute_start[:7],
+                       self.cfg.minute_end[:7]],
+            "months": len(rows),
+            "matched_days": (int(sum(r["minute_days"] for r in rows)
+                                 - unmatched_minute) if has else None),
+            "daily_days": (int(sum(r["daily_days"] for r in rows))
+                           if has else None),
+            "total": {"minute": total_minute,
+                      "daily": total_daily if has else None,
+                      "diff_pct": (_pct(total_minute, total_daily)
+                                   if has else None),
+                      "daily_full": daily_full if has else None,
+                      "diff_full_pct": (_pct(total_minute, daily_full)
+                                        if has else None)},
+            "monthly": public,
+            "outlier_days": sorted(
+                [o for r in rows for o in r["_outliers"]],
+                key=lambda x: x["date"]),
+            "missing_minute_days": sorted(missing,
+                                          key=lambda x: x["date"]),
+            "unmatched_minute_days": int(unmatched_minute),
+            "daily_rows_available": has,
+            "zero_amount": {
+                "pairs": zero,
+                "share_pct": (round(zero / float(total_minute) * 100.0, 4)
+                              if total_minute else 0.0),
+                "peak_month": (peak["month"]
+                               if peak and peak["minute"] and zero > 0
+                               else None),
+                "peak_share_pct": (round(
+                    peak["zero_amount"] / float(peak["minute"]) * 100.0, 4)
+                    if peak and peak["minute"] and zero > 0 else 0.0)},
+            "thresholds": {"outlier_abs_pct": 5.0},
+        }
 
     # ------------------------------------------------------------ 缓存
     def _read_cache(self, ym):
@@ -477,6 +605,7 @@ class MinutePanelBuilder(object):
         self._month_codes = {}
         pvalues, rows = [], []
         counts, locks = {}, {}
+        align_rows, align_unmatched = [], 0
         hits = misses = 0
         cap_month = int(np.ceil(SAMPLE_CAP / float(max(len(usable), 1))))
         for ym in usable:
@@ -488,6 +617,9 @@ class MinutePanelBuilder(object):
             codes = np.unique(agg.stock_code)
             self._month_codes[ym] = codes
             counts[ym] = int(codes.size)
+            align_row = self._align_month(ym, agg)
+            align_rows.append(align_row)
+            align_unmatched += int(align_row["_unmatched"])
             locks[ym] = (float(np.mean(agg.limit_lock))
                          if agg.limit_lock.size else 0.0)
             start = len(self._samples)
@@ -521,6 +653,8 @@ class MinutePanelBuilder(object):
                 warnings.append("impact_fit 不可用: %s" % exc)
 
         coverage = self._coverage(usable, partial, missing, counts, locks)
+        alignment = self._finalize_alignment(align_rows, align_unmatched)
+        warnings.extend(_alignment_warnings(alignment))
         panel_hash = self._panel_hash(usable, len(rows), p.size)
         return {
             "lambda_pvalues": pvalues,
@@ -533,6 +667,7 @@ class MinutePanelBuilder(object):
             "impact_fit": impact_fit,
             "sigma_median": (float(np.median(sigma)) if sigma.size else None),
             "coverage": coverage,
+            "data_alignment": alignment,
             "panel_hash": panel_hash,
             "evidence_level": "minutes",
             "evidence_warnings": warnings,

@@ -85,6 +85,34 @@ def render_markdown(payload):
                                             for k, v in sorted(boards.items()))
                                   or "n/a"),
                   ""]
+    align = panels.get("data_alignment") or {}
+    if align:
+        total = align.get("total") or {}
+        zero = align.get("zero_amount") or {}
+        outliers = align.get("outlier_days") or []
+        missing = align.get("missing_minute_days") or []
+        lines += ["## 数据行数对齐（P-008 证据层）", "",
+                  "- 口径: `%s`；匹配日 / 日频交易日: %s / %s"
+                  % (align.get("scope"),
+                     _num(align.get("matched_days"), "%.0f"),
+                     _num(align.get("daily_days"), "%.0f")),
+                  "- 分钟 / 日频股票×日: %s / %s（%s；全窗口 %s）"
+                  % (_num(total.get("minute"), "%.0f"),
+                     _num(total.get("daily"), "%.0f"),
+                     _num(total.get("diff_pct"), "%+.2f%%"),
+                     _num(total.get("diff_full_pct"), "%+.2f%%")),
+                  "- 缺失分钟日: %s"
+                  % (", ".join("%s（日频 %s）" % (m["date"], m["daily"])
+                               for m in missing) or "无"),
+                  "- 日级偏差 >5%%: %s"
+                  % (", ".join("%s（%+.2f%%）" % (o["date"], o["diff_pct"])
+                               for o in outliers) or "无"),
+                  "- 零成交股票×日: %s（%s），峰值 %s（%s）"
+                  % (_num(zero.get("pairs"), "%.0f"),
+                     _num(zero.get("share_pct"), "%.3f%%"),
+                     zero.get("peak_month") or "n/a",
+                     _num(zero.get("peak_share_pct"), "%.3f%%")),
+                  ""]
     lam = payload.get("lambda_stats") or {}
     if lam:
         lines += ["## λ 显著性与填充", "",

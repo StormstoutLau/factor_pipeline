@@ -818,3 +818,109 @@ def test_T397_4_minute_unavailable_exit2(tmp_path, monkeypatch, capsys):
     assert rc == 2, out[-2000:]
     assert "[minute]" in out and "无可用月份" in out
     assert "Traceback" not in out
+
+
+# ---------------------------------------------------------------- P-008（T398）
+def _align_ref(days=12, rows_by_day=None, extra_dates=()):
+    """DailyRef + 逐日行数/交易日列表（P-008 运行时对齐用）。"""
+    base = _daily_ref({"2023-01": int(days)})
+    dates = ["2023-01-%02d" % (i + 1) for i in range(int(days))]
+    base.dates_by_month = {"2023-01": dates + list(extra_dates)}
+    base.rows_by_day = rows_by_day
+    return base
+
+
+def _build_p008(agg, ref, cfg):
+    from backtest.execution.shell.panels import MinutePanelBuilder
+    return MinutePanelBuilder(
+        cfg, loader=FakeLoader({"2023-01": agg}), daily=ref).build()
+
+
+def _rows_12(pet=4):
+    return {"2023-01-%02d" % (i + 1): int(pet) for i in range(12)}
+
+
+def test_T398_1_truncation_outlier(cfg):
+    """T398-1: 逐日偏差 >5% → outlier_days + truncation warning。"""
+    c = _cfg_window(cfg, "2023-01-01", "2023-01-31")
+    rows = _rows_12()
+    rows["2023-01-01"] = 20
+    out = _build_p008(_agg("2023-01", days=12),
+                      _align_ref(12, rows_by_day=rows), c)
+    align = out["data_alignment"]
+    assert [o["date"] for o in align["outlier_days"]] == ["2023-01-01"]
+    assert align["outlier_days"][0]["diff_pct"] == -80.0
+    assert align["outlier_days"][0]["minute"] == 4
+    assert align["outlier_days"][0]["daily"] == 20
+    assert any("data_alignment_truncation" in w and "2023-01-01" in w
+               for w in out["evidence_warnings"])
+
+
+def test_T398_2_missing_minute_day(cfg):
+    """T398-2: 日频有、分钟无 → missing_minute_days + warning。"""
+    c = _cfg_window(cfg, "2023-01-01", "2023-01-31")
+    rows = _rows_12()
+    rows["2023-01-13"] = 4
+    out = _build_p008(
+        _agg("2023-01", days=12),
+        _align_ref(12, rows_by_day=rows, extra_dates=("2023-01-13",)), c)
+    align = out["data_alignment"]
+    assert align["missing_minute_days"] == [{"date": "2023-01-13", "daily": 4}]
+    assert align["matched_days"] == 12
+    assert align["daily_days"] == 13
+    assert any("data_alignment_missing_day" in w and "2023-01-13" in w
+               for w in out["evidence_warnings"])
+
+
+def test_T398_3_zero_amount_count_keeps_lambda(cfg):
+    """T398-3: 零成交只计数；λ / σ / panel_hash 与基线逐位相同。"""
+    c = _cfg_window(cfg, "2023-01-01", "2023-01-31")
+    rows = _rows_12()
+    agg0 = _agg("2023-01", days=12)
+    agg1 = _agg("2023-01", days=12)
+    agg1.amount_day[:3] = 0.0
+    out0 = _build_p008(agg0, _align_ref(12, rows_by_day=rows), c)
+    out1 = _build_p008(agg1, _align_ref(12, rows_by_day=rows), c)
+    assert out0["data_alignment"]["zero_amount"]["pairs"] == 0
+    assert out1["data_alignment"]["zero_amount"]["pairs"] == 3
+    assert out1["lambda_stats"] == out0["lambda_stats"]
+    assert out1["panel_hash"] == out0["panel_hash"]
+
+
+def test_T398_4_panel_hash_ignores_alignment(cfg):
+    """T398-4: 注入/不注入 rows_by_day，panel_hash 逐位相同（INV-2）。"""
+    c = _cfg_window(cfg, "2023-01-01", "2023-01-31")
+    rows = _rows_12()
+    out_no = _build_p008(_agg("2023-01", days=12),
+                         _align_ref(12, rows_by_day=None), c)
+    out_yes = _build_p008(_agg("2023-01", days=12),
+                          _align_ref(12, rows_by_day=rows), c)
+    assert out_no["panel_hash"] == out_yes["panel_hash"]
+    assert out_no["data_alignment"]["daily_rows_available"] is False
+    assert out_yes["data_alignment"]["daily_rows_available"] is True
+
+
+def test_T398_5_partial_mode_warning(cfg):
+    """T398-5: 旧 DailyRef（无 rows_by_day）→ partial warning，不抛异常。"""
+    c = _cfg_window(cfg, "2023-01-01", "2023-01-31")
+    out = _build_p008(_agg("2023-01", days=12),
+                      _align_ref(12, rows_by_day=None), c)
+    align = out["data_alignment"]
+    assert align["daily_rows_available"] is False
+    assert align["matched_days"] is None
+    assert align["total"]["daily"] is None
+    assert any("data_alignment_partial" in w
+               for w in out["evidence_warnings"])
+
+
+def test_T398_8_monthly_schema(cfg):
+    """T398-8: monthly 每行键集固定 7 键，无私有键泄漏。"""
+    c = _cfg_window(cfg, "2023-01-01", "2023-01-31")
+    out = _build_p008(_agg("2023-01", days=12),
+                      _align_ref(12, rows_by_day=_rows_12()), c)
+    monthly = out["data_alignment"]["monthly"]
+    assert len(monthly) == 1
+    assert set(monthly[0]) == {
+        "month", "minute", "daily", "diff_pct", "minute_days",
+        "daily_days", "zero_amount"}
+    assert not any(k.startswith("_") for k in monthly[0])

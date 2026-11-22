@@ -295,12 +295,19 @@ def daily_ref(P, cfg):
     from backtest.execution.shell.panels import DailyRef
     mv_rank = np.ceil(P['mv_m'].rank(axis=1, pct=True) * 5.0).clip(1, 5)
     days = P['close'].groupby(P['close'].index.strftime('%Y-%m')).size()
+    rows = P['close'].notna().sum(axis=1)
+    rows_by_day = dict((str(d)[:10], int(v)) for d, v in rows.items())
+    dates_by_month = {}
+    for d in P['close'].index:
+        dates_by_month.setdefault(str(d)[:7], []).append(str(d)[:10])
     return DailyRef(
         adv=P['amt_m'],
         universe=P['mask'].fillna(False) & P['ret'].notna(),
         industry=P['facts']['ind'],
         mv_rank=mv_rank,
-        days_by_month=dict((str(k), int(v)) for k, v in days.items()))
+        days_by_month=dict((str(k), int(v)) for k, v in days.items()),
+        rows_by_day=rows_by_day,
+        dates_by_month=dates_by_month)
 
 
 def formation_decay_curve(P, w, h_max=60):
@@ -411,6 +418,7 @@ def attach_panel_meta(result, minute, daily_panels, cfg):
     result['panels'].update({
         'evidence_level': result.get('evidence_level'),
         'coverage': cov.as_dict() if hasattr(cov, 'as_dict') else cov,
+        'data_alignment': minute.get('data_alignment'),
         'panel_hash': minute.get('panel_hash'),
         'window_capacity': daily_panels.get('window_capacity') or {},
     })
@@ -671,6 +679,11 @@ def main():
                     help='契约样本末（默认取 stock_close 最后一个交易日）')
     ap.add_argument('--contract-json', default=None,
                     help='契约 JSON 输出路径（默认 out/capacity_impact_contract.json）')
+    # v399 P-008：离线数据行数对齐审计（默认不触发）
+    ap.add_argument('--alignment-audit', action='store_true',
+                    help='运行分钟/日频三方分解审计（输出 out/data_alignment.*）')
+    ap.add_argument('--alignment-json', default=None,
+                    help='对齐审计 JSON 输出路径（默认 out/data_alignment.json）')
     # v3.8.0 E7 新增分支（默认路径零变更）
     ap.add_argument('--calibrate', action='store_true',
                     help='运行 v3.8.0 执行/容量校准，输出 out/capacity_calibration.json')
@@ -712,6 +725,35 @@ def main():
             return 2
         if args.contract_only:
             return 0
+
+    if args.alignment_audit:
+        if str(SCRIPTS.parent) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS.parent))
+        from backtest.execution.config import CalibrationConfig
+        from backtest.execution.ports import CalibrationUnavailable
+        from backtest.execution.shell.alignment import (audit_alignment,
+                                                        write_alignment_report)
+        from backtest.execution.shell.loaders import MinuteLoader
+
+        overrides = {}
+        if args.minute_root:
+            overrides['minute_root'] = args.minute_root
+        cfg = CalibrationConfig(data_root=args.data_root, **overrides)
+        market = build_panels(args.data_root)
+        loader = MinuteLoader(cfg.minute_root,
+                              sigma_bars=cfg.bvc_sigma_bars)
+        try:
+            payload = audit_alignment(cfg, loader, market['close'])
+        except CalibrationUnavailable as exc:
+            print('[alignment] %s' % exc)
+            return 2
+        target = args.alignment_json or str(
+            SCRIPTS.parent / 'out' / 'data_alignment.json')
+        written = write_alignment_report(payload, target)
+        print('对齐审计: %s' % ', '.join(written))
+        ident = payload.get('identity') or {}
+        return 2 if (ident.get('residual') or ident.get('residual_full')
+                     or payload.get('alignment_identity_failed')) else 0
 
     if args.calibrate or args.diagnose_window:
         if str(SCRIPTS.parent) not in sys.path:
