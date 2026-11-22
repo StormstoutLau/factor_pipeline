@@ -1,5 +1,27 @@
 # 开发日志 (Changelog)
 
+## v3.9.8 — P-010 月聚类 CI + 粒度披露 (已实施, 2026-11-23)
+
+### 概览
+
+承接 P-010（[spec/p010-granularity-bias](spec/p010-granularity-bias/) 四件套：RESEARCH v1.3 / DESIGN v1.1 / IMPLEMENTATION v1.3 / CHECKLIST v1.3），包版本 **3.9.8**（patch 级）。E1 39 月探针判定：点估计 `|Δc|/c = 4.02% < 10%` → **不采纳**股票×月重采样（方案 B）；月聚类 CI 宽度 `+83.8% > 20%` → **采纳**月聚类 bootstrap（方案 C）+ 粒度披露（方案 A）。样本粒度仍为股票×日，`panel_hash` 与默认工件零变更。
+
+- **D1**：`panels.build()` 输出 `impact_samples["month"]`（与 `p/impact/sigma` 同索引切片）；`impact_samples_meta` 增 `cluster="month"` / `n_clusters` / `ci="month_cluster_pairs"`；删除仅取三数组的 `_stratified_sample`（唯一调用点改索引切片，防止标签错位）。
+- **D2**：`runner._bootstrap_ci` 增可选 `clusters`（`None` 走原 iid 路径，逐位不变）；`c_calib_lower/upper` 语义改为月聚类，旧口径保留在 `c_calib_lower_iid/upper_iid`；`b` 的 CI 同步聚类。
+- **D3**：新增 `_cluster_blocks` / `_cluster_labels` / `_wild_sqrt_ci`；`group_debias` 宽度缩放 `sqrt(g/(g−1)·(n−1)/n)` 与 Rademacher wild cluster 作为少簇敏感性；簇数入工件。
+- **D4**：`report.render_markdown` 在 c 表后披露口径/簇数/iid 对照/少簇敏感性（旧 payload 不渲染、不报错）；`granularity` 保持 `"daily"`。
+- **D5**：默认路径（不带 `--calibrate`）零改动，`out/capacity_impact.json` SHA256 `82728CE1…` 逐位不变。
+- **读数为口径修正，非模型变更**：容量由 `c_effective`（点估计/回退 0.5）驱动、不消费 CI；仅报告值 `c_calib_stress` 随 CI 上界上升（E1：2.9213 → 2.9349）。
+
+### 核心产出
+
+- `backtest/execution/shell/panels.py`：月标签数组 + meta 三键；`_stratified_sample` 删除。
+- `backtest/execution/shell/runner.py`：`_bootstrap_ci(clusters=None)` + 3 个新函数 + `c` 块 10 字段（含 `c_ci_method` / `c_ci_n_clusters` / iid 对照 / debias / wild）。
+- `backtest/execution/shell/report.py`：c 表后条件披露 2-3 行。
+- 测试：TP10-1~5/7/8/9 新增（容量 30→39 项），TP10-5 build meta（分钟面板 40→41 项）。
+- 包版本 **3.9.8**（pyproject / `__init__` / config_v2 / reporting + 两处版本测试锚点）。
+- 文档：`docs/EXECUTION_V3.8.1_MINUTE_PANEL_WIRING.md` 观测样本分层段改写（函数已删、排序等距内联）；`spec/v392-calibration-unit-fix/DESIGN.md` §5.2 加勘误指针（superseded by P-010 D6）。
+
 ## v3.9.7 — P-017 审计遗留清尾：恒真断言整改 + 空 minute-root exit 2 + 文档勘误 (已实施, 2026-11-21)
 
 ### 概览

@@ -158,13 +158,47 @@ def ratio_diagnostics(c_default=0.5, k_default=0.025, sigma=0.02,
     return out
 
 
-def _bootstrap_ci(fit_fn, p, impact, sigma, seed, n_boot=200):
-    """对样本行做 iid bootstrap，返回 5% / 95% 分位。"""
+def _cluster_blocks(clusters):
+    """把逐行簇标签切成索引块（簇内保持原行序，块按标签序）。"""
+    labels = np.asarray(clusters, dtype=object).ravel()
+    order = np.argsort(labels, kind="stable")
+    sorted_labels = labels[order]
+    cuts = np.flatnonzero(sorted_labels[1:] != sorted_labels[:-1]) + 1
+    bounds = np.concatenate(([0], cuts, [order.size]))
+    return [order[bounds[i]:bounds[i + 1]]
+            for i in range(bounds.size - 1)]
+
+
+def _cluster_labels(samples, n_rows):
+    """校验月簇标签；返回 ``(labels, None)`` 或 ``(None, reason)``。"""
+    month = samples.get("month")
+    if month is None:
+        return None, "missing"
+    labels = np.asarray(month, dtype=object).ravel()
+    if labels.size != int(n_rows):
+        return None, "length_mismatch"
+    if np.unique(labels).size < 2:
+        return None, "too_few"
+    return labels, None
+
+
+def _bootstrap_ci(fit_fn, p, impact, sigma, seed, n_boot=200,
+                  clusters=None):
+    """对样本行做 bootstrap，返回 5% / 95% 分位。
+
+    ``clusters is None`` 时走 iid 行抽样（v3.9.7 行为，逐位不变）；
+    否则按簇整块重采样（月聚类 pairs bootstrap）。
+    """
     rng = np.random.default_rng(int(seed))
     n = int(p.size)
+    blocks = None if clusters is None else _cluster_blocks(clusters)
     reps = []
     for _ in range(int(n_boot)):
-        idx = rng.integers(0, n, size=n)
+        if blocks is None:
+            idx = rng.integers(0, n, size=n)
+        else:
+            pick = rng.integers(0, len(blocks), size=len(blocks))
+            idx = np.concatenate([blocks[k] for k in pick])
         try:
             value = fit_fn(p[idx], impact[idx], sigma[idx])
         except ValueError:
@@ -172,6 +206,33 @@ def _bootstrap_ci(fit_fn, p, impact, sigma, seed, n_boot=200):
         reps.append(value)
     if len(reps) < 20:
         return None, None
+    return (float(np.percentile(reps, 5.0)),
+            float(np.percentile(reps, 95.0)))
+
+
+def _wild_sqrt_ci(p, impact, sigma, clusters, seed, n_boot=200):
+    """Rademacher wild cluster bootstrap（仅 sqrt c）；少簇敏感性附表。"""
+    p_arr = np.asarray(p, dtype=float).ravel()
+    y = np.asarray(impact, dtype=float).ravel()
+    s = np.asarray(sigma, dtype=float).ravel()
+    try:
+        c = float(SqrtImpact().fit(p_arr, y, s)["c"])
+    except ValueError:
+        return None, None
+    x = s * np.sqrt(p_arr)
+    denom = float(np.dot(x, x))
+    if denom <= 0.0 or int(n_boot) < 20:
+        return None, None
+    resid = y - c * x
+    blocks = _cluster_blocks(clusters)
+    if len(blocks) < 2:
+        return None, None
+    scores = np.asarray([float(np.sum(x[b] * resid[b])) for b in blocks])
+    rng = np.random.default_rng(int(seed))
+    reps = []
+    for _ in range(int(n_boot)):
+        w = rng.integers(0, 2, size=scores.size) * 2 - 1
+        reps.append(c + float(np.dot(w, scores)) / denom)
     return (float(np.percentile(reps, 5.0)),
             float(np.percentile(reps, 95.0)))
 
@@ -480,12 +541,26 @@ def run_calibration(cfg, capacity_fn=None, breakeven_fn=None, panels=None):
                 None if not np.isfinite(value) else float(value))
         primary, tied = select_models(cv)
         selection = {"primary": primary, "tied": list(tied)}
+        labels, cluster_reason = _cluster_labels(samples, p.size)
         sqrt_params = models_out["sqrt"]["params"]
         if sqrt_params:
             point = float(sqrt_params["c"])
-            lower, upper = _bootstrap_ci(
+            if cluster_reason:
+                # Step 10 P3-2：长度不一致时 warning 附带实值（DESIGN §7 含长度差）
+                detail = ""
+                if cluster_reason == "length_mismatch":
+                    month_arr = samples.get("month")
+                    detail = "，month=%d/样本=%d" % (
+                        0 if month_arr is None else len(month_arr), p.size)
+                warnings.append(
+                    "c_ci_fallback_iid: 月簇标签不可用（%s%s），CI 回退 iid"
+                    % (cluster_reason, detail))
+            lower_iid, upper_iid = _bootstrap_ci(
                 lambda a, b, c: SqrtImpact().fit(a, b, c)["c"],
                 p, impact, sigma, cfg.seed)
+            lower, upper = _bootstrap_ci(
+                lambda a, b, c: SqrtImpact().fit(a, b, c)["c"],
+                p, impact, sigma, cfg.seed, clusters=labels)
             if lower is None:
                 lower, upper = point, point
                 warnings.append("c 的 bootstrap CI 不足 20 次有效重抽样")
@@ -496,7 +571,30 @@ def run_calibration(cfg, capacity_fn=None, breakeven_fn=None, panels=None):
                          and C_RANGE[0] <= point <= C_RANGE[1])
             models_out["sqrt"]["r2"] = r2
             c_info.update({"c_r2": r2, "c_identifiable": ident,
-                           "c_effective": point if ident else 0.5})
+                           "c_effective": point if ident else 0.5,
+                           "c_ci_method": ("month_cluster_pairs"
+                                           if labels is not None
+                                           else "iid_fallback"),
+                           "c_ci_n_clusters": (int(np.unique(labels).size)
+                                               if labels is not None else None),
+                           "c_calib_lower_iid": lower_iid,
+                           "c_calib_upper_iid": upper_iid,
+                           "c_ci_wild_lower": None,
+                           "c_ci_wild_upper": None})
+            if labels is not None:
+                g = int(np.unique(labels).size)
+                n = int(p.size)
+                factor = float(np.sqrt((g / (g - 1.0)) * ((n - 1.0) / n)))
+                half = 0.5 * (upper - lower)
+                c_info["c_ci_debias_lower"] = point - half * factor
+                c_info["c_ci_debias_upper"] = point + half * factor
+                w_lo, w_hi = _wild_sqrt_ci(p, impact, sigma, labels,
+                                           cfg.seed + 2)
+                c_info["c_ci_wild_lower"] = w_lo
+                c_info["c_ci_wild_upper"] = w_hi
+                if w_lo is None:
+                    warnings.append(
+                        "c_ci_wild_unavailable: wild cluster CI 不可用")
             if not ident:
                 warnings.append(
                     "c 不可识别（r2<%.2f 或超出 %s），容量按默认 0.5"
@@ -508,7 +606,7 @@ def run_calibration(cfg, capacity_fn=None, breakeven_fn=None, panels=None):
             b_point = float(power_params["b"])
             b_lo, b_hi = _bootstrap_ci(
                 lambda a, b, c: PowerImpact().fit(a, b, c)["b"],
-                p, impact, sigma, cfg.seed + 1)
+                p, impact, sigma, cfg.seed + 1, clusters=labels)
             b_info = {"b_hat": b_point,
                       "ci": [b_lo if b_lo is not None else b_point,
                              b_hi if b_hi is not None else b_point]}

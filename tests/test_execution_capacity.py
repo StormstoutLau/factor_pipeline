@@ -5,6 +5,7 @@
 """
 import dataclasses
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -338,6 +339,205 @@ def test_T3100_8_degraded_no_raise():
     assert bad["degraded"] is True
     empty = cross_section_reversal([], [], [], [], [])
     assert empty["degraded"] is True
+
+
+# ---------------------------------------------------------------- P-010 月聚类 CI
+def _clustered_panels(months=10, per=20):
+    """簇内相关、簇间差异大的合成面板（P-010 TP10-x）。"""
+    rng = np.random.default_rng(7)
+    p = np.tile(np.linspace(0.002, 0.05, per), months)
+    sigma = np.full_like(p, 0.02)
+    x = sigma * np.sqrt(p)
+    levels = 2.0 + 0.6 * np.arange(months)
+    impact = (np.repeat(levels, per) * x
+              + 0.05 * x * rng.standard_normal(p.size))
+    labels = ["%04d-%02d" % (2019 + i // 12, i % 12 + 1)
+              for i in range(months)]
+    month = np.repeat(np.asarray(labels, dtype=object), per)
+    panels = _panels()
+    panels["impact_samples"] = {"p": p, "impact": impact,
+                                "sigma": sigma, "month": month}
+    return panels
+
+
+def test_bootstrap_cluster_wider_than_iid(cfg):
+    """TP10-1: 同 seed 下月聚类 CI 显著宽于 iid 行抽样。"""
+    from backtest.execution.shell.runner import run_calibration
+    out = run_calibration(cfg, panels=_clustered_panels())
+    c = out["c"]
+    assert c["c_ci_method"] == "month_cluster_pairs"
+    assert c["c_ci_n_clusters"] == 10
+    clustered = c["c_calib_upper"] - c["c_calib_lower"]
+    iid = c["c_calib_upper_iid"] - c["c_calib_lower_iid"]
+    assert clustered > iid * 2.0
+
+
+@pytest.mark.parametrize("mutation", ["missing", "mismatch", "single"])
+def test_ci_fallback_without_month(cfg, mutation):
+    """TP10-2: 缺标签/长度错/单簇 -> iid 回退且不抛。"""
+    from backtest.execution.shell.runner import run_calibration
+    panels = _clustered_panels()
+    samples = dict(panels["impact_samples"])
+    if mutation == "missing":
+        samples.pop("month")
+    elif mutation == "mismatch":
+        samples["month"] = np.asarray(samples["month"], dtype=object)[:-5]
+    else:
+        samples["month"] = np.full(samples["p"].size, "2020-01", dtype=object)
+    panels["impact_samples"] = samples
+    out = run_calibration(cfg, panels=panels)
+    c = out["c"]
+    assert c["c_ci_method"] == "iid_fallback"
+    assert c["c_ci_n_clusters"] is None
+    assert c["c_calib_lower"] == c["c_calib_lower_iid"]
+    assert c["c_calib_upper"] == c["c_calib_upper_iid"]
+    assert c["c_ci_wild_lower"] is None
+    assert "c_ci_debias_lower" not in c
+    assert any("c_ci_fallback_iid" in w
+               for w in out["evidence_warnings"])
+    if mutation == "mismatch":
+        # Step 10 P3-2：warning 须含长度差实值（DESIGN §7）
+        warn = next(w for w in out["evidence_warnings"]
+                    if "c_ci_fallback_iid" in w)
+        assert "month=195" in warn and "样本=200" in warn
+
+
+def test_bootstrap_cluster_reproducible(cfg):
+    """TP10-3: 固定 seed 下两次运行逐位一致。"""
+    from backtest.execution.shell.runner import run_calibration
+    a = run_calibration(cfg, panels=_clustered_panels())
+    b = run_calibration(cfg, panels=_clustered_panels())
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def test_ci_n_clusters(cfg):
+    """TP10-4: 簇数等于唯一月标签数（39）。"""
+    from backtest.execution.shell.runner import run_calibration
+    panels = _clustered_panels(months=39, per=6)
+    out = run_calibration(cfg, panels=panels)
+    months = set(panels["impact_samples"]["month"])
+    assert out["c"]["c_ci_n_clusters"] == len(months) == 39
+
+
+def test_debias_width_scaling(cfg):
+    """TP10-7: group_debias 宽度缩放 = sqrt(g/(g-1)*(n-1)/n)。"""
+    from backtest.execution.shell.runner import run_calibration
+    out = run_calibration(cfg, panels=_clustered_panels())
+    c = out["c"]
+    n = int(np.asarray(_clustered_panels()["impact_samples"]["p"]).size)
+    g = 10
+    width = float(c["c_calib_upper"]) - float(c["c_calib_lower"])
+    dwidth = (float(c["c_ci_debias_upper"])
+              - float(c["c_ci_debias_lower"]))
+    factor = math.sqrt((g / (g - 1.0)) * ((n - 1.0) / n))
+    assert dwidth / width == pytest.approx(factor, rel=0.0, abs=1e-12)
+
+
+def test_wild_ci_bounds(cfg):
+    """TP10-8: wild CI 有限、递增且包含点估计。"""
+    from backtest.execution.shell.runner import run_calibration
+    out = run_calibration(cfg, panels=_clustered_panels())
+    c = out["c"]
+    lo, hi = c["c_ci_wild_lower"], c["c_ci_wild_upper"]
+    assert lo is not None and hi is not None
+    assert lo < hi
+    assert lo <= c["c_calib_point"] <= hi
+
+
+def test_report_disclosure():
+    """TP10-9: 新 payload 披露口径/簇数/对照；旧 payload 不渲染新行。"""
+    from backtest.execution.shell.report import render_markdown
+    new = {"evidence_level": "minutes", "config_hash": "x",
+           "c": {"c_default": 0.5, "c_calib_point": 0.41,
+                 "c_calib_lower": 0.22, "c_calib_upper": 0.78,
+                 "c_calib_stress": 0.78,
+                 "c_ci_method": "month_cluster_pairs",
+                 "c_ci_n_clusters": 39,
+                 "c_calib_lower_iid": 0.25, "c_calib_upper_iid": 0.62,
+                 "c_ci_debias_lower": 0.2179, "c_ci_debias_upper": 0.7821,
+                 "c_ci_wild_lower": 0.24, "c_ci_wild_upper": 0.66}}
+    md = render_markdown(new)
+    assert "month_cluster_pairs" in md
+    assert "簇数 39" in md
+    assert "iid 对照" in md
+    assert "group_debias" in md
+
+    old = {"evidence_level": "minutes", "config_hash": "x",
+           "c": {"c_default": 0.5, "c_calib_point": 0.41,
+                 "c_calib_lower": 0.22, "c_calib_upper": 0.78,
+                 "c_calib_stress": 0.78}}
+    md_old = render_markdown(old)
+    assert "CI 口径" not in md_old
+    assert "| c_calib_stress | 0.78 |" in md_old
+
+    fallback = {"evidence_level": "minutes", "config_hash": "x",
+                "c": {"c_default": 0.5, "c_calib_point": 0.41,
+                      "c_calib_lower": 0.25, "c_calib_upper": 0.62,
+                      "c_calib_stress": 0.62,
+                      "c_ci_method": "iid_fallback",
+                      "c_ci_n_clusters": None,
+                      "c_calib_lower_iid": 0.25,
+                      "c_calib_upper_iid": 0.62}}
+    md_fb = render_markdown(fallback)
+    assert "iid_fallback" in md_fb
+    assert "簇数 39" not in md_fb
+
+
+def test_cluster_blocks_and_labels():
+    """C-I5~I8: 分块覆盖完整、块内递增；标签缺失/单簇返回原因。"""
+    from backtest.execution.shell.runner import _cluster_blocks, _cluster_labels
+    labels = np.asarray(["b", "a", "b", "c", "a"], dtype=object)
+    blocks = _cluster_blocks(labels)
+    assert len(blocks) == 3
+    flat = np.sort(np.concatenate(blocks))
+    assert flat.tolist() == [0, 1, 2, 3, 4]
+    for block in blocks:
+        assert np.all(np.diff(block) > 0)
+    assert _cluster_labels({}, 5) == (None, "missing")
+    assert _cluster_labels({"month": np.asarray(["a"], dtype=object)},
+                           5)[1] == "length_mismatch"
+    single = {"month": np.full(5, "a", dtype=object)}
+    assert _cluster_labels(single, 5) == (None, "too_few")
+
+
+def test_wild_degenerate_returns_none():
+    """C-I10 / C-E6: denom<=0 / n_boot<20 -> (None, None)。"""
+    from backtest.execution.shell.runner import _wild_sqrt_ci
+    labels = np.asarray(["a", "a", "b", "b"], dtype=object)
+    p = np.array([0.01, 0.01, 0.01, 0.01])
+    y = np.array([0.10, 0.11, 0.12, 0.13])
+    assert _wild_sqrt_ci(p, y, np.zeros(4), labels, 1) == (None, None)
+    assert _wild_sqrt_ci(p, y, np.full(4, 0.02), labels, 1,
+                         n_boot=10) == (None, None)
+
+
+def test_ci_insufficient_and_wild_warning(cfg, monkeypatch):
+    """C-E4 / C-E5: 重抽不足与 wild 不可用均降级且留 warning。"""
+    from backtest.execution.shell import runner
+    monkeypatch.setattr(runner, "_bootstrap_ci",
+                        lambda *a, **k: (None, None))
+    monkeypatch.setattr(runner, "_wild_sqrt_ci",
+                        lambda *a, **k: (None, None))
+    out = runner.run_calibration(cfg, panels=_clustered_panels())
+    c = out["c"]
+    assert c["c_calib_lower"] == c["c_calib_point"]
+    assert c["c_calib_upper"] == c["c_calib_point"]
+    assert c["c_ci_wild_lower"] is None
+    warnings = out["evidence_warnings"]
+    assert any("不足 20" in w for w in warnings)
+    assert any("c_ci_wild_unavailable" in w for w in warnings)
+
+
+def test_sqrt_fit_failure_keeps_defaults(cfg):
+    """C-E7: sigma=0 使 sqrt 拟合失败，c 保持默认且不崩。"""
+    from backtest.execution.shell.runner import run_calibration
+    panels = _clustered_panels()
+    panels["impact_samples"]["sigma"] = np.zeros(
+        panels["impact_samples"]["p"].size)
+    out = run_calibration(cfg, panels=panels)
+    assert out["c"]["c_calib_point"] is None
+    assert out["c"]["c_calib_stress"] == 0.5
+    assert any("sqrt 模型拟合失败" in w for w in out["evidence_warnings"])
 
 
 def test_T3100_9_bootstrap_endpoint_and_reproducible():

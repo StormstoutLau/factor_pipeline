@@ -57,6 +57,27 @@ def render_markdown(payload):
     for key in ("c_default", "c_calib_point", "c_calib_lower",
                 "c_calib_upper", "c_calib_stress"):
         lines.append("| %s | %s |" % (key, c.get(key)))
+    if c.get("c_ci_method"):
+        lines.append("")
+        if c.get("c_ci_method") == "month_cluster_pairs":
+            lines.append("- c CI 口径: `month_cluster_pairs`，簇数 %s"
+                         % c.get("c_ci_n_clusters"))
+        else:
+            lines.append("- c CI 口径: `iid_fallback`"
+                         "（样本缺少月簇标签或簇数不足）")
+        if c.get("c_calib_lower_iid") is not None:
+            lines.append("- iid 对照 CI: [%s, %s]"
+                         % (c.get("c_calib_lower_iid"),
+                            c.get("c_calib_upper_iid")))
+        if c.get("c_ci_debias_lower") is not None:
+            width = float(c["c_calib_upper"]) - float(c["c_calib_lower"])
+            dwidth = (float(c["c_ci_debias_upper"])
+                      - float(c["c_ci_debias_lower"]))
+            factor = (dwidth / width) if width else None
+            lines.append(
+                "- 少簇敏感性: group_debias 宽度 ×%s；wild cluster CI [%s, %s]"
+                % (_num(factor, "%.4f"),
+                   c.get("c_ci_wild_lower"), c.get("c_ci_wild_upper")))
     capacity = payload.get("capacity") or {}
     lines += ["", "## 容量（regime 主值取 min）", "",
               "- min_regime: %s" % capacity.get("min_regime"),

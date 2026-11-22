@@ -151,11 +151,6 @@ def _sample_indices(p, sigma, cap):
     return order[np.unique(take)]
 
 
-def _stratified_sample(p, impact, sigma, cap, seed=None):
-    idx = _sample_indices(p, sigma, cap)
-    return p[idx], impact[idx], sigma[idx]
-
-
 def _fit_impact(p, impact, sigma):
     """与 runner 同一观测样本、同一 ``fit`` 实现（S1）。"""
     cv = cross_val_rmse(list(MODELS), p, impact, sigma)
@@ -636,9 +631,12 @@ class MinutePanelBuilder(object):
         p = np.asarray([s[0] for s in self._samples], dtype=float)
         impact = np.asarray([s[1] for s in self._samples], dtype=float)
         sigma = np.asarray([s[2] for s in self._samples], dtype=float)
+        # P-010 D1：月簇标签与三数组同索引切片，禁止二次重排
+        month = np.asarray([s[4] for s in self._samples], dtype=object)
         if p.size > SAMPLE_CAP:
-            p, impact, sigma = _stratified_sample(
-                p, impact, sigma, SAMPLE_CAP, self.cfg.seed)
+            idx = _sample_indices(p, sigma, SAMPLE_CAP)
+            p, impact, sigma, month = (p[idx], impact[idx],
+                                       sigma[idx], month[idx])
         if p.size < 3 or float(np.ptp(impact)) == 0.0:
             warnings.append("impact_samples 不足（n=%d），c 沿用默认" % p.size)
 
@@ -660,10 +658,14 @@ class MinutePanelBuilder(object):
             "lambda_pvalues": pvalues,
             "lambda_stats": filled["lambda_stats"],
             "panel": filled["panel"],
-            "impact_samples": {"p": p, "impact": impact, "sigma": sigma},
+            "impact_samples": {"p": p, "impact": impact,
+                               "sigma": sigma, "month": month},
             "impact_samples_meta": {"n": int(p.size), "cap": int(SAMPLE_CAP),
                                     "granularity": "daily",
-                                    "sampling": "equal_distance"},
+                                    "sampling": "equal_distance",
+                                    "cluster": "month",
+                                    "n_clusters": int(np.unique(month).size),
+                                    "ci": "month_cluster_pairs"},
             "impact_fit": impact_fit,
             "sigma_median": (float(np.median(sigma)) if sigma.size else None),
             "coverage": coverage,

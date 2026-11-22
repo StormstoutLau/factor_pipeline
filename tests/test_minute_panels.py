@@ -456,6 +456,43 @@ def test_no_pyarrow_degrade(monkeypatch, cfg, tmp_path, daily_ref):
     assert resolve_evidence_level(cfg2) == "ohlc"
 
 
+def test_impact_samples_month_meta(cfg, daily_ref):
+    """TP10-5: build() 输出月标签数组与 meta 三键，粒度仍 daily。"""
+    from backtest.execution.shell.panels import MinutePanelBuilder
+    cfg2 = _cfg_window(cfg)
+    by_month = {"2023-01": _agg("2023-01"), "2023-02": _agg("2023-02"),
+                "2023-03": _agg("2023-03")}
+    out = MinutePanelBuilder(cfg2, loader=FakeLoader(by_month),
+                             daily=daily_ref).build()
+    samples = out["impact_samples"]
+    meta = out["impact_samples_meta"]
+    assert "month" in samples
+    assert (len(samples["month"]) == len(samples["p"])
+            == len(samples["impact"]) == len(samples["sigma"]))
+    assert meta["cluster"] == "month"
+    assert meta["ci"] == "month_cluster_pairs"
+    assert meta["granularity"] == "daily"
+    assert meta["n_clusters"] == len(set(samples["month"]))
+    assert set(samples["month"]) <= set(out["coverage"].months)
+
+
+def test_month_true_subset_when_adv_missing(cfg, daily_ref):
+    """C-V3/INV-3 真子集边界：某月 ADV 全缺 -> month 为 coverage.months
+    真子集且 build 不报错（Step 10 ADD P2-1 补测）。"""
+    from backtest.execution.shell.panels import MinutePanelBuilder
+    cfg2 = _cfg_window(cfg)
+    by_month = {"2023-01": _agg("2023-01"), "2023-02": _agg("2023-02"),
+                "2023-03": _agg("2023-03")}
+    adv = daily_ref.adv.copy()
+    adv.loc["2023-02"] = np.nan
+    ref = dataclasses.replace(daily_ref, adv=adv)
+    out = MinutePanelBuilder(cfg2, loader=FakeLoader(by_month),
+                             daily=ref).build()
+    samples = out["impact_samples"]
+    assert set(samples["month"]) < set(out["coverage"].months)
+    assert "2023-02" not in set(samples["month"])
+
+
 def test_panel_cache(tmp_path, cfg, daily_ref):
     """T381-16: 缓存写入 -> 命中；改 config_hash -> 未命中。"""
     from backtest.execution.shell.panels import MinutePanelBuilder

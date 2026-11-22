@@ -36,6 +36,7 @@ upstream: null
 - 不改变 `SqrtImpact/LinearImpact/LogImpact/PowerImpact` 的 `fit/predict` 签名与端口契约；
 - 不引入带截距/符号冲击回归（方案 C，v3.9.3+）；
 - 不把样本粒度从「股票×日」改为「股票×月」（登记为 B9 遗留）；
+  > **P-010 勘误（v3.9.8，2026-11-23）**：该非目标经 E1 39 月探针复核后**维持**（点估计差 −4.02% < 10%）；月聚类 CI 已落地为方案 C，见 [spec/p010-granularity-bias/DESIGN.md](../p010-granularity-bias/DESIGN.md) D6。
 - 不实现截面 T+1 reversal（B11，后续批次）；
 - 不动 `loaders.py` 的 `MinuteAggregate/σ` 语义（BVC 分类仍需分钟 σ）。
 

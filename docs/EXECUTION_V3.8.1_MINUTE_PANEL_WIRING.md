@@ -491,20 +491,24 @@ class MinutePanelBuilder(object):
                 "panel": {r["code"]: float(r["lambda"]) for r in sig}}
 ```
 
-观测样本分层（W3）：
+观测样本分层（W3；v3.9.8 P-010 后改写）：
 
 ```python
-def _stratified_sample(p, impact, sigma, cap, seed):
-    """p 十分位 × sigma 五分位分层抽样（确定性，按 (p, sigma) 排序后等距取）。"""
+def _sample_indices(p, sigma, cap):
+    """按 (p, sigma) 排序后等距取索引；不引入 np.random 状态。"""
     if p.size <= cap:
-        return p, impact, sigma
+        return np.arange(p.size)
     order = np.lexsort((sigma, p))
-    take = np.linspace(0, order.size - 1, cap).astype(np.int64)
-    idx = order[np.unique(take)]
-    return p[idx], impact[idx], sigma[idx]
+    take = np.linspace(0, order.size - 1, int(cap)).astype(np.int64)
+    return order[np.unique(take)]
 ```
 
-> 设计写「分层抽样」，此实现用「排序后等距」保证同 seed 双跑逐位一致且覆盖全分位区间；不引入 `np.random` 额外状态。
+`build()` 末尾对 `p/impact/sigma/month` 四个数组使用同一 `idx` 切片
+（`p, impact, sigma, month = p[idx], impact[idx], sigma[idx], month[idx]`），
+保证月聚类标签与样本逐行对齐。原 `_stratified_sample` 只提取三个数组、
+会丢弃 `code/ym`，已于 v3.9.8 删除（P-010 D1）。
+
+> 设计写「分层抽样」，实现为「排序后等距」，保证同 seed 双跑逐位一致且覆盖全分位区间；不引入 `np.random` 额外状态。
 
 `impact_fit`（S1）：
 
