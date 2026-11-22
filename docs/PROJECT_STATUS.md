@@ -264,7 +264,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | # | 任务 | 状态 | 来源 |
 |---|------|------|------|
 | — | HAC 检验 NaN 过滤 (`ledoit_wolf_hac_test` 未 drop NaN → `compare` 的 HAC 静默返回 NaN) | ✅ v3.4.10 | [MAD 实验 §6 O1](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) |
-| — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] **暂缓** — 阶段口径不匹配 (默认静态路径无 S4、S3 默认关) + 0.3/0.7 阈值未校准; 先做 τ 分布/判别力探针 | DESIGN_DISCUSSION_V3.3.0 §6.1 + [可行性分析与治理体系核对](analysis/ENDOGENEITY_PREMIUM_GOVERNANCE_ANALYSIS.md) |
+| — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] **暂缓 → P-009**（P-011 裁决 2026-11-22；P3）— 阶段口径不匹配 (默认静态路径无 S4、S3 默认关) + 0.3/0.7 阈值未校准; 先做 τ 分布/判别力探针 | DESIGN_DISCUSSION_V3.3.0 §6.1 + [可行性分析与治理体系核对](analysis/ENDOGENEITY_PREMIUM_GOVERNANCE_ANALYSIS.md) |
 | — | 多断点支持 (Bai-Perron) | ✅ v3.5.0 (`detect_multiple` + Stata 46/46 对拍) | DESIGN_DISCUSSION_V3.3.0 §6.2 |
 | — | 多断点接入 `diagnose` 标签路径 | ✅ v3.5.1 (opt-in `breakpoint_mode='multiple'` + sup-F 确认 + 材料性 suspect) | v3.5.0 ADR-046 遗留 |
 | — | 多断点路径 NaN 间隙守卫 | ✅ v3.5.2 (连续性描述键 + 边界跨缺失 → ES 降级 suspect, ADR-048) | v3.5.0 H7 / v3.5.1 H5 |
@@ -274,8 +274,8 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | — | mv 重新导出至 2026-01-30 / barra+行业换源 (2024+) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
 | — | 复合因子池扩展 (4 因子 → 更多因子 / ML 组合) 的容量与可实施性 | [ ] 可选 | [多头端研究 §11 因子范围](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
-| — | 流式处理支持 (v3.0.0 T2) | [ ] | §3 T2.1-T2.5 |
-| — | Anderson-Rubin 后验检验 (中性化质量监控) | ✅ v3.2.0 (`enable_ar_check`, 默认关闭) | v3.2.0 Step 8 |
+| — | 流式处理支持 (v3.0.0 T2) | → **P-018**（P3 远期） | §3 T2.1-T2.5；P-011 裁决 2026-11-22 |
+| — | Anderson-Rubin 后验检验 (中性化质量监控) | ✅ v3.2.0 (`enable_ar_check`, 默认关闭) | v3.2.0 Step 8；P-011 裁决：关闭 |
 
 ---
 
@@ -311,7 +311,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 ### v3.0.0 T2 — 流式处理支持
 
 > **位置**: [DECISIONS.md:L1896](file:///f:/Coding/factor_pipeline/DECISIONS.md#L1896)
-> **状态**: 📋 下一轮执行 (5 sub-tasks: T2.1-T2.5, ~1500+ 行)
+> **状态**: 📋 **已移交 P-018**（P3 远期；P-011 裁决 2026-11-22）——本清单保留为能力规格，不再作为待办追踪。5 sub-tasks: T2.1-T2.5, ~1500+ 行
 
 - [ ] T2.1: `CachedDataLoader.iter_periods()` 生成器 (数据加载层流式化)
 - [ ] T2.2: 6 Imputer + Neutralizer + EnhancedRankPreservingScaler + SmartAdaptiveWinsorizer `partial_fit()` (模块层流式)

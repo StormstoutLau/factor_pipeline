@@ -185,23 +185,28 @@ v3.5.x (远期)       内生性-溢价诊断交互
 
 ---
 
-## §4 待办（已迁移，本表冻结）
+## §4 待办（已裁决，本表冻结）
 
-> **本表停止维护**（as of 2026-11-17）。存量 11 条未逐条裁决，整体登记为 [PROGRESS.md](PROGRESS.md) **P-011（DEV_PROGRESS §4 存量待办复核）**；
-> 当前待办真值源见 [PROGRESS.md](PROGRESS.md)（P-002 ~ P-010）。本表仅保留历史原文备查。
+> **本表停止维护**（as of 2026-11-17）。存量 11 条已由 **P-011（v3.9.8，2026-11-22）** 逐条裁决，证据见
+> [RESEARCH.md](../spec/v398-p011-dev-backlog-triage/RESEARCH.md)（v1.3 verified，含外部锚点 + P-018 设计输入 + 异构复审 22/22 PASS）；
+> 当前待办真值源见 [PROGRESS.md](PROGRESS.md)。本表保留历史原文 + 裁决结果备查。
 
-| 原 §4.0 P1 候选 | 现行处置 |
-|----------------|---------|
-| v3.3.6 冻结模型实证回测 | → P-011 复核 |
-| 非生产路径治理 | 已关闭（ADR-043 弃用） |
-| v3.4.0 遗留 MAD 缩尾 (O1) | 已关闭（v3.4.11 MAD 参数化） |
+| 原条目（原 §4.0 P1 候选） | P-011 裁决（2026-11-22） | 证据 |
+|----------------|------------------------|------|
+| v3.3.6 冻结模型实证回测 | **关闭（已交付）** | [PROJECT_STATUS.md](PROJECT_STATUS.md) L174（v3.4.0 → v3.4.12 → 12 因子 → 组合层 / 容量） |
+| 非生产路径治理 | **关闭**（ADR-043 弃用） | DECISIONS.md L46 / L2980 |
+| v3.4.0 遗留 MAD 缩尾 (O1) | **关闭**（v3.4.11 MAD 参数化，保留可选） | PROJECT_STATUS L175；`analysis/MAD_WINSORIZE_O1_EXPERIMENT.md` |
 
-| 原 §4.1 / §4.2 远期 | 现行处置 |
-|--------------------|---------|
-| 内生性-溢价交互 | → P-009 |
-| 多断点支持 (Bai-Perron) | 已交付（v3.5.0，ADR-046） |
-| 面板 HAC 稳健估计 | 已交付（v3.4.12） |
-| 流式处理 / Anderson-Rubin / MissingTypeDiagnoser 因果版 / 删除 HierarchicalImputer / `types.py` 重命名 | → P-011 逐条复核 |
+| 原条目（原 §4.1 / §4.2 远期） | P-011 裁决（2026-11-22） | 证据 |
+|--------------------|------------------------|------|
+| 内生性-溢价交互 | **转 P-009**（P3） | PROGRESS.md P-009 行 |
+| 多断点支持 (Bai-Perron) | **关闭（已交付 v3.5.0，ADR-046）** | DECISIONS.md L49 / L3175；`factor_health/__init__.py` L377 |
+| 面板 HAC 稳健估计 | **关闭（已交付 v3.4.12）** | `factor_health/__init__.py` L65 `estimate_with_errors` |
+| 流式处理 | **转 P-018**（P3 远期） | PROGRESS.md P-018 行；ANALYSIS_V3.0.0 L19 / L476 |
+| Anderson-Rubin | **关闭（已交付 v3.2.0 Step 8）** | `adapters.py` L1013-L1043；`tests/unit/test_step8_ar_posterior_check.py` |
+| MissingTypeDiagnoser 因果版 | **不修复**（仅诊断面，P3）。触发条件：`strategy='auto'`（或任何调用 `HierarchicalImputer` 的路径）进入生产，或诊断输出用于交易 / 风控决策时重开 | IMPUTER 计划 L320-L324 / L1112；`pipelines_v2.py` L744 |
+| 删除 HierarchicalImputer | **不修复**（前提「永远只用 `ffill_ts`」未成立；已内化且默认配置仍引用） | `config.py` L104-L110；`default_pipeline_config.json` L5-L13；IMPUTER 计划 L1113 |
+| `types.py` 重命名 | **不修复**（ADR-016 接受债；tox/CI 已规避）。重审条件：未来引入 `src/` 布局，或「项目根直接 `python -m`」不再受约束时 | ARCHITECTURE L420；tox.ini L25 / L55；DECISIONS L977 / L1050 |
 
 ---
 

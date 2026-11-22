@@ -27,7 +27,8 @@
 | P-008 | 数据行数对齐（分钟 / 日频覆盖核对） | 2026-11-19 任务分析 C1 | pending | P2 | ① 39 月逐月行数差异表；② 差异 >5% 的月份有归因说明 |
 | P-009 | 内生性-溢价诊断交互 | PROJECT_STATUS §1 路线图 v3.5.x 远期 | pending | P3 | ① 交互矩阵 DESIGN 通过步骤 4 复审；② 诊断输出新增键有回归 |
 | P-010 | 股票×日 vs 股票×月粒度偏差 — 量化偏差并决定是否按股票×月重采样 | [RESEARCH.md](../spec/v392-calibration-unit-fix/RESEARCH.md) §7 B9 / [DESIGN.md](../spec/v392-calibration-unit-fix/DESIGN.md) §1.2 | pending | P2 | ① 39 月股票×月重采样对照表；② 偏差量化（系数/CI 变化）；③ 若采纳，`panel_hash` 与成本口径变更说明 |
-| P-011 | DEV_PROGRESS §4 存量待办复核（11 条：冻结模型实证回测、流式处理、Anderson-Rubin、MissingTypeDiagnoser 因果版、`types.py` 重命名等） | [DEV_PROGRESS.md](DEV_PROGRESS.md) §4（已冻结） | pending | P2 | ① 逐条裁决为「关闭 / 转 P / 不修复」并留证据；② 裁决结果回填本表，DEV_PROGRESS 不再承载待办 |
+| P-011 | DEV_PROGRESS §4 存量待办复核（11 条：冻结模型实证回测、流式处理、Anderson-Rubin、MissingTypeDiagnoser 因果版、`types.py` 重命名等） | [DEV_PROGRESS.md](DEV_PROGRESS.md) §4（已逐条裁决）／ [RESEARCH.md](../spec/v398-p011-dev-backlog-triage/RESEARCH.md)（Step 1-2，**v1.3 verified**：11 条 = 6 关闭 / 2 转 P（P-009、P-018）/ 2 不修复 / 1 不修复+触发条件；外部锚点 21 条（文献/API 11 + 官方 8 + 社区 3，去重）；Step 2 门禁 (a)-(d) 已声明、F5 N/A；异构复审 2026-11-22：视角 A 锚点核查 22/22 PASS、视角 B 0×P1 + 5×P2 + 5×P3 已修复——账本一致性核对由复审覆盖，剩余收尾为 git 提交）／ [DESIGN.md](../spec/v398-p011-dev-backlog-triage/DESIGN.md)（Step 3-4，**v1.0 verified**：D1-D8 + INV-1~7 + 5 被拒备选；Step 4 独立复审 **PASS_WITH_FIXES**：双视角 0×P1 / 0×P2 / 8×P3 已处置，INV-1~7 全达成）／ [IMPLEMENTATION.md](../spec/v398-p011-dev-backlog-triage/IMPLEMENTATION.md)（Step 5-6 + Step 9，**v1.1 verified**：实施记录 + 验证矩阵 V1-V6 + §8.4 红→绿 8/8 + 衍生需求 D-398-1~6；Step 6 独立复审 **PASS_WITH_FIXES**：0×P1 / 0×P2 / 2×P3 已修复，V1-V6 独立复跑全 PASS，§9 升级 [已复核]）／ [CHECKLIST.md](../spec/v398-p011-dev-backlog-triage/CHECKLIST.md)（Step 7-8/10，**v1.1 accepted**：**63 项 = 63 通过 / 0 失败 / 0 待办**；Step 10 独立审计 45/45 PASS + ADD 质量门 **6.0/6.0 档位 A**，0×P1 / 0×P2 / 5×P3 已处置；Step 8 一致性 14/14 PASS）／ **T3：Layer-0 文档裁决，零代码 / 零门禁** | done | P2 | ① 逐条裁决为「关闭 / 转 P / 不修复」并留证据 ✅；② 裁决结果回填本表，DEV_PROGRESS 不再承载待办 ✅（§4 已逐行标注）；③ DESIGN v1.0 + Step 4 独立复审通过 ✅；④ Step 5-6 实施文档 + 独立复审通过 ✅；⑤ CHECKLIST 63 项全通过 + Step 9 红→绿（0/8 → 8/8）+ Step 10 审计通过 ✅（剩余收尾仅 git 提交） |
+| P-018 | 因子处理管线流式化（v3.0.0 T2：`iter_periods` + 模块 `partial_fit` + `transform_streaming` + CUSUM 流式协同） | [RESEARCH.md](../spec/v398-p011-dev-backlog-triage/RESEARCH.md) §3.2/§6.5（P-011 裁决 2026-11-22：U-1 → P-018；含设计输入与 U-4~U-6）／ [ANALYSIS_V3.0.0.md](ANALYSIS_V3.0.0.md) L19/L476 ／ [PROJECT_STATUS.md](PROJECT_STATUS.md) §3 T2 | pending | P3 | ① 流式 vs 批量等价性测试（逐位/容差）；② 默认批量路径 SHA `82728CE1…` 不变；③ 内存峰值对比读数；④ 按 T2.1→T2.5 分批实施 |
 
 ## 优先级口径
 
@@ -35,8 +36,8 @@
 |--------|------|------|
 | P0 | 阻塞结论或发布 | （无——P-002 已 done） |
 | P1 | 证据完整性 / 口径缺口 | P-003 |
-| P2 | 工程化与存量复核 | P-006 / P-008 / P-010 / P-011 |
-| P3 | 远期能力 | P-009 |
+| P2 | 工程化与存量复核 | P-006 / P-008 / P-010 |
+| P3 | 远期能力 | P-009 / P-018 |
 
 ## 更新规则
 
