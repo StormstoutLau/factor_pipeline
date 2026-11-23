@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""P-006：pandas 面板 → TradabilityInputs + meta（纯函数，无 IO）。
+"""P-006/P-021：pandas 面板 → TradabilityInputs + meta（纯函数，无 IO）。
 
-依据：spec/p006-tradability-engine-integration/DESIGN.md §4.6 / §3.3。
+依据：spec/p006-tradability-engine-integration/DESIGN.md §4.6
+      spec/p021-tradability-production-enablement/DESIGN.md §4.4 / §6.1
 """
 from collections import Counter
 
@@ -26,18 +27,75 @@ def _frame(df, index, columns, fill, dtype):
     return out.fillna(fill).astype(dtype)
 
 
+def _panel(df, index, columns):
+    """DataFrame/Series/ndarray → (T,N) DataFrame；ndarray 需同形。"""
+    if isinstance(df, pd.DataFrame):
+        return df.reindex(index=index, columns=columns)
+    if isinstance(df, pd.Series):
+        return df.to_frame().reindex(index=index, columns=columns)
+    arr = np.asarray(df, dtype=float)
+    if arr.shape != (len(index), len(columns)):
+        raise ValueError("面板形状应为 %r (实际 %r)"
+                         % ((len(index), len(columns)), arr.shape))
+    return pd.DataFrame(arr, index=index, columns=columns)
+
+
+def _normalize_panel(df, index, columns):
+    """对齐到 (index, columns) 并返回 float ndarray；None → None。"""
+    if df is None:
+        return None
+    return _panel(df, index, columns).to_numpy(dtype=float)
+
+
+def _suspend_mask(df, index, columns):
+    """停牌面板 → (mask, missing)。
+
+    bool 面板：True=停牌（既有契约）；object 面板：仅 'S'=停牌。
+    按「原始 df 的 dtypes」逐列判定——bool 面板经 reindex 补缺列/行后整帧
+    升型 object，用对齐后的 dtypes 会整体误入 'S' 路径。
+    """
+    if df is None:
+        return (np.zeros((len(index), len(columns)), bool),
+                np.ones((len(index), len(columns)), bool))
+    raw = df.reindex(index=index, columns=columns)
+    missing = raw.isna().to_numpy()
+    dtypes = getattr(df, "dtypes", None)
+    out = np.zeros(raw.shape, dtype=bool)
+    for j, col in enumerate(raw.columns):
+        dtype = None if dtypes is None else dtypes.get(col)
+        if dtype is not None and pd.api.types.is_bool_dtype(dtype):
+            out[:, j] = raw.iloc[:, j].fillna(False).astype(bool).to_numpy()
+        else:
+            out[:, j] = raw.iloc[:, j].astype(object).eq("S").to_numpy(
+                dtype=bool)          # 'R'/None/NaN → 可交易
+    return out, missing
+
+
+def _coverage(mask, eligible):
+    denom = int(np.count_nonzero(eligible))
+    if denom <= 0:
+        return 0.0
+    return float(np.count_nonzero(mask & eligible) / denom)
+
+
 def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
-                             adj, list_date=None, policy=None,
-                             st_overrides=None):
+                             adj=None, list_date=None, policy=None,
+                             st_overrides=None, limit_up=None,
+                             limit_down=None, ref=None):
     """面板（dates×stocks）→ (TradabilityInputs, meta)，纯函数、无 IO。
 
-    adj 为必填（后复权因子）；缺失 → ValueError（禁止无基准回退）。
+    adj 与 ref 至少一个；都 None → ValueError。
     list_date: Series/dict（code → 上市日），用于 IPO 后前 5 个交易日 no_limit。
     st_overrides: DataFrame/list（code, effective_date）公告覆盖表，
         仅用于统计 st_date_unverified，不改变派生状态。
+    limit_up/limit_down: 外部限价（stk_limit），须成对；缺格回退自算。
     """
-    if adj is None:
-        raise ValueError("build_tradability_inputs 需要 adj（后复权因子）")
+    if adj is None and ref is None:
+        raise ValueError("build_tradability_inputs 需要 adj 或 ref")
+    policy = policy or TradabilityPolicy()
+    if (limit_up is None) != (limit_down is None):
+        raise ValueError("limit_up 与 limit_down 必须成对提供")
+
     index = close.index
     columns = close.columns
     index_dt = (index if isinstance(index, pd.DatetimeIndex)
@@ -48,9 +106,16 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     low_a = _frame(low, index, columns, np.nan, float).to_numpy()
     open_a = _frame(open_, index, columns, np.nan, float).to_numpy()
     volume_a = _frame(volume, index, columns, np.nan, float).to_numpy()
-    suspend_a = _frame(suspend, index, columns, False, bool).to_numpy()
-    name_a = _frame(name, index, columns, "", object)
-    adj_a = _frame(adj, index, columns, np.nan, float).to_numpy()
+    adj_a = _normalize_panel(adj, index, columns)
+    limit_up_a = _normalize_panel(limit_up, index, columns)
+    limit_down_a = _normalize_panel(limit_down, index, columns)
+
+    suspend_a, suspend_missing = _suspend_mask(suspend, index, columns)
+
+    name_raw = (pd.DataFrame(np.nan, index=index, columns=columns, dtype=object)
+                if name is None else name.reindex(index=index, columns=columns))
+    name_missing = name_raw.isna().to_numpy()
+    name_a = name_raw.ffill().fillna("")
 
     T, N = close_a.shape
     dates_arr = np.array([pd.Timestamp(d).strftime("%Y-%m-%d")
@@ -122,19 +187,127 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     prev = np.full((T, N), np.nan)
     if T > 1:
         prev[1:] = close_a[:-1]
-    pct_mat = _pct_matrix(boards, is_st, is_delisting, dates_arr)
-    ref_mat = _ref_from_adj(prev, adj_a)
-    eps = (policy if policy is not None else TradabilityPolicy()).eps
+
+    # ── 除权参考价 + D2 回退 ──────────────────────────────
+    if ref is not None:
+        ref_mat = _normalize_panel(ref, index, columns)
+    else:
+        ref_mat = _ref_from_adj(prev, adj_a)
+    fallback = ~np.isfinite(ref_mat) & np.isfinite(prev) & (prev > 0.0)
+    if policy.unknown_policy == "fallback_raw":
+        ref_mat = np.where(fallback, prev, ref_mat)
+        ref_fallback_cells = int(fallback.sum())
+        ref_fallback_days = int(fallback.any(axis=1).sum())
+    else:
+        ref_fallback_cells = 0
+        ref_fallback_days = 0
+    adj_source = ("adj" if adj is not None
+                  else ("ref_fallback" if ref is not None else "none"))
+
+    # ── 规则 gap（D3）────────────────────────────────────
+    pct_mat, gap_mask = _pct_matrix(boards, is_st, is_delisting, dates_arr,
+                                    return_gaps=True)
+    rule_gap_cells = int(gap_mask.sum())
+    rule_gap_days = int(gap_mask.any(axis=1).sum())
+    if np.any(gap_mask & (boards == "bse")):
+        rule_gap_reason = "neeq_pre_select"
+    elif gap_mask.any():
+        rule_gap_reason = "unknown_board"
+    else:
+        rule_gap_reason = None
+
+    # ── 限价表缺格统计（回退自算）────────────────────────
+    if limit_up_a is not None:
+        table_missing = ~np.isfinite(limit_up_a) | ~np.isfinite(limit_down_a)
+        limit_table_missing_cells = int(np.count_nonzero(table_missing))
+        limit_table_source = ("stk_limit_partial"
+                              if limit_table_missing_cells
+                              else "stk_limit")
+    else:
+        limit_table_missing_cells = 0
+        limit_table_source = "self_computed"
+
+    # ── 一字诊断（D4；降级模式关闭）──────────────────────
+    one_word_disabled = policy.mode == "execution_only_open"
     one_word_up = 0
     one_word_down = 0
-    for t in range(T):
-        up, down, unk = compute_limits(prev[t], pct_mat[t], ref=ref_mat[t])
-        judge = ~unk & ~no_limit[t] & ~suspend_a[t]
-        same = high_a[t] == low_a[t]
-        one_word_up += int(np.count_nonzero(
-            judge & same & (np.abs(high_a[t] - up) <= eps)))
-        one_word_down += int(np.count_nonzero(
-            judge & same & (np.abs(low_a[t] - down) <= eps)))
+    eps = policy.eps
+    if limit_up_a is not None:
+        merged_up = limit_up_a.copy()
+        merged_down = limit_down_a.copy()
+    else:
+        merged_up = merged_down = None
+    if limit_up_a is not None or not one_word_disabled:
+        for t in range(T):
+            up, down, unk = compute_limits(prev[t], pct_mat[t],
+                                           ref=ref_mat[t])
+            if limit_up_a is not None:
+                # 缺格回退自算（D5）；外部格逐格优先（INV-10）
+                up = np.where(np.isfinite(limit_up_a[t]), limit_up_a[t], up)
+                down = np.where(np.isfinite(limit_down_a[t]),
+                                limit_down_a[t], down)
+                merged_up[t] = up
+                merged_down[t] = down
+            if one_word_disabled:
+                continue
+            judge = ~unk & ~no_limit[t] & ~suspend_a[t]
+            same = high_a[t] == low_a[t]
+            one_word_up += int(np.count_nonzero(
+                judge & same & (np.abs(high_a[t] - up) <= eps)))
+            one_word_down += int(np.count_nonzero(
+                judge & same & (np.abs(low_a[t] - down) <= eps)))
+    limit_up_a, limit_down_a = merged_up, merged_down
+
+    # ── 覆盖率 + 数据分级（D0-D5）────────────────────────
+    eligible = np.isfinite(close_a) & ~suspend_a
+    high_low_coverage = _coverage(
+        np.isfinite(high_a) & np.isfinite(low_a), eligible)
+    open_coverage = _coverage(np.isfinite(open_a), eligible)
+    if T > 1:
+        prev_eligible = eligible.copy()
+        prev_eligible[0] = False
+        prev_close_coverage = _coverage(np.isfinite(prev), prev_eligible)
+    else:
+        prev_close_coverage = 0.0
+
+    suspend_missing_cells = int(np.count_nonzero(suspend_missing))
+    name_missing_cells = int(np.count_nonzero(name_missing))
+    tiers = []
+    if ref_fallback_cells > 0 or adj_source == "ref_fallback":
+        tiers.append(1)
+    if name_missing_cells > 0:
+        tiers.append(2)
+    if suspend_missing_cells > 0:
+        tiers.append(3)
+    if list_date is None or no_limit_source != "list_date":
+        tiers.append(4)
+    tier = min(tiers) if tiers else 0      # D1 最差（DESIGN §6.2）
+    data_tier = "D%d" % tier
+    if tier == 0:
+        bias_direction = "none"
+    elif tier <= 3:
+        bias_direction = "optimistic"
+    else:
+        bias_direction = "conservative"
+
+    missing_fields = []
+    if adj is None:
+        missing_fields.append("adj")
+    if name_missing_cells > 0 or name is None:
+        missing_fields.append("name")
+    if suspend_missing_cells > 0 or suspend is None:
+        missing_fields.append("suspend")
+    if list_date is None:
+        missing_fields.append("list_date")
+    if high_low_coverage < 1.0 or open_coverage < 1.0:
+        missing_fields.append("ohlc")
+
+    if adj is None:
+        price_basis_detail = "raw_close"
+    elif ref_fallback_cells > 0:
+        price_basis_detail = "raw_adj_ref_with_fallback"
+    else:
+        price_basis_detail = "raw_adj_ref_full"
 
     meta = {
         "board_counts": board_counts,
@@ -143,20 +316,49 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         "delisting_stock_days": int(is_delisting.sum()),
         "no_limit_cells": int(no_limit.sum()),
         "no_limit_source": no_limit_source,
-        "adj_missing_days": int(np.any(
-            ~np.isfinite(adj_a) | (adj_a <= 0.0), axis=1).sum()),
+        "adj_missing_days": (T if adj is None else int(np.any(
+            ~np.isfinite(adj_a) | (adj_a <= 0.0), axis=1).sum())),
         "one_word_up_cells": one_word_up,
         "one_word_down_cells": one_word_down,
         "st_date_unverified": st_date_unverified,
         "st_calibration_source": st_calibration_source,
-        "price_basis": "raw_adj_ref",
+        "price_basis": ("raw_close" if adj is None else "raw_adj_ref"),
         "rounding_basis": ("inferred_half_up" if board_counts.get("bse", 0)
                            else "exchange_half_up"),
+    }
+
+    diagnostics = {
+        "schema_version": 2,
+        "mode": policy.mode,
+        "one_word_disabled": bool(one_word_disabled),
+        "high_low_coverage": high_low_coverage,
+        "open_coverage": open_coverage,
+        "prev_close_coverage": prev_close_coverage,
+        "adj_source": adj_source,
+        "data_tier": data_tier,
+        "missing_fields": missing_fields,
+        "bias_direction": bias_direction,
+        "price_basis_detail": price_basis_detail,
+        "unknown_policy": policy.unknown_policy,
+        "ref_fallback_cells": ref_fallback_cells,
+        "ref_fallback_days": ref_fallback_days,
+        "name_missing_cells": name_missing_cells,
+        "name_missing_days": int(name_missing.any(axis=1).sum()),
+        "suspend_missing_cells": suspend_missing_cells,
+        "suspend_missing_days": int(suspend_missing.any(axis=1).sum()),
+        "rule_gap_cells": rule_gap_cells,
+        "rule_gap_days": rule_gap_days,
+        "rule_gap_reason": rule_gap_reason,
+        "limit_table_source": limit_table_source,
+        "limit_table_missing_cells": limit_table_missing_cells,
     }
 
     inputs = TradabilityInputs(
         close=close_a, high=high_a, low=low_a, open_=open_a, volume=volume_a,
         suspended=suspend_a, dates=dates_arr, board=boards, is_st=is_st,
         adj=adj_a, is_delisting=is_delisting, no_limit=no_limit,
-        policy=policy, meta=meta)
+        policy=policy, meta=meta, ref=ref_mat,
+        limit_up=limit_up_a, limit_down=limit_down_a,
+        codes=np.array([str(c) for c in columns], dtype=object),
+        diagnostics=diagnostics)
     return inputs, meta

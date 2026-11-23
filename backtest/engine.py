@@ -35,7 +35,7 @@ from .factor_metrics import (
     compute_long_short_returns,
     compute_spread,
 )
-from .tradability import apply_tradability
+from .tradability import apply_tradability_with_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -137,13 +137,36 @@ class FactorBacktestEngine:
                 raise ValueError(
                     f"tradability_inputs.{field} 形状应为 {expected} "
                     f"(实际 {shape})")
-        if inputs.adj is None:
+        if inputs.adj is None and getattr(inputs, "ref", None) is None:
             raise ValueError(
-                "tradability 需要 adj（判定需除权参考价基准）")
-        if np.shape(inputs.adj) != expected:
+                "tradability 需要 adj 或 ref（判定需除权参考价基准）")
+        if inputs.adj is not None and np.shape(inputs.adj) != expected:
             raise ValueError(
                 f"tradability_inputs.adj 形状应为 {expected} "
                 f"(实际 {np.shape(inputs.adj)})")
+        ref = getattr(inputs, "ref", None)
+        if ref is not None and np.shape(ref) != expected:
+            raise ValueError(
+                f"tradability_inputs.ref 形状应为 {expected} "
+                f"(实际 {np.shape(ref)})")
+        limit_up = getattr(inputs, "limit_up", None)
+        limit_down = getattr(inputs, "limit_down", None)
+        if (limit_up is None) != (limit_down is None):
+            raise ValueError("tradability_inputs.limit_up/limit_down 必须成对")
+        for field in ("limit_up", "limit_down"):
+            value = getattr(inputs, field, None)
+            if value is not None and np.shape(value) != expected:
+                raise ValueError(
+                    f"tradability_inputs.{field} 形状应为 {expected} "
+                    f"(实际 {np.shape(value)})")
+        codes = getattr(inputs, "codes", None)
+        if codes is not None:
+            if np.shape(codes) != (self.n_stocks,):
+                raise ValueError(
+                    f"tradability_inputs.codes 形状应为 {(self.n_stocks,)} "
+                    f"(实际 {np.shape(codes)})")
+            if len(set(map(str, np.asarray(codes).tolist()))) != self.n_stocks:
+                raise ValueError("tradability_inputs.codes 含重复代码")
         if np.shape(inputs.dates) != (self.n_dates,):
             raise ValueError(
                 f"tradability_inputs.dates 形状应为 {(self.n_dates,)} "
@@ -285,26 +308,40 @@ class FactorBacktestEngine:
         # 换手率（启用 tradability 时对多头腿推进，空头腿原样透传）
         positions = self._build_positions(factor)
         tradability_block = None
-        if self._tradability_inputs is None:
+        inputs = self._tradability_inputs
+        policy_mode = getattr(getattr(inputs, "policy", None), "mode", None)
+        if inputs is None or policy_mode == "off":
+            # mode=off 视同未启用：不挂块、走旧 turnover 路径（INV-13）
             turnover = compute_turnover(positions)
         else:
-            inputs = self._tradability_inputs
             prev_close = np.full((self.n_dates, self.n_stocks), np.nan)
             if self.n_dates > 1:
                 prev_close[1:] = inputs.close[:-1]
-            effective_long, report = apply_tradability(
-                np.clip(positions, 0.0, None),
-                prev_close, inputs.high, inputs.low, inputs.close,
-                inputs.open_, inputs.volume, inputs.suspended, inputs.board,
-                inputs.is_st, inputs.dates, policy=inputs.policy,
-                adj=inputs.adj, is_delisting=inputs.is_delisting,
-                no_limit=inputs.no_limit)
+            effective_long, report, apply_diag = \
+                apply_tradability_with_diagnostics(
+                    np.clip(positions, 0.0, None),
+                    prev_close, inputs.high, inputs.low, inputs.close,
+                    inputs.open_, inputs.volume, inputs.suspended, inputs.board,
+                    inputs.is_st, inputs.dates, policy=inputs.policy,
+                    adj=inputs.adj, is_delisting=inputs.is_delisting,
+                    no_limit=inputs.no_limit, ref=getattr(inputs, "ref", None),
+                    limit_up=getattr(inputs, "limit_up", None),
+                    limit_down=getattr(inputs, "limit_down", None))
             effective = effective_long + np.minimum(positions, 0.0)
             turnover = compute_turnover(effective)
+            diag = dict(getattr(inputs, "diagnostics", None) or {})
+            diag.update(apply_diag)
+            # 审计 P1-①（INV-10）：partial 限价表标记不得被 apply 的全量标记覆盖
+            if (diag.get("limit_table_missing_cells") or 0) > 0:
+                diag["limit_table_source"] = "stk_limit_partial"
+            diag["close_mismatch_cells"] = int(np.count_nonzero(
+                ~np.isclose(inputs.close, self._close, equal_nan=True)))
+            meta = inputs.meta or {}
             tradability_block = {
                 'report': report,
-                'meta': inputs.meta,
-                'price_basis': 'raw_adj_ref',
+                'meta': meta,
+                'diagnostics': diag,
+                'price_basis': meta.get('price_basis', 'raw_adj_ref'),
                 'leg_scope': 'long_only',
                 'short_leg_unmodeled': True,
                 'turnover_basis': 'effective_long_only',

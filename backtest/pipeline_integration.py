@@ -43,13 +43,16 @@ class PipelineBacktestRunner:
         results = runner.run(processed_factors, price_data)
     """
 
-    def __init__(self, config: Optional[Any] = None):
+    def __init__(self, config: Optional[Any] = None,
+                 tradability_spec=None):
         """初始化运行器。
 
         Args:
             config: PipelineV2ConfigUnified 或 BacktestConfig 实例
+            tradability_spec: 可选 TradabilitySpec；None 时旧路径逐位不变
         """
         self.config = config
+        self.tradability_spec = tradability_spec
 
         # 提取回测配置
         bt_config = self._extract_backtest_config(config)
@@ -137,12 +140,16 @@ class PipelineBacktestRunner:
 
         # 3. 创建回测引擎并运行
         engine_config = self._extract_backtest_config(self.config)
+        tradability_inputs = None
+        if self.tradability_spec is not None:
+            tradability_inputs, _ = self.tradability_spec.build(
+                price_data.columns, price_data.index)
         engine = FactorBacktestEngine(dl, config={
             'ic_method': engine_config.get('ic_method', 'rank'),
             'top_n': engine_config.get('top_n', 0.2),
             'ls_method': engine_config.get('ls_method', 'top_n'),
             'max_lag': engine_config.get('max_lag', 12),
-        })
+        }, tradability_inputs=tradability_inputs)
         engine_results = engine.run()
 
         # 4. 因子排序

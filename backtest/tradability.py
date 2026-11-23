@@ -11,7 +11,8 @@ import numpy as np
 
 __all__ = ["LimitRule", "DEFAULT_LIMIT_RULES", "rule_pct", "limit_price",
            "board_of", "compute_limits", "TradabilityInputs",
-           "TradabilityPolicy", "can_trade", "apply_tradability", "CostModel"]
+           "TradabilityPolicy", "can_trade", "apply_tradability",
+           "apply_tradability_with_diagnostics", "CostModel"]
 
 _EPS = 1e-8
 
@@ -35,8 +36,8 @@ DEFAULT_LIMIT_RULES = (
     LimitRule("gem", False, 0.20, "2020-08-24"),
     LimitRule("gem", True, 0.05, "2009-10-30", "2020-08-23"),
     LimitRule("gem", True, 0.20, "2020-08-24"),
-    LimitRule("bse", False, 0.30, "2021-11-15"),
-    LimitRule("bse", True, 0.30, "2021-11-15"),
+    LimitRule("bse", False, 0.30, "2020-07-27"),
+    LimitRule("bse", True, 0.30, "2020-07-27"),
 )
 
 
@@ -73,6 +74,14 @@ def rule_pct(board, is_st, date):
             return float(rule.pct)
     raise ValueError("无涨跌幅规则: board=%s is_st=%s date=%s"
                      % (board, is_st, date_str))
+
+
+def rule_pct_or_nan(board, is_st, date):
+    """规则缺档 → NaN（仅供 _pct_matrix 使用；不改 rule_pct 契约）。"""
+    try:
+        return rule_pct(board, is_st, date)
+    except ValueError:
+        return float("nan")
 
 
 _BOARD_CODES = {"main": 0, "star": 1, "gem": 2, "bse": 3}
@@ -193,14 +202,16 @@ def compute_limits(prev_close, pct, ref=None, is_st=None,
 
 @dataclass(frozen=True)
 class TradabilityPolicy(object):
-    execute_at: str = "next_open"     # next_open | same_close（后者仅测试对照）
+    execute_at: str = "same_close"    # next_open | same_close（后者为库默认）
     t_plus_1: bool = True
     renormalize: bool = False
     eps: float = _EPS
+    unknown_policy: str = "pass"      # pass | fallback_raw | block
+    mode: str = "full"                # full | execution_only_open | off
 
 
-def _pct_matrix(board, is_st, is_delisting, dates):
-    """按 (board, ST, 退市) 状态逐日查规则；unknown 板块留 NaN。"""
+def _pct_matrix(board, is_st, is_delisting, dates, return_gaps=False):
+    """按 (board, ST, 退市) 状态逐日查规则；无规则留 NaN 并标记 gap。"""
     board_arr = np.asarray(board)
     T = len(dates)
     N = board_arr.shape[0]
@@ -219,15 +230,24 @@ def _pct_matrix(board, is_st, is_delisting, dates):
     codes = np.array([_BOARD_CODES.get(str(b), -1) for b in board_arr],
                      dtype=int)
     pct = np.full((T, N), np.nan)
+    gaps = np.zeros((T, N), dtype=bool)
     for t in range(T):
         date_str = _as_date_str(dates[t])
         state = codes * 2 + eff_st[t].astype(int)
         for raw in np.unique(state):
             code = int(raw)
             if code < 0:
+                gaps[t, state == code] = True
                 continue
-            pct[t, state == code] = rule_pct(
+            value = rule_pct_or_nan(
                 _BOARD_NAMES[code // 2], bool(code % 2), date_str)
+            mask = state == code
+            if np.isfinite(value):
+                pct[t, mask] = value
+            else:
+                gaps[t, mask] = True
+    if return_gaps:
+        return pct, gaps
     return pct
 
 
@@ -271,6 +291,11 @@ class TradabilityInputs(object):
     no_limit: np.ndarray = None
     policy: TradabilityPolicy = None
     meta: dict = None
+    ref: np.ndarray = None            # (T,N) 含 fallback 的参考价
+    limit_up: np.ndarray = None       # (T,N) 外部限价（stk_limit）
+    limit_down: np.ndarray = None
+    codes: np.ndarray = None          # (N,) 代码
+    diagnostics: dict = None          # 构建器诊断
 
 
 def can_trade(prev_close, high, low, volume, suspended, pct, policy=None):
@@ -301,21 +326,31 @@ def _as_bool_matrix(value, T, N, name):
                      % (name, N, T, N, arr.shape))
 
 
-def apply_tradability(target_w, prev_close, high, low, close, open_, volume,
-                      suspended, board, is_st, dates, policy=None,
-                      adj=None, is_delisting=None, no_limit=None, ref=None):
-    """权重推进：返回 (effective_w, report)，report 九键均为 int。
+def apply_tradability_with_diagnostics(
+        target_w, prev_close, high, low, close, open_, volume, suspended,
+        board, is_st, dates, policy=None, adj=None, is_delisting=None,
+        no_limit=None, ref=None, limit_up=None, limit_down=None):
+    """权重推进：返回 (effective_w, report, diagnostics)。
 
-    新增可选入参（默认 None 时权重推进路径与 v3.9.8 逐位一致）：
-      adj / ref:     除权参考价（ref 优先）；adj 单侧缺失 → limit_unknown。
-      is_st:         (N,) 或 (T,N)。
-      is_delisting:  退市按板块普通档（不套 ST）。
-      no_limit:      (T,N) 无涨跌幅限制日（IPO 前 5 日 / 退市整理首日）。
-    board 允许 'unknown'：该格限价不可判定，计入 limit_unknown，不抛错。
+    execute_at:
+      same_close（库默认）: high/low 判定、target 不后移；与 v3.9.10 逐位一致。
+      next_open:           target 后移 1 日（首日 0、末信号丢弃）、open 成交。
+    mode:
+      full / execution_only_open（一字诊断关闭）/ off（no-op）。
+    ref/adj 都 None 时按 v3.9.10 行为（不除权对齐）；limit_up/down 成对提供时
+    逐格优先（缺格由调用方回退自算后传入）。
     """
     policy = policy or TradabilityPolicy()
     if policy.execute_at not in ("next_open", "same_close"):
         raise ValueError("execute_at 非法: %r" % (policy.execute_at,))
+    if policy.unknown_policy not in ("pass", "fallback_raw", "block"):
+        raise ValueError("unknown_policy 非法: %r" % (policy.unknown_policy,))
+    if policy.mode not in ("full", "execution_only_open", "off"):
+        raise ValueError("mode 非法: %r" % (policy.mode,))
+    if (policy.mode == "execution_only_open"
+            and policy.execute_at != "next_open"):
+        raise ValueError("execution_only_open 需要 execute_at='next_open'")
+
     target_w = np.asarray(target_w, dtype=float)
     if target_w.ndim != 2:
         raise ValueError("target_w 必须为 (T,N) (实际 ndim=%d)" % target_w.ndim)
@@ -358,43 +393,109 @@ def apply_tradability(target_w, prev_close, high, low, close, open_, volume,
         if adj.shape != (T, N):
             raise ValueError("adj 形状应为 %r (实际 %r)"
                              % ((T, N), adj.shape))
+    if (limit_up is None) != (limit_down is None):
+        raise ValueError("limit_up 与 limit_down 必须成对提供")
+    if limit_up is not None:
+        limit_up = np.asarray(limit_up, dtype=float)
+        limit_down = np.asarray(limit_down, dtype=float)
+        if limit_up.shape != (T, N) or limit_down.shape != (T, N):
+            raise ValueError("limit_up/limit_down 形状应为 %r (实际 %r/%r)"
+                             % ((T, N), limit_up.shape, limit_down.shape))
 
-    if ref is not None:
-        ref_mat = ref
-    elif adj is not None:
-        ref_mat = _ref_from_adj(prev_close, adj)
+    report = {"blocked_buy": 0, "blocked_sell": 0, "blocked_suspend": 0,
+              "t1_locked": 0, "deferred": 0, "carried": 0,
+              "limit_unknown": 0, "one_word_up": 0, "one_word_down": 0}
+    diagnostics = {
+        "schema_version": 2,
+        "mode": policy.mode,
+        "one_word_disabled": policy.mode == "execution_only_open",
+        "execution_timing": ("t_plus_1_open"
+                             if policy.execute_at == "next_open"
+                             else "same_close"),
+        "limit_table_source": ("stk_limit" if limit_up is not None
+                               else "self_computed"),
+        "exec_up_touch_cells": 0,
+        "exec_down_touch_cells": 0,
+        "high_up_touch_cells": 0,
+        "low_down_touch_cells": 0,
+        "exec_price_missing_cells": 0,
+    }
+    if policy.mode == "off":
+        # DESIGN §4.2 锁定契约：off no-op 仅 2 键（审计 P2-① 收窄对齐）
+        return target_w.copy(), report, {"mode": "off",
+                                         "schema_version": 2}
+
+    if policy.execute_at == "next_open":
+        target_all = np.zeros_like(target_w)
+        if T > 1:
+            target_all[1:] = target_w[:-1]
+        exec_buy = open_
+        exec_sell = open_
+        exec_missing = ~np.isfinite(exec_buy) | ~np.isfinite(exec_sell)
     else:
+        target_all = target_w
+        exec_buy = high
+        exec_sell = low
+        exec_missing = np.zeros((T, N), dtype=bool)
+
+    if limit_up is not None:
+        pct_mat = None
         ref_mat = None
-    pct_mat = _pct_matrix(board, st_mat, del_mat, dates)
+    else:
+        pct_mat = _pct_matrix(board, st_mat, del_mat, dates)
+        if ref is not None:
+            ref_mat = ref
+        elif adj is not None:
+            ref_mat = _ref_from_adj(prev_close, adj)
+        else:
+            ref_mat = None
 
     effective = np.zeros((T, N))
     pending = np.zeros(N)
     locked_until = np.full(N, -1, dtype=int)
     w_prev = np.zeros(N)
-    report = {"blocked_buy": 0, "blocked_sell": 0, "blocked_suspend": 0,
-              "t1_locked": 0, "deferred": 0, "carried": 0,
-              "limit_unknown": 0, "one_word_up": 0, "one_word_down": 0}
 
     for t in range(T):
-        pct_t = pct_mat[t]
-        ref_t = None if ref_mat is None else ref_mat[t]
-        up, down, unk = compute_limits(prev_close[t], pct_t, ref=ref_t)
-        unk = unk | ~np.isfinite(pct_t)
+        if limit_up is not None:
+            up = limit_up[t]
+            down = limit_down[t]
+            unk = ~np.isfinite(up) | ~np.isfinite(down)
+        else:
+            ref_t = None if ref_mat is None else ref_mat[t]
+            up, down, unk = compute_limits(prev_close[t], pct_mat[t],
+                                           ref=ref_t)
+            unk = unk | ~np.isfinite(pct_mat[t])
         susp = suspended[t]
         judge = ~unk & ~nolim[t]
-        can_buy = ~susp & (~judge | ~(high[t] >= up - policy.eps))
-        can_sell = ~susp & (~judge | ~(low[t] <= down + policy.eps))
+        missing_exec = ~susp & judge & exec_missing[t]
+        can_buy = (~susp & (~judge | ~(exec_buy[t] >= up - policy.eps))
+                   & ~missing_exec)
+        can_sell = (~susp & (~judge | ~(exec_sell[t] <= down + policy.eps))
+                    & ~missing_exec)
+        if policy.unknown_policy == "block":
+            can_buy = can_buy & judge
+            can_sell = can_sell & judge
         if policy.t_plus_1:
             can_sell = can_sell & (locked_until <= t)
-        target = target_w[t]
+        target = target_all[t]
 
-        same_price = high[t] == low[t]
-        report["one_word_up"] += int(np.count_nonzero(
-            judge & ~susp & same_price & (np.abs(high[t] - up)
-                                          <= policy.eps)))
-        report["one_word_down"] += int(np.count_nonzero(
-            judge & ~susp & same_price & (np.abs(low[t] - down)
-                                          <= policy.eps)))
+        diagnostics["exec_up_touch_cells"] += int(np.count_nonzero(
+            judge & ~susp & (exec_buy[t] >= up - policy.eps)))
+        diagnostics["exec_down_touch_cells"] += int(np.count_nonzero(
+            judge & ~susp & (exec_sell[t] <= down + policy.eps)))
+        diagnostics["high_up_touch_cells"] += int(np.count_nonzero(
+            judge & ~susp & (high[t] >= up - policy.eps)))
+        diagnostics["low_down_touch_cells"] += int(np.count_nonzero(
+            judge & ~susp & (low[t] <= down + policy.eps)))
+
+        if policy.mode == "full":
+            same_price = high[t] == low[t]
+            report["one_word_up"] += int(np.count_nonzero(
+                judge & ~susp & same_price & (np.abs(high[t] - up)
+                                              <= policy.eps)))
+            report["one_word_down"] += int(np.count_nonzero(
+                judge & ~susp & same_price & (np.abs(low[t] - down)
+                                              <= policy.eps)))
 
         # 意图反转 → 旧 pending 清零（先于补单）
         desired = target - w_prev
@@ -402,7 +503,9 @@ def apply_tradability(target_w, prev_close, high, low, close, open_, volume,
             np.sign(pending) != np.sign(desired))
         pending = np.where(reversed_, 0.0, pending)
 
-        # 1) 先补 pending
+        # 1) 先补 pending（阻塞格只在本阶段计数）
+        diagnostics["exec_price_missing_cells"] += int(np.count_nonzero(
+            (pending != 0.0) & missing_exec))
         fill = np.zeros(N)
         buy_fill = (pending > 0.0) & can_buy
         sell_fill = (pending < 0.0) & can_sell
@@ -432,14 +535,17 @@ def apply_tradability(target_w, prev_close, high, low, close, open_, volume,
             blocked_sell = blocked_sell & ~t1_mask
         blocked_suspend = busy & susp
         limit_unknown = busy & ~susp & ~nolim[t] & unk
+        # 成交格在 pending 阶段已清零 → 本阶段只计新意图（同格不双计）
+        diagnostics["exec_price_missing_cells"] += int(np.count_nonzero(
+            busy & (pending == 0.0) & missing_exec))
 
-        exec_buy = np.where(buy & can_buy, delta, 0.0)
-        exec_sell = np.where(sell & can_sell_now, delta, 0.0)
-        w_eff = w_eff + exec_buy + exec_sell
+        exec_buy_w = np.where(buy & can_buy, delta, 0.0)
+        exec_sell_w = np.where(sell & can_sell_now, delta, 0.0)
+        w_eff = w_eff + exec_buy_w + exec_sell_w
         # pending 存「精确未成交缺口」（target - w_eff），而非逐日累加，
         # 避免连续不可成交日重复累计同一笔意图（design §7.4 第 4 步）。
         pending = target - w_eff
-        locked_until[exec_buy > 0.0] = t + 1
+        locked_until[exec_buy_w > 0.0] = t + 1
 
         if policy.renormalize:
             gross = float(np.abs(w_eff).sum())
@@ -457,7 +563,20 @@ def apply_tradability(target_w, prev_close, high, low, close, open_, volume,
 
     if T:
         report["carried"] = int(np.count_nonzero(
-            np.abs(effective[-1] - target_w[-1]) > 1e-12))
+            np.abs(effective[-1] - target_all[-1]) > 1e-12))
+    return effective, report, diagnostics
+
+
+def apply_tradability(target_w, prev_close, high, low, close, open_, volume,
+                      suspended, board, is_st, dates, policy=None,
+                      adj=None, is_delisting=None, no_limit=None, ref=None,
+                      limit_up=None, limit_down=None):
+    """兼容包装：返回 (effective_w, report)；policy 仍为第 12 位。"""
+    effective, report, _ = apply_tradability_with_diagnostics(
+        target_w, prev_close, high, low, close, open_, volume, suspended,
+        board, is_st, dates, policy=policy, adj=adj,
+        is_delisting=is_delisting, no_limit=no_limit, ref=ref,
+        limit_up=limit_up, limit_down=limit_down)
     return effective, report
 
 

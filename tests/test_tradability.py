@@ -8,6 +8,7 @@ from backtest.tradability import (
     LimitRule,
     TradabilityInputs,
     TradabilityPolicy,
+    _pct_matrix,
     _validate_rules,
     apply_tradability,
     board_of,
@@ -445,11 +446,16 @@ def test_error_table_contracts():
     assert report["blocked_suspend"] == 1
     assert report["limit_unknown"] == 0
 
-    # 已映射板块规则无命中 → ValueError（沿用 rule_pct）
-    with pytest.raises(ValueError):
-        apply_tradability(**kwargs(board=np.array(["bse"]),
-                                   dates=np.array(["2020-01-06",
-                                                   "2020-01-07"])))
+    # BSE 2020-07-27 前：规则 gap → 不抛错（P-021 D3 / O-9 解阻断）
+    pct, gap = _pct_matrix(np.array(["bse"]),
+                           np.zeros((2, 1), dtype=bool), None,
+                           np.array(["2020-01-06", "2020-01-07"]),
+                           return_gaps=True)
+    assert gap.all() and np.isnan(pct).all()
+    _, report = apply_tradability(
+        **kwargs(target_w=np.array([[0.0], [0.5]]), board=np.array(["bse"]),
+                 dates=np.array(["2020-01-06", "2020-01-07"])))
+    assert report["limit_unknown"] >= 1
 
 
 # ---------------------------------------------------------------------------

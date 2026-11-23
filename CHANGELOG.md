@@ -1,5 +1,40 @@
 # 开发日志 (Changelog)
 
+## v3.10.0 — tradability 生产启用（C 内部对拍 + A 证据层）(已实施, 2026-11-23)
+
+### 概览
+
+承接 P-021（[spec/p021-tradability-production-enablement](spec/p021-tradability-production-enablement/)），包版本 **3.9.10 → 3.10.0**（minor：启用态新增能力）。把 P-006/P-020 交付但默认关闭的 tradability 接成「生产可开关的证据层」：**只改变 `turnover` 并新增 `diagnostics` 披露块，不改 IC / spread / `long_short_returns`**；默认路径（`tradability_inputs=None` / `tradability_spec=None`）逐位不变。
+
+### 变更
+
+- **D3 北交所规则前移**：`DEFAULT_LIMIT_RULES` 的 bse 两条 `effective_from` 由 2021-11-15 前移至 **2020-07-27**；更早日期不再抛 `ValueError`，改由 `_pct_matrix(..., return_gaps=True)` 记 gap + NaN（`rule_pct` 直接调用仍 fail-closed）。
+- **D1 执行时点**：`apply_tradability_with_diagnostics` 新增 `next_open`（target 后移 1 日、首日 0、末信号丢弃、执行价 `open`）；库默认仍 `same_close`（与 v3.9.10 逐位一致）。`apply_tradability` 保留 2 元组与 `policy` 第 12 位。
+- **D2 未知限价**：`TradabilityPolicy.unknown_policy ∈ {pass, fallback_raw, block}`；构建器在 `fallback_raw` 下用昨收填充 `ref`（`ref_fallback_cells/days`）。
+- **D4 一字只披露**：新增 `exec_*_touch_cells` / `high_*_touch_cells` / `exec_price_missing_cells`；一字不改变成交谓词。
+- **D5 停牌语义**：构建器只把 `'S'` 当停牌（`'R'`/None 可交易）；bool 面板 `True` 仍停牌，且按**原始 dtype 逐列判定**（reindex 升型不丢 True）。限价表 CSV 增加 `trade_date` 归一与重复键去重（`limit_table_duplicate_rows`）。
+- **D6 降级模式**：`TradabilityPolicy.mode ∈ {full, execution_only_open, off}`；新增 `backtest/tradability_loader.py`（`TradabilitySpec`：面板缓存、覆盖率、模式解析、`stk_limit` CSV/Parquet）。`execution_only_open` 用 T+1 开盘成交并关闭一字诊断；`off` 不挂块、旧路径；降级必须有 `mode/mode_requested/degrade_reason` 或 loader warning。
+- **引擎块 v2**：`result['tradability']` 新增 `diagnostics`（`schema_version=2`）与 `close_mismatch_cells`；`report` 9 键 / `meta` 13 键冻结。
+- **管道/并行接线**：`PipelineBacktestRunner(..., tradability_spec=None)`、`ParallelFactorRunner(..., tradability_spec=None)`、`run_parallel(..., tradability_spec=None)`；并行 worker 返回契约不变（块证据走单进程）。
+- **C 批**：新增 `scripts/verify_tradability_consistency.py`（`ref_adj` vs `ref_ret` 对拍 + BSE 边界）与 `tests/test_tradability_consistency.py`（规则边界 + mock 限价表扰动）。
+
+### 行为影响（显式披露）
+
+- 启用态：`turnover` 由有效多头（`next_open` 后移）计算；`report/meta` 键集合不变，新增 `diagnostics`。
+- `next_open` 下 `open` 非有限 → 该格阻塞并计 `exec_price_missing_cells`；`same_close` 保持「无证据不阻塞」（NaN high/low 仍放行）。
+- BSE 2020-07-27 之前的历史格由 `ValueError` 改为 gap 披露（O-9 解阻断）。
+- 默认路径（未传 `tradability_inputs`/`tradability_spec`）**逐位不变**；零新增运行时依赖。
+
+### 版本
+
+- 3.10.0 落 6 个代码/配置锚点（`pyproject.toml`、`__init__.py`、`config_v2.py`、`reporting.py`、两处测试 `EXPECTED_VERSION`）+ 本条目。
+
+### 验证
+
+- 新增/改写测试：C 批一致性 **8**、A1 BSE/停牌 **7**、A2 next_open **11**、A3 fallback **5** + mode **10**、A4 loader **6** + pipeline **6**（新增合计 **53**；`-k "p021"` → 53 passed / 6 skipped）；既有 `test_tradability.py` bse 断言按 DESIGN §10.3 改写。
+- 全量回归：`python -m pytest -q --no-header` → Step 9 基线 **2201 passed / 34 skipped / 0 failed**（1581.31 s）；**Step 10 审计修复后重跑 2204 passed / 34 skipped / 0 failed**（1274.65 s，+3 = 审计新增测试）；红→绿与定向读数见 CHECKLIST §12.1。
+- **Step 10 独立 ADD 审计 PASS_WITH_FIXES**（异构基座只读子代理，质量门 **4.3/5 档位 A**，1×P1/2×P2/5×P3 全部处置，见 CHECKLIST §12.2）：P1-① 引擎合并恢复 `stk_limit_partial` 标记（INV-10）+ 块级测试；P2-① off no-op diagnostics 收窄为 2 键（对齐 DESIGN §4.2）；**loader 面板 index 归一化**（真实数据根字符串日期 → 恒 `off` 的生产阻断已修复，修复后 `mode=full`、eligible 7,203,655 格）；K-5 默认工件 SHA `82728CE1…` 重跑逐位一致；P-1 全样本构建 15.90 s（≤30 s）；P-2 worker 内存实测 3348 MB > 1 GB 预算 → 登记待办（缓存切片化 / float32 / 分块）。
+
 ## v3.9.10 — tradability 小口径收尾 + 台账同步（P-020）(已实施, 2026-11-23)
 
 ### 概览

@@ -35,12 +35,13 @@ def _run_worker(args: tuple) -> Dict[str, Dict[str, float]]:
     """Worker 进程入口: 对一组因子执行回测评估。
 
     Args:
-        args: (factor_names, factor_data, price_data, fwd_returns, config)
+        args: (factor_names, factor_data, price_data, fwd_returns, config,
+               tradability_spec)
 
     Returns:
         {factor_name: {metric: value, ...}, ...}
     """
-    factor_names, factor_data, price_data, fwd_returns, config = args
+    factor_names, factor_data, price_data, fwd_returns, config, spec = args
 
     # Worker 进程内重新导入（Windows spawn 需要）
     from factor_pipeline.backtest.data_bridge import DataBridge
@@ -65,7 +66,12 @@ def _run_worker(args: tuple) -> Dict[str, Dict[str, float]]:
         if fwd_returns is not None and fwd_returns.shape == (n_dates - 1, n_stocks):
             shared_fwd = fwd_returns
 
-        engine = FactorBacktestEngine(dl, config=config, fwd_returns=shared_fwd)
+        tradability_inputs = None
+        if spec is not None:
+            tradability_inputs, _ = spec.build(cd, cs)
+
+        engine = FactorBacktestEngine(dl, config=config, fwd_returns=shared_fwd,
+                                      tradability_inputs=tradability_inputs)
         engine.run()
         results[fn] = engine.summary()[fn]
 
@@ -90,13 +96,16 @@ class ParallelFactorRunner:
         results = run_parallel(factor_data, price_data, n_workers=4)
     """
 
-    def __init__(self, n_workers: Optional[int] = None):
+    def __init__(self, n_workers: Optional[int] = None,
+                 tradability_spec=None):
         """初始化并行运行器。
 
         Args:
             n_workers: worker 进程数。默认: CPU 核心数
+            tradability_spec: 可选 TradabilitySpec；None 时旧路径不变
         """
         self.n_workers = n_workers or max(1, os.cpu_count() or 4)
+        self.tradability_spec = tradability_spec
 
     # ── 公开 API ──────────────────────────────────
 
@@ -217,7 +226,7 @@ class ParallelFactorRunner:
         chunks = self._split_factors(factors, n_workers)
 
         worker_args = [
-            (chunk, factor_data, price_data, fwd, config)
+            (chunk, factor_data, price_data, fwd, config, self.tradability_spec)
             for chunk in chunks
         ]
 
@@ -284,6 +293,7 @@ def run_parallel(
     price_data: pd.DataFrame,
     n_workers: Optional[int] = None,
     config: Optional[Dict[str, Any]] = None,
+    tradability_spec=None,
 ) -> Dict[str, Dict[str, float]]:
     """便捷函数: 并行运行因子回测。
 
@@ -292,9 +302,11 @@ def run_parallel(
         price_data: DataFrame(index=stocks, columns=dates)
         n_workers: worker 进程数
         config: 回测配置
+        tradability_spec: 可选 TradabilitySpec（worker 内按切片 build）
 
     Returns:
         {factor_name: {metric: value, ...}, ...}
     """
-    runner = ParallelFactorRunner(n_workers=n_workers)
+    runner = ParallelFactorRunner(n_workers=n_workers,
+                                  tradability_spec=tradability_spec)
     return runner.run(factor_data, price_data, config=config)
