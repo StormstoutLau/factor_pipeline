@@ -6,14 +6,17 @@ P3: engine.py — TDD 测试套件
 引擎使用 factor_metrics.py 作为指标计算的单一真相源。
 """
 
+import importlib.util
 import unittest
 
 import pytest
 
 # 可选依赖: Factor_Trading_v3_0 (pyproject.toml [backtest] extra)
-# 所有测试均通过 DataBridge.create_dataloader 间接依赖 DataLoaderV3,
-# 未安装 Factor_Trading_v3_0 时跳过整个文件.
-pytest.importorskip("Factor_Trading_v3_0")
+# DataBridge 相关用例依赖 DataLoaderV3；未安装时按类跳过。
+# P-006 Step 9：TP6-9~11 使用 FakeDataLoader，不依赖外部包，始终运行。
+_HAS_EXTERNAL = importlib.util.find_spec("Factor_Trading_v3_0") is not None
+_needs_external = unittest.skipUnless(
+    _HAS_EXTERNAL, "Factor_Trading_v3_0 未安装（可选依赖）")
 
 import numpy as np
 import pandas as pd
@@ -23,6 +26,7 @@ import pandas as pd
 # A. 引擎初始化
 # =============================================================================
 
+@_needs_external
 class TestEngineSetup(unittest.TestCase):
     """测试 A: 引擎初始化"""
 
@@ -169,6 +173,7 @@ class TestEngineSetup(unittest.TestCase):
 # B. IC 计算
 # =============================================================================
 
+@_needs_external
 class TestEngineIC(unittest.TestCase):
     """测试 B: IC 系列指标"""
 
@@ -372,6 +377,7 @@ class TestEngineIC(unittest.TestCase):
 # C. 换手率
 # =============================================================================
 
+@_needs_external
 class TestEngineTurnover(unittest.TestCase):
     """测试 C: 换手率计算"""
 
@@ -514,6 +520,7 @@ class TestEngineTurnover(unittest.TestCase):
 # D. 多空收益
 # =============================================================================
 
+@_needs_external
 class TestEngineLS(unittest.TestCase):
     """测试 D: 多空收益"""
 
@@ -631,6 +638,7 @@ class TestEngineLS(unittest.TestCase):
 # E. 结果结构
 # =============================================================================
 
+@_needs_external
 class TestEngineResults(unittest.TestCase):
     """测试 E: 结果结构完整性"""
 
@@ -728,6 +736,184 @@ class TestEngineResults(unittest.TestCase):
         print(f"\n  手工校验: 因子排序 OK")
         for i, name in enumerate(ranking):
             print(f"    [{i+1}] {name}: ICIR={results[name]['rank_icir']:.4f}")
+
+
+# =============================================================================
+# F. tradability 接入（P-006 Step 9：TP6-9~11）
+# =============================================================================
+
+class _FakeDL:
+    """最小 DataLoader 替身（引擎仅消费 n_dates/n_stocks/price_data/factor_data）。"""
+
+    def __init__(self, factor, close):
+        self.n_dates, self.n_stocks = close.shape
+        self.price_data = {"close": close}
+        self.factor_data = {"f": factor}
+
+
+def _tradability_case():
+    from factor_pipeline.backtest.tradability import TradabilityInputs
+
+    T, N = 4, 4
+    close = np.full((T, N), 10.0)
+    high = np.full((T, N), 10.0)
+    low = np.full((T, N), 9.8)
+    open_ = np.full((T, N), 10.0)
+    volume = np.full((T, N), 1e6)
+    suspended = np.zeros((T, N), dtype=bool)
+    close[1, 0] = 11.0          # t=1 钉涨停（prev=10 → up=11）
+    high[1, 0] = 11.0
+    factor = np.tile(np.array([3.0, 2.0, 1.0, 0.0]), (T, 1))
+    factor[0] = np.array([1.0, 3.0, 2.0, 0.0])   # t=0 多头在 stock1，t=1 切向 stock0
+    dates = np.array(["2026-01-05", "2026-01-06",
+                      "2026-01-07", "2026-01-08"])
+    inputs = TradabilityInputs(
+        close=close, high=high, low=low, open_=open_, volume=volume,
+        suspended=suspended, dates=dates, board=np.array(["main"] * N),
+        is_st=np.zeros((T, N), dtype=bool), adj=np.ones((T, N)))
+    return dict(factor=factor, close=close, high=high, low=low, open_=open_,
+                volume=volume, suspended=suspended, dates=dates, inputs=inputs)
+
+
+def test_tp6_9_engine_calls_tradability():
+    """TP6-9：引擎路径调用限价规则，tradability 报告挂载且换手变化。"""
+    from factor_pipeline.backtest.engine import FactorBacktestEngine
+
+    case = _tradability_case()
+    dl = _FakeDL(case["factor"], case["close"])
+    config = {"ls_method": "top_n", "top_n": 1}
+    base = FactorBacktestEngine(dl, config=config).run()["f"]
+    res = FactorBacktestEngine(
+        dl, config=config, tradability_inputs=case["inputs"]).run()["f"]
+
+    assert "tradability" not in base
+    block = res["tradability"]
+    assert block["report"]["blocked_buy"] >= 1
+    assert block["leg_scope"] == "long_only"
+    assert block["short_leg_unmodeled"] is True
+    assert block["price_basis"] == "raw_adj_ref"
+    assert block["turnover_basis"] == "effective_long_only"
+    assert not np.array_equal(np.asarray(res["turnover"]),
+                              np.asarray(base["turnover"]))
+
+    # 形状负例 / adj 缺失负例 → ValueError（不静默降级）
+    from factor_pipeline.backtest.tradability import TradabilityInputs
+    bad_shape = TradabilityInputs(
+        close=case["close"][:2], high=case["high"], low=case["low"],
+        open_=case["open_"], volume=case["volume"],
+        suspended=case["suspended"], dates=case["dates"],
+        board=case["inputs"].board, is_st=case["inputs"].is_st,
+        adj=case["inputs"].adj)
+    with pytest.raises(ValueError):
+        FactorBacktestEngine(dl, tradability_inputs=bad_shape)
+    no_adj = TradabilityInputs(
+        close=case["close"], high=case["high"], low=case["low"],
+        open_=case["open_"], volume=case["volume"],
+        suspended=case["suspended"], dates=case["dates"],
+        board=case["inputs"].board, is_st=case["inputs"].is_st, adj=None)
+    with pytest.raises(ValueError):
+        FactorBacktestEngine(dl, tradability_inputs=no_adj)
+
+
+def test_tp6_9b_prev_close_derived_from_inputs():
+    """Step 10 P2-①：prev_close 必须派生自 tradability_inputs.close（鉴别用例）。"""
+    from factor_pipeline.backtest.engine import FactorBacktestEngine
+    from factor_pipeline.backtest.tradability import TradabilityInputs
+
+    case = _tradability_case()
+    dl = _FakeDL(case["factor"], case["close"])
+    config = {"ls_method": "top_n", "top_n": 1}
+
+    # 基准：inputs.close 与 dl.close 相同 → t=1 stock0 触涨停封板
+    base = FactorBacktestEngine(
+        dl, config=config, tradability_inputs=case["inputs"]).run()["f"]
+    assert base["tradability"]["report"]["blocked_buy"] == 1
+
+    # 仅改 inputs.close[0,0]（10→12，与 dl.close 脱钩）→ t=1 判定基准 12，
+    # up=13.2 > high=11.0 → 不封板；若引擎误用 dl.close 派生 prev（up=11）则仍封板
+    modified = case["close"].copy()
+    modified[0, 0] = 12.0
+    inputs2 = TradabilityInputs(
+        close=modified, high=case["high"], low=case["low"],
+        open_=case["open_"], volume=case["volume"],
+        suspended=case["suspended"], dates=case["dates"],
+        board=case["inputs"].board, is_st=case["inputs"].is_st,
+        adj=case["inputs"].adj)
+    res = FactorBacktestEngine(
+        dl, config=config, tradability_inputs=inputs2).run()["f"]
+    assert res["tradability"]["report"]["blocked_buy"] == 0
+
+
+def test_tp6_10_short_leg_passthrough():
+    """TP6-10 / INV-7：空头腿透传，不参与限价推进。"""
+    from factor_pipeline.backtest.engine import FactorBacktestEngine
+    from factor_pipeline.backtest.tradability import apply_tradability
+
+    case = _tradability_case()
+    dl = _FakeDL(case["factor"], case["close"])
+    engine = FactorBacktestEngine(
+        dl, config={"top_n": 1}, tradability_inputs=case["inputs"])
+    res = engine.run()["f"]
+    positions = engine._build_positions(case["factor"])
+
+    prev = np.full_like(case["close"], np.nan)
+    prev[1:] = case["close"][:-1]
+    eff_long, _ = apply_tradability(
+        np.clip(positions, 0.0, None), prev, case["high"], case["low"],
+        case["close"], case["open_"], case["volume"], case["suspended"],
+        case["inputs"].board, case["inputs"].is_st, case["dates"],
+        adj=case["inputs"].adj)
+    effective = eff_long + np.minimum(positions, 0.0)
+    assert np.array_equal(effective[positions < 0], positions[positions < 0])
+    assert res["tradability"]["leg_scope"] == "long_only"
+
+
+def test_tp6_11_default_baseline_unchanged():
+    """TP6-11：默认路径（tradability_inputs=None）逐位等于 Step 5 前基线。"""
+    from factor_pipeline.backtest.engine import FactorBacktestEngine
+
+    rng = np.random.default_rng(20261123)
+    T, N = 12, 6
+    close = 100.0 * np.exp(np.cumsum(rng.normal(0.001, 0.02, (T, N)), axis=0))
+    factor = rng.normal(0.0, 1.0, (T, N))
+    dl = _FakeDL(factor, close)
+
+    engine = FactorBacktestEngine(dl, config={"ls_method": "top_n", "top_n": 2})
+    res = engine.run()["f"]
+    summary = engine.summary()["f"]
+
+    assert summary["rank_icir"] == -0.25880207857362303
+    assert summary["pearson_icir"] == -0.30599173567954446
+    assert summary["hit_rate"] == 0.36363636363636365
+    assert summary["spread"] == -0.1610540425109819
+    assert summary["mean_rank_ic"] == -0.10649350649350647
+    assert np.asarray(res["turnover"]).tolist() == [
+        1.5, 1.0, 2.0, 1.5, 2.0, 1.0, 1.0, 1.0, 1.0, 1.5, 1.5]
+    assert "tradability" not in res
+
+
+def test_tradability_inputs_validation():
+    from factor_pipeline.backtest.engine import FactorBacktestEngine
+    from factor_pipeline.backtest.tradability import TradabilityInputs
+
+    case = _tradability_case()
+    dl = _FakeDL(case["factor"], case["close"])
+    bad_shape = TradabilityInputs(
+        close=case["close"][:2], high=case["high"], low=case["low"],
+        open_=case["open_"], volume=case["volume"],
+        suspended=case["suspended"], dates=case["dates"],
+        board=case["inputs"].board, is_st=case["inputs"].is_st,
+        adj=case["inputs"].adj)
+    with pytest.raises(ValueError):
+        FactorBacktestEngine(dl, tradability_inputs=bad_shape)
+
+    no_adj = TradabilityInputs(
+        close=case["close"], high=case["high"], low=case["low"],
+        open_=case["open_"], volume=case["volume"],
+        suspended=case["suspended"], dates=case["dates"],
+        board=case["inputs"].board, is_st=case["inputs"].is_st, adj=None)
+    with pytest.raises(ValueError):
+        FactorBacktestEngine(dl, tradability_inputs=no_adj)
 
 
 # =============================================================================

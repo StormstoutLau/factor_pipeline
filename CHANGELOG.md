@@ -1,5 +1,27 @@
 # 开发日志 (Changelog)
 
+## v3.9.9 — tradability 接入回测引擎 + 限价整数分 half-up（P-006）(已实施, 2026-11-23)
+
+### 概览
+
+承接 P-006（[spec/p006-tradability-engine-integration](spec/p006-tradability-engine-integration/) 四件套：RESEARCH v1.4 / DESIGN v1.3 / IMPLEMENTATION v1.3 / CHECKLIST v1.3），包版本 **3.9.9**（patch 级）。`FactorBacktestEngine` 新增可选 `tradability_inputs`：启用后 `_build_positions` 的目标权重先经 `apply_tradability` 推进**多头腿**，空头腿原样透传；默认 `None` 时 `results[factor]` 的键集合与数组逐位不变（TP6-11 基线锁定）。
+
+- **限价口径**：`limit_price` 改为**整数分 ROUND_HALF_UP**（`(pc×(10000±bp)+5000)//10000`），禁用 `np.round`；落地"四舍五入 + 差额 <1 分按前收 ±1 分 + 限价 <1 分取 1 分"三分支（上交所 3.3.17 / 深交所 3.3.19）。
+- **板块映射**：新增 `board_of` 区间映射（main=600/601/603/605、000–004；gem=300–309；star=688/689；bse=43/83/87/92），未映射 → `unknown`（禁止默认 10%），未知格计入 `limit_unknown` 且不阻塞成交。
+- **除权参考价**：`ref = prev × adj[t-1]/adj[t]`（half-up 对齐到分）；adj 单侧缺失 → `limit_unknown`，不回退原始昨收。
+- **状态分治**：ST 5% 与退市分治（退市按板块普通档）；低价 ST（prev<0.1 元）±1 tick；IPO 前 5 日 / 退市整理首日走 `no_limit`；桶优先级 `suspended > no_limit > limit_unknown > blocked_* > t1_locked`。
+- **报告契约**：`apply_tradability` 报告 6 键 → **9 键**（新增 `limit_unknown` / `one_word_up` / `one_word_down`），恒为 Python `int`（INV-9）；引擎启用时 `results[factor]['tradability']` 含 `report/meta/price_basis/leg_scope/short_leg_unmodeled`。
+- **新增构建器**：`backtest/tradability_inputs.py::build_tradability_inputs`（pandas 面板 → `TradabilityInputs` + 13 键 meta，纯函数、无 IO）。
+- 无新增第三方依赖（numpy / pandas / pytest 均为现有依赖）；包版本 **3.9.9** 落 7 处（pyproject / `__init__` / config_v2 / reporting + 两处版本测试锚点 / 本条目）。
+- **Step 10 ADD 审计 PASS_WITH_FIXES**（独立只读：0×P1 / 1×P2 / 5×P3，质量门 4.9/5 档位 A）：P2-① 补 prev_close 派生源鉴别测试 `test_tp6_9b`（inputs.close 与 dl.close 脱钩后 `blocked_buy` 1→0 翻转）；P3-① CHECKLIST 算术订正；P3-②③④ 登记 P-020。CHECKLIST v1.4 **102/102 accepted**；全量回归 **2143 passed / 34 skipped / 0 failed**（964.31 s）。
+
+### 核心产出
+
+- `backtest/tradability.py`：`board_of` / `compute_limits` / `TradabilityInputs` / `_to_cents` / `_pct_matrix` / `_ref_from_adj`；`limit_price` 重写；`apply_tradability` 扩展 `adj/is_delisting/no_limit/ref` 与 2D `is_st`。
+- `backtest/tradability_inputs.py`（新增）：板块 / ST / 退市 / 无限制日派生 + meta 校准状态。
+- `backtest/engine.py`：`__init__` 增 `tradability_inputs=None`（含形状校验）；`_evaluate_factor` 多头腿推进 + 有效权重换手 + 条件挂载 `tradability`。
+- 测试：TP6-1~12 新增；`test_engine.py` 模块级 `importorskip` 改为按类跳过（可选依赖未装时 DataBridge 用例跳过，TP6-9~11 用 FakeDataLoader 始终运行）。
+
 ## v3.9.8 — 月聚类 CI + 粒度披露（P-010）/ 数据行数对齐（P-008）/ 存量待办裁决（P-011）(已实施, 2026-11-23)
 
 ### 概览

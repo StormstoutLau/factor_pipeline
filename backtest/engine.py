@@ -35,6 +35,7 @@ from .factor_metrics import (
     compute_long_short_returns,
     compute_spread,
 )
+from .tradability import apply_tradability
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class FactorBacktestEngine:
         data_loader,
         config: Optional[Dict[str, Any]] = None,
         fwd_returns: Optional[np.ndarray] = None,
+        tradability_inputs=None,
     ):
         """初始化因子回测引擎。
 
@@ -73,6 +75,7 @@ class FactorBacktestEngine:
             fwd_returns: 预计算的前向收益率，shape (n_dates - 1, n_stocks)。
                          若为 None，引擎内部自动计算。
                          用于多引擎共享前向收益，避免重复计算。
+            tradability_inputs: 可选 TradabilityInputs；None 时旧路径逐位不变。
 
         Raises:
             ValueError: 因子数据为空时，或 fwd_returns 形状不匹配时
@@ -97,6 +100,11 @@ class FactorBacktestEngine:
         # 提取 numpy 数组 (shape: n_dates × n_stocks)
         self._close = data_loader.price_data['close']
 
+        # 可选可交易性输入（P-006）；None → 旧路径逐位不变
+        self._tradability_inputs = tradability_inputs
+        if tradability_inputs is not None:
+            self._validate_tradability_inputs(tradability_inputs)
+
         # 缓存
         self._fwd_returns: Optional[np.ndarray] = None
         self._results: Optional[Dict[str, Dict[str, Any]]] = None
@@ -118,6 +126,38 @@ class FactorBacktestEngine:
         )
 
     # ── 前向收益 ──────────────────────────────────
+
+    def _validate_tradability_inputs(self, inputs) -> None:
+        """OPT-IN 输入形状校验（P-006 DESIGN §4.5 / §7）。"""
+        expected = (self.n_dates, self.n_stocks)
+        for field in ("close", "high", "low", "open_", "volume",
+                      "suspended", "is_st"):
+            shape = np.shape(getattr(inputs, field, None))
+            if shape != expected:
+                raise ValueError(
+                    f"tradability_inputs.{field} 形状应为 {expected} "
+                    f"(实际 {shape})")
+        if inputs.adj is None:
+            raise ValueError(
+                "tradability 需要 adj（判定需除权参考价基准）")
+        if np.shape(inputs.adj) != expected:
+            raise ValueError(
+                f"tradability_inputs.adj 形状应为 {expected} "
+                f"(实际 {np.shape(inputs.adj)})")
+        if np.shape(inputs.dates) != (self.n_dates,):
+            raise ValueError(
+                f"tradability_inputs.dates 形状应为 {(self.n_dates,)} "
+                f"(实际 {np.shape(inputs.dates)})")
+        if np.shape(inputs.board) != (self.n_stocks,):
+            raise ValueError(
+                f"tradability_inputs.board 形状应为 {(self.n_stocks,)} "
+                f"(实际 {np.shape(inputs.board)})")
+        for field in ("is_delisting", "no_limit"):
+            value = getattr(inputs, field)
+            if value is not None and np.shape(value) != expected:
+                raise ValueError(
+                    f"tradability_inputs.{field} 形状应为 {expected} "
+                    f"(实际 {np.shape(value)})")
 
     def compute_fwd_returns(self) -> np.ndarray:
         """公开方法: 计算前向收益率 (供外部预计算和共享)。
@@ -242,9 +282,33 @@ class FactorBacktestEngine:
         # Hit Rate
         hit_rate = compute_hit_rate(rank_ic_series)
 
-        # 换手率
+        # 换手率（启用 tradability 时对多头腿推进，空头腿原样透传）
         positions = self._build_positions(factor)
-        turnover = compute_turnover(positions)
+        tradability_block = None
+        if self._tradability_inputs is None:
+            turnover = compute_turnover(positions)
+        else:
+            inputs = self._tradability_inputs
+            prev_close = np.full((self.n_dates, self.n_stocks), np.nan)
+            if self.n_dates > 1:
+                prev_close[1:] = inputs.close[:-1]
+            effective_long, report = apply_tradability(
+                np.clip(positions, 0.0, None),
+                prev_close, inputs.high, inputs.low, inputs.close,
+                inputs.open_, inputs.volume, inputs.suspended, inputs.board,
+                inputs.is_st, inputs.dates, policy=inputs.policy,
+                adj=inputs.adj, is_delisting=inputs.is_delisting,
+                no_limit=inputs.no_limit)
+            effective = effective_long + np.minimum(positions, 0.0)
+            turnover = compute_turnover(effective)
+            tradability_block = {
+                'report': report,
+                'meta': inputs.meta,
+                'price_basis': 'raw_adj_ref',
+                'leg_scope': 'long_only',
+                'short_leg_unmodeled': True,
+                'turnover_basis': 'effective_long_only',
+            }
 
         # 多空收益
         top_n = self.config.get('top_n', 0.2)
@@ -253,7 +317,7 @@ class FactorBacktestEngine:
         # Spread
         spread = compute_spread(ls_returns)
 
-        return {
+        result = {
             'rank_ic_series': rank_ic_series,
             'rank_icir': rank_icir,
             'pearson_ic_series': pearson_ic_series,
@@ -264,6 +328,9 @@ class FactorBacktestEngine:
             'long_short_returns': ls_returns,
             'spread': spread,
         }
+        if tradability_block is not None:
+            result['tradability'] = tradability_block
+        return result
 
     # ── 运行 ──────────────────────────────────
 
