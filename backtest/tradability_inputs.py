@@ -8,10 +8,15 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from .tradability import (TradabilityInputs, board_of, compute_limits,
-                          _pct_matrix, _ref_from_adj, _EPS)
+from .tradability import (TradabilityInputs, TradabilityPolicy, board_of,
+                          compute_limits, _pct_matrix, _ref_from_adj)
 
 __all__ = ["build_tradability_inputs"]
+
+
+def _norm_code(code):
+    """代码键归一：剥离交易所后缀并补齐 6 位（'600000.SH'→'600000'，1→'000001'）。"""
+    return str(code).split(".")[0].zfill(6)
 
 
 def _frame(df, index, columns, fill, dtype):
@@ -70,12 +75,18 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     no_limit_source = "delisting_only"
     if list_date is not None:
         ld = pd.Series(list_date)
+        norm = {}
+        for k, v in ld.items():
+            norm.setdefault(_norm_code(k), v)      # 首见优先
         used = False
         for j, code in enumerate(columns):
-            key = code if code in ld.index else str(code)
-            if key not in ld.index:
-                continue
-            value = ld.loc[key]
+            if code in ld.index:                   # 精确优先（INV-4）
+                value = ld.loc[code]
+            else:
+                nk = _norm_code(code)
+                if nk not in norm:                 # 缺失判定与取值为两步
+                    continue
+                value = norm[nk]
             if pd.isna(value):
                 continue
             used = True
@@ -95,11 +106,10 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     if st_overrides is not None:
         st_calibration_source = "coverage_table"
         overrides = pd.DataFrame(st_overrides)
-        code_list = [str(c) for c in columns]
         for _, row in overrides.iterrows():
-            code = str(row.iloc[0]).split(".")[0].zfill(6)
-            matched = [j for j, c in enumerate(code_list)
-                       if str(c).split(".")[0].zfill(6) == code]
+            code = _norm_code(row.iloc[0])
+            matched = [j for j, c in enumerate(columns)
+                       if _norm_code(c) == code]
             if not matched:
                 continue
             j = matched[0]
@@ -114,6 +124,7 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         prev[1:] = close_a[:-1]
     pct_mat = _pct_matrix(boards, is_st, is_delisting, dates_arr)
     ref_mat = _ref_from_adj(prev, adj_a)
+    eps = (policy if policy is not None else TradabilityPolicy()).eps
     one_word_up = 0
     one_word_down = 0
     for t in range(T):
@@ -121,9 +132,9 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         judge = ~unk & ~no_limit[t] & ~suspend_a[t]
         same = high_a[t] == low_a[t]
         one_word_up += int(np.count_nonzero(
-            judge & same & (np.abs(high_a[t] - up) <= _EPS)))
+            judge & same & (np.abs(high_a[t] - up) <= eps)))
         one_word_down += int(np.count_nonzero(
-            judge & same & (np.abs(low_a[t] - down) <= _EPS)))
+            judge & same & (np.abs(low_a[t] - down) <= eps)))
 
     meta = {
         "board_counts": board_counts,

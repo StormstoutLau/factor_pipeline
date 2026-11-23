@@ -1,5 +1,32 @@
 # 开发日志 (Changelog)
 
+## v3.9.10 — tradability 小口径收尾 + 台账同步（P-020）(已实施, 2026-11-23)
+
+### 概览
+
+承接 P-006 Step 10 ADD 审计登记的 P3-②③④，包版本 **3.9.9 → 3.9.10**（patch）。生产改动**单文件** `backtest/tradability_inputs.py`；`tradability.py` / `engine.py` / `TradabilityInputs` 字段集合零改动。同步 `docs/PROJECT_STATUS.md` 台账（A 部分：v3.9.9 行 + 指针 + 优先级视图）。
+
+### 变更
+
+- **eps 单源**：构建器 `meta.one_word_up_cells / one_word_down_cells` 改由 `policy.eps` 驱动（`policy=None` → 默认 `TradabilityPolicy()`），与 `apply_tradability` 的判定同源；模块常量 `_EPS` 不再在构建器直接引用。
+- **`list_date` 键归一化**：新增私有 `_norm_code`（`split(".")[0].zfill(6)`）；查找保持**精确键优先**，未命中时走归一化回退；`st_overrides` 复用同一助手（行为等价改写）。
+- **测试 +6**：T020-1a/1b（一字涨停 / 一字跌停正向计数，单向不串扰）、T020-2（`apply_tradability(ref=)` 直传，D-6-7）、T020-3（eps 随 policy）、T020-4（裸代码列 × 带后缀键）、T020-5（精确键优先，INV-4）。
+
+### 行为影响（显式披露）
+
+- 启用态（传 `tradability_inputs`）且**自定义 `policy.eps`** 时，meta 一字板计数随 policy 变化（此前恒按 `1e-8`）。
+- 启用态且 `list_date` 键与列名格式不一致（如裸代码列 × `600000.SH` 键）时，IPO 后前 5 日 `no_limit` 豁免**此前静默失效，现已生效**。
+- 默认路径（`tradability_inputs=None`、`policy=None`、键同形）**逐位不变**（TP6-11 基线锁定）。
+
+### 版本
+
+- 3.9.10 落 6 个代码/配置锚点（`pyproject.toml:7`、`__init__.py:58`、`config_v2.py:371`、`reporting.py:40`、两处测试 `EXPECTED_VERSION`）+ 本条目。
+
+### 审计与异构复审
+
+- Step 10 独立只读审计 **PASS_WITH_FIXES**（0×P1 / 2×P2 / 4×P3，全部就地处置，见 CHECKLIST §8.1）。
+- 异构复审双视角（CHECKLIST §11）：视角 A（对抗式锚点核查 + 证据重放）8 组锚点 6 PASS / 2 DRIFT / 0 FAIL，2 项文档级发现已订正；视角 B（过程合规 / 裁决逻辑 / 账本一致性）三维度全 PASS。批次验收维持 accepted。
+
 ## v3.9.9 — tradability 接入回测引擎 + 限价整数分 half-up（P-006）(已实施, 2026-11-23)
 
 ### 概览

@@ -450,3 +450,44 @@ def test_error_table_contracts():
         apply_tradability(**kwargs(board=np.array(["bse"]),
                                    dates=np.array(["2020-01-06",
                                                    "2020-01-07"])))
+
+
+# ---------------------------------------------------------------------------
+# P-020（T020-1a/1b/2）
+# ---------------------------------------------------------------------------
+
+def test_t020_1a_one_word_up_count():
+    """T020-1a：一字涨停正向计数（单向，down 必须为 0）。"""
+    case = _case(T=2)
+    case["high"][1, 0] = 11.0          # main 非 ST 涨停价
+    case["low"][1, 0] = 11.0
+    _, report = _run(case)
+    assert report["one_word_up"] == 1
+    assert report["one_word_down"] == 0
+
+
+def test_t020_1b_one_word_down_count():
+    """T020-1b：一字跌停正向计数（单向，up 必须为 0）。"""
+    case = _case(T=2)
+    case["high"][1, 0] = 9.0           # main 非 ST 跌停价
+    case["low"][1, 0] = 9.0
+    _, report = _run(case)
+    assert report["one_word_down"] == 1
+    assert report["one_word_up"] == 0
+
+
+def test_t020_2_ref_direct_path():
+    """T020-2：`ref=` 直传分支（无 adj），与 TP6-6 经 adj 派生同结果。"""
+    case = _case(T=2)
+    case["prev_close"] = np.array([[np.nan], [10.0]])
+    case["high"][1, 0] = 5.50
+    case["low"][1, 0] = 4.50
+    case["target_w"][1, 0] = 0.5
+    ref = np.array([[np.nan], [5.0]])
+    eff, report = apply_tradability(
+        case["target_w"], case["prev_close"], case["high"], case["low"],
+        case["close"], case["open_"], case["volume"], case["suspended"],
+        case["board"], case["is_st"], case["dates"], ref=ref)
+    assert report["blocked_buy"] == 1
+    assert report["limit_unknown"] == 0
+    assert eff[1, 0] == 0.0

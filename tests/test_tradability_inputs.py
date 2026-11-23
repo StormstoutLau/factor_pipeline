@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.tradability import compute_limits
+from backtest.tradability import TradabilityPolicy, compute_limits
 from backtest.tradability_inputs import build_tradability_inputs
 
 
@@ -168,3 +168,67 @@ def test_adj_required():
     with pytest.raises(ValueError):
         build_tradability_inputs(p["close"], p["high"], p["low"], p["open_"],
                                  p["volume"], p["suspend"], p["name"], None)
+
+
+# ---------------------------------------------------------------------------
+# P-020（T020-3/4/5）
+# ---------------------------------------------------------------------------
+
+def _frame(codes, n_dates=8):
+    dates = pd.date_range("2024-01-02", periods=n_dates, freq="B")
+    close = pd.DataFrame(10.0, index=dates, columns=codes)
+    return dict(close=close, high=close * 1.005, low=close * 0.995,
+                open_=close.copy(),
+                volume=pd.DataFrame(1e6, index=dates, columns=codes),
+                suspend=pd.DataFrame(False, index=dates, columns=codes),
+                name=pd.DataFrame("普通", index=dates, columns=codes),
+                adj=pd.DataFrame(1.0, index=dates, columns=codes)), dates
+
+
+def test_t020_3_one_word_eps_follows_policy():
+    """T020-3：一字板判定 eps 由 policy 驱动（不再走模块常量）。"""
+    frame, dates = _frame(["600000.SH"], n_dates=3)
+    # t=1 一字板，价格与涨停价（11.00）差 5e-9：默认 eps=1e-8 内、eps=0 外
+    px = 11.000000005
+    frame["close"].iloc[1, 0] = px
+    frame["high"].iloc[1, 0] = px
+    frame["low"].iloc[1, 0] = px
+
+    _, meta_default = build_tradability_inputs(**frame)
+    _, meta_zero = build_tradability_inputs(
+        policy=TradabilityPolicy(eps=0.0), **frame)
+    assert meta_default["one_word_up_cells"] == 1
+    assert meta_zero["one_word_up_cells"] == 0
+
+
+def test_t020_4_list_date_key_normalized():
+    """T020-4：裸代码列 × 带后缀 list_date 键 → IPO 豁免不应静默跳过。"""
+    frame, dates = _frame(["600000", "000001"])
+    frame["list_date"] = pd.Series({"600000.SH": dates[2],
+                                   "000001.SZ": dates[3]})
+    inputs, meta = build_tradability_inputs(**frame)
+    assert meta["no_limit_source"] == "list_date"
+    assert inputs.no_limit[2:7, 0].all()
+    assert not inputs.no_limit[7, 0]
+    assert inputs.no_limit[3:8, 1].all()
+
+
+def test_t020_5_list_date_exact_key_precedence():
+    """T020-5：精确键优先于归一化回退（INV-4）。"""
+    frame, dates = _frame(["600000.SH"], n_dates=8)
+    # 裸代码先插入（归一化首选），精确键后插入（应胜出）
+    frame["list_date"] = {"600000": dates[3], "600000.SH": dates[0]}
+    inputs, _ = build_tradability_inputs(**frame)
+    assert inputs.no_limit[0, 0]
+    assert inputs.no_limit[4, 0]
+    assert not inputs.no_limit[5, 0]
+
+
+def test_t020_6_list_date_normalized_first_wins():
+    """T020-6：归一化映射首见优先 + 整数裸代码列名。"""
+    frame, dates = _frame([600000], n_dates=8)
+    frame["list_date"] = {"600000": dates[2], "600000.SH": dates[5]}
+    inputs, meta = build_tradability_inputs(**frame)
+    assert meta["no_limit_source"] == "list_date"
+    assert inputs.no_limit[2:7, 0].all()
+    assert not inputs.no_limit[7, 0]
