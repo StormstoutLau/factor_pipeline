@@ -1874,7 +1874,26 @@ class FactorProcessingPipelineV2:
             ife_max_dim=ife_max_dim,
         )
 
+        weights_version = orch.get_weights_version()
+        effective_weights = orch.get_effective_weights()
+
+        def _attach_stage_meta(stage_report, input_stage, *, s4=False,
+                               stage_fallback=False):
+            """P-027 Stage 0b: 给阶段报告补权重/输入阶段披露字段."""
+            if stage_report is None:
+                return
+            stage_report['weights_version'] = weights_version
+            stage_report['effective_weights'] = dict(effective_weights)
+            if s4:
+                stage_report['s4_input_stage'] = input_stage
+                stage_report['stage_fallback'] = bool(stage_fallback)
+            else:
+                stage_report['input_stage'] = input_stage
+
         report: Dict[str, Any] = {}
+        report['weights_version'] = weights_version
+        report['effective_weights'] = dict(effective_weights)
+        report['tau_is_heuristic'] = True
         # S1: 缺失机制诊断 (插补前)
         if raw_factor_with_missing is not None and getattr(
             self.config, 'enable_missingness_diagnosis', False
@@ -1895,6 +1914,7 @@ class FactorProcessingPipelineV2:
                 report['s2'] = None
         else:
             report['s2'] = None
+        _attach_stage_meta(report['s2'], 'imputed')
 
         # S3: 中性化后残留 (可选)
         if neutralized_factor is not None and returns is not None:
@@ -1907,8 +1927,11 @@ class FactorProcessingPipelineV2:
                 report['s3'] = None
         else:
             report['s3'] = None
+        _attach_stage_meta(report['s3'], 'neutralized')
 
-        # S4: 解耦后最终
+        # S4: 解耦后最终 (P-027 Stage 0b: 显式标记是否回退到插补后)
+        s4_fallback = decoupled_factor is None
+        s4_input_stage = 'imputed_fallback' if s4_fallback else 'decoupled'
         s4_data = decoupled_factor if decoupled_factor is not None else imputed_factor
         if s4_data is not None and returns is not None:
             try:
@@ -1918,8 +1941,17 @@ class FactorProcessingPipelineV2:
                 report['s4'] = None
         else:
             report['s4'] = None
+        _attach_stage_meta(
+            report['s4'], s4_input_stage, s4=True, stage_fallback=s4_fallback
+        )
 
-        report['final_assessment'] = orch.get_final_threat_assessment()
+        final_assessment = orch.get_final_threat_assessment()
+        if final_assessment is not None and final_assessment is not report['s4']:
+            _attach_stage_meta(
+                final_assessment, s4_input_stage, s4=True,
+                stage_fallback=s4_fallback,
+            )
+        report['final_assessment'] = final_assessment
         self._endogeneity_orchestrator = orch
         self._endogeneity_report = report
         return report
@@ -2112,6 +2144,9 @@ class FactorProcessingPipelineV2:
         from factor_pipeline.modules.endogeneity_regularizer import (
             EndogeneityRegularizer,
         )
+        from factor_pipeline.modules.endogeneity_check.core.threat_assessor import (
+            TAU_WEIGHTS_VERSION,
+        )
 
         reg = EndogeneityRegularizer(
             threat_assessment=assessment,
@@ -2125,6 +2160,10 @@ class FactorProcessingPipelineV2:
             'l2_significance': reg.apply_l2_significance_config(tau),
             'l3_optimizer': reg.apply_l3_optimizer_config(tau, w_raw=1.0),
             'threat_tau': tau,
+            'experimental': True,
+            'heuristic': True,
+            'weights_version': assessment.get('weights_version', TAU_WEIGHTS_VERSION),
+            'effective_weights': assessment.get('effective_weights'),
         }
         self._regularizer_config = result
         return result

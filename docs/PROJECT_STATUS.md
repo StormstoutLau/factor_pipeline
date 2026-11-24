@@ -75,7 +75,8 @@ v3.10.0 (2026-11-23) tradability 生产启用（P-021：C 对拍 + A 证据层 +
 v3.10.1 (2026-11-23) tradability 收口包（P-022：紧凑缓存/零拷贝/worker 载荷 + U-7/U-8/R-3 裁决；M-2/M-3 → P-023） [x]
 v3.11.0 (2026-11-24) tradability 内存第二阶（P-023：name npz + worker 日期分片；M-2 171.5 MB / M-3 618.6 MB） [x]
 v3.11.1 (2026-11-24) stock_return 百分数契约口径修正（P-025：unit-aware 一致性检查；误告警 2,387,218 → 15 格） [x]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.11.1
+v3.11.2 (2026-11-24) 内生性 τ 披露字段（P-027 Stage 0b：weights_version/effective_weights/阶段回退 + E5 experimental） [x]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ← 当前在 v3.11.2
 v3.4.x (候选)     非生产路径解耦器数值修复 — ❌ 不修复 (ADR-043 已弃用)          [—]
 v3.5.x (远期)     内生性-溢价诊断交互                                           [ ]
 ```
@@ -129,10 +130,10 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 ---
 
-## §2. 当前待办 (v3.11.1 完成后)
+## §2. 当前待办 (v3.11.2 完成后)
 
-> **待办真值源已迁移**：P 级待办统一登记在 [PROGRESS.md](PROGRESS.md)（P-001 ~ P-025），本文件不再重复维护。
-> 当前优先级视图：P0 =（无）；P1 =（无，**P-003 已于 v3.9.5 完成**）；P2 =（无，**P-023 已于 v3.11.0 完成**；P-022 已于 v3.10.1 有条件通过）；P3 = P-009 / P-018。
+> **待办真值源已迁移**：P 级待办统一登记在 [PROGRESS.md](PROGRESS.md)（P-001 ~ P-028），本文件不再重复维护。
+> 当前优先级视图：P0 =（无）；P1 =（无执行项，**P-027 已 done**：Stage 0b 披露字段 v3.11.2 落盘并全量回归通过；P-026 已由用户 2026-11-24 裁决暂时 suspend，保留 blocked）；P2 =（无执行项，**P-028 EIV 审计已 done**；P-023 已于 v3.11.0 完成）；P3 = P-018（P-009 已关闭——Stage 1 未通过）。
 > 治理批 P-001（`spec/` 骨架 + 四模板 + v3.9.2 四件套迁移 + front-matter + PROGRESS + ADOPTION）已完成。
 
 ### ✅ 最近完成 — 因子路由统一化治理 + 非生产路径弃用 + 断点调度 + 组件可分离 + decoupler 消融臂 + 市值口径全层对齐 + L3/L4 旋钮接线审计 + trivial 口径修正 + L1/L2 口径清扫 + HAC NaN 过滤 + 技术债小包 + 面板 HAC 标准误 + 短样本断点退化 + 多断点支持 + 多断点接入 diagnose + NaN 间隙守卫 + 自相关稳健断点 + 治理底座 + 统计证据链 + 执行/容量证据层 + 模拟数据验证骨架 + 真实分钟面板编排接线 (v3.4.0 – v3.9.1)
@@ -172,7 +173,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 
 > 当前缺陷登记: **无未修复缺陷**。DEFECT-1 (`BreakpointDetector.detect` T<30 → 调用不存在的 `_no_breakpoint_result` → AttributeError) 已于 **v3.4.13** 修复: 补 `_no_breakpoint_result(T)` 退化结果 + 5 例边界测试 (T=10/有效29/有效30/diagnose T=20/全 NaN), 正常路径与 `diagnose` 零改动。见 [EXECUTION](EXECUTION_V3.4.13_BREAKPOINT_SHORT_SAMPLE.md) / [审计](audit/2026-11-16-v3.4.13-breakpoint-short-sample-audit.md)。无 known-xfail; 历史因果性修复链 (v3.3.1–v3.3.7) 全部闭环。
 
-> ⚠️ **已知数据限制** (2026-11-17 诊断, 见 [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md)): `market_value.csv` 止于 **2026-01-23** (独立导出批次 01-27 后停更; 仅致末月 `turnover_1m` 分母 stale, 中位偏差 3.6%、秩相关 0.997, 且末月不进入绩效); `barra_df_tl.pkl` 止于 **2023-05-31**、`stock_ind.pkl` 止于 **2023-06-13** (均 2023-07-31 后停更) — **2023-06 之后无法做风格/行业中性化**。
+> ⚠️ **已知数据限制** (2026-11-17 诊断, 见 [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md)): `market_value.csv` 止于 **2026-01-23** (独立导出批次 01-27 后停更; 仅致末月 `turnover_1m` 分母 stale, 中位偏差 3.6%、秩相关 0.997, 且末月不进入绩效); `barra_df_tl.pkl` 止于 **2023-05-31**、`stock_ind.pkl` 止于 **2023-06-13** (均 2023-07-31 后停更) — **2023-06 之后无法做风格/行业中性化**。刷新请求已登记 **P-026**（blocked：外部数据未交付；**2026-11-24 用户裁决暂时 suspend**，恢复触发=外部数据源确定并交付）。
 
 ### 🟠 P1 — 下一任务 (先后顺序)
 
@@ -239,7 +240,7 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 |---|------|---------|---------|------|
 | DL-1 (专项 A) | 数据接入层 DataPortal | 统一数据入口 + 多格式 reader + 字段字典/单位/代码格式 + lineage | 接入已存在的 volume/open/high/low/return/suspend/name; 重建逐日停牌状态('S'/'R' 事件表); 推导历史 ST 代理(披露口径); 接入交易日历 all_dates; 字段映射/单位/时区对账 | GR-2 契约 |
 | DL-2 (专项 A) | adj 数据质量修复 | adj 与 close 行数对齐 + 显著回落个案核验 | 81 日缺失根因定位并修复; 复权因子定义/配股处理核验; hfq 口径锁定(禁 qfq 防回归) | — |
-| DA-1 (专项 B) | barra/行业换源 | 2023-06 后风格/行业数据 | 换源后中性化可用; **唯一阻塞 P1 风格/行业中性化项** | 外部采购 |
+| DA-1 (专项 B) | barra/行业换源 | 2023-06 后风格/行业数据 | 换源后中性化可用; **唯一阻塞 P1 风格/行业中性化项**；→ **P-026**（blocked，外部数据） | 外部采购 |
 | DA-2 (专项 B) | 历史成分/公告日/退市覆盖 | 历史指数成分 + 公告日/生效日 + 退市覆盖完整性核验 | PIT 严格校验可用; 幸存者偏差披露可根治(契约只能披露不可检测) | 外部采购 |
 
 > ⚠️ **数据质量新发现（数据层复审 H3）**: `stock_adj`(1394 行) 与 `stock_close`(1475 行) **行数不对齐, 81 个交易日缺失**;
@@ -271,14 +272,14 @@ v3.5.x (远期)     内生性-溢价诊断交互                                
 | # | 任务 | 状态 | 来源 |
 |---|------|------|------|
 | — | HAC 检验 NaN 过滤 (`ledoit_wolf_hac_test` 未 drop NaN → `compare` 的 HAC 静默返回 NaN) | ✅ v3.4.10 | [MAD 实验 §6 O1](analysis/MAD_WINSORIZE_O1_EXPERIMENT.md) |
-| — | 内生性-溢价诊断交互 (τ 修正因子) | [ ] **暂缓 → P-009**（P-011 裁决 2026-11-22；P3）— 阶段口径不匹配 (默认静态路径无 S4、S3 默认关) + 0.3/0.7 阈值未校准; 先做 τ 分布/判别力探针 | DESIGN_DISCUSSION_V3.3.0 §6.1 + [可行性分析与治理体系核对](analysis/ENDOGENEITY_PREMIUM_GOVERNANCE_ANALYSIS.md) |
+| — | 内生性-溢价诊断交互 (τ 修正因子) | [x] **已关闭——不实现**（P-027 Stage 1：G1 16.7% / G2 翻转 18.8% / G3 p=0.317；Stage 2 判定 τ 仅展示） | DESIGN_DISCUSSION_V3.3.0 §6.1 + [可行性分析与治理体系核对](analysis/ENDOGENEITY_PREMIUM_GOVERNANCE_ANALYSIS.md) |
 | — | 多断点支持 (Bai-Perron) | ✅ v3.5.0 (`detect_multiple` + Stata 46/46 对拍) | DESIGN_DISCUSSION_V3.3.0 §6.2 |
 | — | 多断点接入 `diagnose` 标签路径 | ✅ v3.5.1 (opt-in `breakpoint_mode='multiple'` + sup-F 确认 + 材料性 suspect) | v3.5.0 ADR-046 遗留 |
 | — | 多断点路径 NaN 间隙守卫 | ✅ v3.5.2 (连续性描述键 + 边界跨缺失 → ES 降级 suspect, ADR-048) | v3.5.0 H7 / v3.5.1 H5 |
 | — | sup-F 自相关稳健临界值 | ✅ v3.5.3 (AR(1) sieve bootstrap, opt-in; φ=0.5 size 50%→5.3%, ADR-049) | v3.5.2 H4 / RESEARCH_V3.5.2_NAN_GAP_GUARD §8 |
 | — | 组合层容量 / 冲击成本压力测试 | ✅ 2026-11-17 (exQ1 ~90-100 亿 / 上限 200 亿; Q5 5-11 亿不可产品化; 已异构复审 PASS_WITH_FIXES) | 多头端研究 §7 落地缺口 + [复审审计](audit/2026-11-17-capacity-impact-stress-audit.md) |
 | — | 数据新鲜度守卫 (开跑前断言字段满覆盖日 ≥ 样本末 − N 交易日, **默认 N=1**, 按字段可配; 原 −5 口径恰好放过 mv 5 日缺口, 以路线图 §5 P0-2 为准) | ✅ v3.6.0 GR-2 (`data_contract.check_data_contract` 默认 `max_lag` 按字段配: mv=1 / 日频=0; `scripts/contract_gate.py` 前置; v3.8.0 E0 默认化) | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P1 / [路线图 P0-2](analysis/MULTIFACTOR_GOVERNANCE_ROADMAP.md) |
-| — | mv 重新导出至 2026-01-30 / barra+行业换源 (2024+) | [ ] | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
+| — | mv 重新导出至行情末日 / barra+行业换源 (2023-06+) | [ ] **转 P-026**（P1，blocked：外部数据） | [数据缺口诊断](analysis/DATA_GAPS_DIAGNOSIS.md) §5 P0/P2 |
 | — | 复合因子池扩展 (4 因子 → 更多因子 / ML 组合) 的容量与可实施性 | [ ] 可选 | [多头端研究 §11 因子范围](analysis/LONG_SIDE_PORTFOLIO_RESEARCH.md) |
 | — | 面板 HAC 稳健估计 (Newey-West) | ✅ v3.4.12 (`estimate_with_errors`) | DESIGN_DISCUSSION_V3.3.0 §6.3 |
 | — | 流式处理支持 (v3.0.0 T2) | → **P-018**（P3 远期） | §3 T2.1-T2.5；P-011 裁决 2026-11-22 |

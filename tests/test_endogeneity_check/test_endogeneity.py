@@ -723,3 +723,65 @@ class TestP2EndToEndS1S2S4:
         assert 'final_threat_tau' in s2
         tau = s2['final_threat_tau']
         assert 0.0 <= float(tau) <= 1.0
+
+    def test_C2_effective_weights_versioned(self):
+        """C2: 权重版本与有效权重披露 (P-027 Stage 0b)."""
+        from factor_pipeline.modules.endogeneity_check.core.threat_assessor import (
+            TAU_WEIGHTS_VERSION,
+        )
+        assessor = EndogeneityThreatAssessor()
+        assert TAU_WEIGHTS_VERSION == 'v1'
+        assert assessor.get_weights_version() == 'v1'
+        assert assessor.get_effective_weights(
+            ['oster_delta', 'aet']
+        ) == pytest.approx({'oster_delta': 4.0 / 7.0, 'aet': 3.0 / 7.0})
+        assert assessor.get_effective_weights(
+            ['oster_delta', 'aet', 'ife', 'lewbel']
+        ) == pytest.approx({
+            'oster_delta': 0.4, 'aet': 0.3, 'ife': 0.2, 'lewbel': 0.1,
+        })
+        # 未知方法忽略; 未启用方法不进入分母
+        assert assessor.get_effective_weights(
+            ['oster_delta', 'unknown']
+        ) == pytest.approx({'oster_delta': 1.0})
+
+    def test_C3_stage_metadata_imputed_fallback(self):
+        """C3: 未传 decoupled_factor → S4 显式标记回退到插补后."""
+        f_df, r_df = _make_factor_returns(n_t=60, n_n=80, seed=31)
+        config = PipelineV2Config(
+            enable_endogeneity_check=True,
+            endogeneity_methods=['oster_delta', 'aet'],
+        )
+        pipe = FactorProcessingPipelineV2(config)
+        report = pipe.check_endogeneity(
+            raw_factor_with_missing=f_df,
+            imputed_factor=f_df,
+            returns=r_df,
+        )
+        assert report['weights_version'] == 'v1'
+        assert report['tau_is_heuristic'] is True
+        assert report['effective_weights'] == pytest.approx({
+            'oster_delta': 4.0 / 7.0, 'aet': 3.0 / 7.0,
+        })
+        assert report['s2']['input_stage'] == 'imputed'
+        assert report['s4']['s4_input_stage'] == 'imputed_fallback'
+        assert report['s4']['stage_fallback'] is True
+        assert report['final_assessment']['s4_input_stage'] == 'imputed_fallback'
+
+    def test_C4_stage_metadata_decoupled(self):
+        """C4: 传入 decoupled_factor → S4 标记为 decoupled."""
+        f_df, r_df = _make_factor_returns(n_t=60, n_n=80, seed=32)
+        config = PipelineV2Config(
+            enable_endogeneity_check=True,
+            endogeneity_methods=['oster_delta', 'aet'],
+        )
+        pipe = FactorProcessingPipelineV2(config)
+        report = pipe.check_endogeneity(
+            raw_factor_with_missing=f_df,
+            imputed_factor=f_df,
+            decoupled_factor=f_df,
+            returns=r_df,
+        )
+        assert report['s4']['s4_input_stage'] == 'decoupled'
+        assert report['s4']['stage_fallback'] is False
+        assert report['final_assessment']['s4_input_stage'] == 'decoupled'

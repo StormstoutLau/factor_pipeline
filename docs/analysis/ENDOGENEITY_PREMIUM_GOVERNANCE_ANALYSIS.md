@@ -341,3 +341,313 @@ significance / drift / 版本，一个对象汇总）；② 数据新鲜度守�
 - "Have risk premia vanished?" *JFE* (2022), 145(2), 553-576.
 - Federal Reserve FEDS 2024-037, "Factor Selection and Structural Breaks".
 - "The Effect of Omitted Variables on the Sign of Regression Coefficients" (arXiv 2208.00552).
+
+---
+
+## §10 实现盘点：内生性诊断在流水线中的落点（2026-11-24 复核）
+
+> 口径：只统计仓内可运行代码；测试 / demo / 研究脚本不计为生产接线。
+
+### 10.1 已实现（组件层，可用但全部 opt-in）
+
+| 能力 | 落点 | 默认 | 生产调用方 |
+|------|------|------|-----------|
+| E3 四阶段（S1 缺失机制 / S2 基线 τ / S3 中性化后残留（可选）/ S4 解耦后最终 τ） | `EndogeneityDiagnosticOrchestrator`（[L27](../../modules/endogeneity_check/core/diagnostic_orchestrator.py#L27)） | `enable_endogeneity_check=False`（[L546](../../pipelines_v2.py#L546)） | 仅 `check_endogeneity()` 手动（[L1814-L1925](../../pipelines_v2.py#L1814-L1925)）+ 测试 / demo |
+| τ 汇总与正则化推荐 | `EndogeneityThreatAssessor.assess()`：`final_threat_tau` / `component_taus` / `s1_mechanism` / `recommended_regularization`（none <0.3 / mild <0.7 / strong ≥0.7，[L82-L87](../../modules/endogeneity_check/core/threat_assessor.py#L82-L87)） | — | E3 内部 |
+| E5 三层正则化 | `EndogeneityRegularizer`：L1 `skip_stage2<0.3` / `extra_check≥0.7`（[L93-L97](../../modules/endogeneity_regularizer/regularizer.py#L93-L97)）、L2 α=α_base(1−γτ)、γ=0.5（[L140](../../modules/endogeneity_regularizer/regularizer.py#L140)）、L3 w=w_raw(1−ρτ)、ρ=0.3（[L180](../../modules/endogeneity_regularizer/regularizer.py#L180)） | `enable_endogeneity_regularization=False`（[L574](../../pipelines_v2.py#L574)） | 仅 `apply_endogeneity_regularization()` 手动（[L2069-L2129](../../pipelines_v2.py#L2069-L2129)），硬依赖 E3 |
+| 显著性检验消费 τ | `FactorSignificanceTest(threat_taus=…)`（[L536](../../backtest/factor_significance.py#L536) / [L566](../../backtest/factor_significance.py#L566) / [L585](../../backtest/factor_significance.py#L585)） | 需调用方显式传 | 未见生产调用 |
+| 优化器消费 τ | `_endogeneity_penalty`（[L391-L419](../../optimizer.py#L391-L419)）；`lambda_endogeneity` 默认 0（[L113](../../optimizer.py#L113)） | 关闭 | 未见生产传 `threat_levels` |
+| E6 估计层（Profile GMM / IVX / DOLS / PFGMM + selector） | `estimate_with_endogeneity_mitigation()`（[L2132](../../pipelines_v2.py#L2132)） | `enable_endogeneity_estimators=False`（[L583](../../pipelines_v2.py#L583)） | 手动 |
+| 治理记录字段位 | `GovernanceRecord.tau`（[L395](../../backtest/governance.py#L395)）、`stage`（[L365](../../backtest/governance.py#L365)）、`premium_health`（[L397](../../backtest/governance.py#L397)）、`diagnosis`（[L398](../../backtest/governance.py#L398)） | 字段存在、非必填 | `build()`（[L425](../../backtest/governance.py#L425)）仅测试调用，生产无 emit |
+| Layer 3 溢价健康 | `FactorHealthDiagnoser.diagnose()`（[L799](../../modules/factor_health/__init__.py#L799)）+ `_combine_label`（[L1236-L1252](../../modules/factor_health/__init__.py#L1236-L1252)） | 独立模块 | 仅脚本 / demo；`pipelines_v2` 无引用 |
+
+### 10.2 未实现（交互与接线缺口）
+
+1. **τ → premium label 交互完全未接线**：`diagnose()` 签名无 τ / endogeneity 参数（[L799-L803](../../modules/factor_health/__init__.py#L799-L803)）；`_combine_label(return_type, premium_health)` 只做二维映射（[L1236-L1252](../../modules/factor_health/__init__.py#L1236-L1252)）；输出无 `endogeneity_tau` / `endogeneity_flag` / `tau_stage`。
+2. **E3 / E5 / E6 均不进入 `fit/transform`**：三个入口都是显式方法，`fit`（[L1191](../../pipelines_v2.py#L1191)）/`transform`（[L1319](../../pipelines_v2.py#L1319)）无调用；仓内非测试调用方只有 `notebooks/demo_v3_3_0.py`。
+3. **E3 → `GovernanceRecord` 无生产 emit**，且字段契约不匹配：`premium_health` 声明为 `Optional[float]`（[L397](../../backtest/governance.py#L397)），而 Layer 3 输出字符串标签（ES / TD / ES+TD / stable / suspect / insignificant）——接线前需先改契约。
+4. **`return_type` 无生产来源**：`pipelines_v2` 已停用 `StatisticalClassifier`；生产 `diagnose()` 实际只能拿到 `'unknown'`（脚本显式传 `'static'`）。→ §8.1 B5 仍成立。
+5. **无 τ 分布 / 判别力证据**：仓内无真实数据 E3 全链路读数；0.3 / 0.7 仅用于「正则化推荐」与 E5 L1，**从未针对标签降级校准**（无已知 DGP 的降级正确率 / 误降级率）。→ B2 / B3 仍成立。
+6. **阶段口径未绑定**：默认 `unified`/Static 路径无解耦，S4 输入不存在；无 `tau_stage` 与 `diagnose` 输入阶段校验。→ B1 仍成立。
+
+### 10.3 结论
+
+- **是「部分实现」**：组件层（E3 四阶段、E5 三层、E6 估计层、治理字段位、τ 消费点）基本齐备；系统层（自动调度、τ→标签交互、治理记录落库、生产 `return_type`）均未实现。
+- P-009 路径不变：先跑**只读探针**（不接线）产出 τ 分布 + DGP 判别力；证据达标后再按 §8.2 最小形态落地（`endogeneity_tau` + `endogeneity_flag`、保留原 `diagnosis`、opt-in、键数 30→32）。
+- 若 τ 集中在 <0.3 或 >0.7，规则无区分度 → 与多断点同理判「不实现」。
+
+---
+
+## §11 τ 加权融合：敏感性、参数设定与学术依据（2026-11-24）
+
+> **2026-11-24 冻结**：本节加权融合已定位为 `heuristic summary v1`，不作为决策基座；裁决与执行状态见 §13 与 [SESSION.md](../../spec/p027-tau-fusion-freeze/SESSION.md)。
+
+### 11.1 代码事实：固定权重线性合成
+
+```
+τ_phase = clip( Σ_{m∈M_enabled} w_m·τ_m / Σ w_m , 0, 1 )
+w = {oster_delta: 0.4, aet: 0.3, ife: 0.2, lewbel: 0.1}
+```
+
+- 权重硬编码于 [`EndogeneityThreatAssessor.__init__`](../../modules/endogeneity_check/core/threat_assessor.py#L31-L36)；orchestrator 无参构造（[L63](../../modules/endogeneity_check/core/diagnostic_orchestrator.py#L63)），`PipelineV2Config` 无权重字段 → **用户不可配置**。
+- `M_enabled` 由 `endogeneity_methods` 与 IFE / Lewbel 开关决定（[L547-L549](../../pipelines_v2.py#L547-L549)、[L1855-L1865](../../pipelines_v2.py#L1855-L1865)），分母按实际启用方法归一化（[L74-L79](../../modules/endogeneity_check/core/threat_assessor.py#L74-L79)）。
+- 缺失/失败的检查器以 `0.5` 兜底（[L68](../../modules/endogeneity_check/core/threat_assessor.py#L68)）；各 checker 自身也有 0.5 默认。
+- 对外 final τ 取 S4（[L180](../../modules/endogeneity_check/core/diagnostic_orchestrator.py#L180)）；若调用方未传 `decoupled_factor`，S4 回退用 `imputed_factor`（[L1912](../../pipelines_v2.py#L1912)）→ final τ 实际等于 S2 τ。
+- 报告只保留 `component_taus` / `checker_results`，**不记录权重及其版本**。
+
+### 11.2 敏感性读数
+
+**① 有效权重随开关漂移（同一因子、同一数据，τ 口径不同）**
+
+| 配置 | 有效权重 |
+|------|---------|
+| 默认 `oster + aet` | oster **0.571** / aet **0.429** |
+| `+ IFE` | 0.444 / 0.333 / ife 0.222 |
+| `+ IFE + Lewbel` | 0.400 / 0.300 / 0.200 / 0.100 |
+| 仅 `oster` | 1.000 |
+
+启用 IFE/Lewbel 会把 oster 的有效权重从 0.571 压到 0.400（−30%），因此 **τ 不能跨配置比较**。
+
+**② 档位翻转（默认权重，阈值 0.3 / 0.7）**
+
+| (τ_oster, τ_aet) | 合成 τ | 档位 | 单方法结论 |
+|---|---|---|---|
+| (0.9, 0.1) | 0.557 | mild | oster-only → strong |
+| (1.0, 0.2) | 0.657 | mild | oster-only → strong |
+| (0.1, 0.9) | 0.443 | mild | aet-only → strong |
+| (0.9, 0.9) | 0.900 | strong | — |
+| (0.2, 0.2) | 0.200 | none | — |
+
+强威胁被弱分量「补偿」：只要加权和 <4.9（即 0.4τ_o+0.3τ_a<0.7），即使 oster=1.0 也只能给 mild。
+
+**③ 秩反转**：A(0.9, 0.1)、B(0.5, 0.5)。默认权重 τ_A=0.557>0.500；权重改为 (0.5, 0.5) 时并列 0.50；改为 (0.2, 0.8) 时 τ_A=0.26<0.50 → A/B 排序翻转。仅当某因子在所有分量上占优时排序才权重无关。
+
+**④ 不确定度未传播**：若 SE(τ_o)=SE(τ_a)=0.10 且独立，则 SE(τ)=0.071；阈值 0.7 附近 ±1.96 SE≈±0.14 → 档位翻转在统计上不可分辨。当前输出无 CI。
+
+**⑤ 不连续点**：Oster 在 |δ|→1 处 τ 从 ≈0 跳到 0.1（[L126-L132](../../modules/endogeneity_check/core/oster_delta.py#L126-L132)）；分母≈0 时 τ=0.0，而 |δ|=∞ 按规则应为 0.1，边界不一致（[L121-L123](../../modules/endogeneity_check/core/oster_delta.py#L121-L123)）。
+
+### 11.3 参数设定问题
+
+1. **权重不可配置、无版本、未入报告** → 权重变更后历史 τ 不可复现、不可审计。
+2. **有效权重随开关漂移** → τ 的语义依赖配置，跨批次比较无意义。
+3. **0.5 兜底把「未知」当「中等威胁」** → 样本不足/估计失败会静默拉向中位，且与真实 0.5 不可区分。
+4. **死参数**：`EndogeneityThreatAssessor.final_threshold`（[L29](../../modules/endogeneity_check/core/threat_assessor.py#L29)）从未使用；orchestrator `_alert_threshold`（[L65](../../modules/endogeneity_check/core/diagnostic_orchestrator.py#L65)）从未使用；config `endogeneity_alert_threshold`（[L553](../../pipelines_v2.py#L553)）未被 `check_endogeneity` 消费（实际传的是 `oster_threat_threshold`，[L1859](../../pipelines_v2.py#L1859)）。`critical_alert` 实际由 S4>S2 / S4>S3 决定（[L169-L176](../../modules/endogeneity_check/core/diagnostic_orchestrator.py#L169-L176)），与阈值无关。
+5. **分量量纲不可比**：Oster 是分段映射（0.1/0.9 跳变）、AET 是 |SR| 截断、IFE 是 1−吸收率、Lewbel 是相对 β 偏差——算术平均把它们当等距基数处理。
+6. **无不确定度传播 / 无 CI**，阈值附近决策脆弱。
+7. **0.3 / 0.7 与权重未联合标定**：阈值是固定常数，权重变化会直接改变档位分布。
+
+### 11.4 学术依据判定
+
+- **方法层有依据**：Oster (2019) δ 与 R_max=1.3R̃；Altonji–Elder–Taber (2005) selection ratio；Bai (2009) 交互固定效应；Lewbel (2012) 异方差内部 IV。
+- **融合层无直接统计准则**：四个 τ 回答四个不同问题，**不是同一潜变量的重复测量** → 无共同似然，Akaike/BIC 权重不适用；无重复估计，inverse-variance 权重不适用；τ 不是概率，线性 opinion pool（Genest & Zidek 1986）的校准前提也不成立。
+- 可援引的是**复合指标方法学**：OECD/JRC *Handbook on Constructing Composite Indicators*（2008）、Saisana–Saltelli–Tarantola (2005, JRSS-A)、Paruolo–Saisana–Saltelli (2013, JRSS-A)、Greco et al. (2019, *Social Indicators Research*)。其共同要求是：权重显式声明、必须做敏感性/稳健性分析、明确聚合规则的补偿性。当前权重未声明、无敏感性、聚合完全补偿 → **只能定性为工程启发式，不构成统计推断**。
+- 与风险治理口径冲突：加权平均允许「高 Oster + 低 AET」互相抵消，而治理语义通常是**最坏威胁主导**。
+
+### 11.5 建议
+
+1. **短期（零代码）**：把 0.4/0.3/0.2/0.1 登记为「先验权重 v1」，报告输出 `weights_version` + 有效权重；显式声明 τ 不可跨配置比较。
+2. **P-009 探针纳入权重敏感性**：Dirichlet 权重扰动 + 4 个角点配置，报告 τ 区间、档位翻转率、Spearman 秩相关、阈值穿越率；对分量 τ 做 bootstrap CI。
+3. **聚合规则**：默认改非补偿口径（`max` 或 any-rule：任一分量 ≥0.7 → strong、任一 ≥0.3 → mild），或保留加权平均但仅作展示、不作决策输入。
+4. **若坚持加权平均**：权重须用已知 DGP 的外部准则（溢价不稳定性 AUC / 决策损失）标定，并与 0.3/0.7 联合标定；在标定完成前不新增消费者（Layer 3 交互）。
+
+---
+
+## §12 因子内生性：学术脉络与可用手段调研（2026-11-24）
+
+### 12.1 先分清「内生性」的六种来源
+
+| # | 类型 | 因子语境下的机制 | 现有覆盖 |
+|---|------|-----------------|---------|
+| 1 | 遗漏变量 (OVB) | 未观测的风格 / 行业 / 宏观因子使 premium 高估或符号反转 | ✅ Oster δ + AET |
+| 2 | 测量误差 (EIV) | 两遍法把**估计的 β** 当作回归元 → 系数衰减、SE 失真（generated regressor） | ⚠️ 仅 Lewbel 内部 IV；无 Shanken 修正 |
+| 3 | 反向因果 / 同时性 | 市值、换手率、估值受过去收益影响；因子构造使用同期或未来信息 | ❌ 无专门检验（E4 Granger 只做归因） |
+| 4 | 选择偏差 / 数据窥探 | 从数百个候选因子中挑显著（factor zoo、p-hacking） | ⚠️ 多重检验 + spec logger 在 L2/L5，不在 E3 |
+| 5 | 交互效应 / 动态面板 | 时变 β 与潜在状态共变（条件因子模型） | ✅ IFE |
+| 6 | 缺失选择 | 缺失非随机（MNAR），插补引入选择偏差 | ✅ S1（默认关） |
+
+**关键**：E3 覆盖 1/2/5/6，**不覆盖 3/4**；后两类分别要靠构造期审计与多重检验/预注册，不能靠 E5 正则化。
+
+### 12.2 学术脉络（问题 → 代表文献 → 手段）
+
+| 问题 | 代表研究 | 核心手段 |
+|------|---------|---------|
+| OVB 敏感性 | Altonji–Elder–Taber (2005)；Oster (2019) | 选择比例 / δ 与 R_max 边界；报告**区间**而非单点 |
+| EIV / 两遍法偏差 | Shanken (1992)；Shanken & Zhou (2007)；Kan & Robotti (2009)；Ang–Liu–Schwarz (2020) | Shanken 修正；联合 GMM/ML；个股 vs 组合的权衡 |
+| 高维选择与选择后推断 | Belloni–Chernozhukov–Hansen (2014)；Feng–Giglio–Xiu (2020)；Giglio–Liao–Xiu (2021) | Post-Double-Selection Lasso；对遗漏因子稳健的多重检验 |
+| 双重稳健 / 正交矩 | Chernozhukov et al. (2018) | Double/Debiased ML；Neyman 正交 |
+| 收缩 / 贝叶斯先验 | Kozak–Nagel–Santosh (2020)；Harvey–Liu (2021) | SDF 系数收缩；Lucky Factors bootstrap |
+| 潜因子 / 交互效应 | Bai (2009)；Kelly–Pruitt–Su (2019) | 交互固定效应；IPCA（用 characteristics 作工具） |
+| 异方差内部 IV | Lewbel (2012) | 无需外部工具的内部 IV |
+| 残差化 / 正交化 | Blitz–Huij–Martens (2011) | 对风险因子取残差（residual momentum） |
+| 多重检验 / 可复制性 | Harvey–Liu–Zhu (2016)；Hou–Xue–Zhang (2020)；Chordia–Goyal–Saretto (2020) | t 阈值、BH/Bonferroni、复制与样本外 |
+| ML 资产定价 | Gu–Kelly–Xiu (2020) | 正则化非线性预测，需严格样本外 |
+
+### 12.3 实践手段：按流水线阶段分层
+
+| 阶段 | 手段 | 作用 | 局限 |
+|------|------|------|------|
+| 构造期 | point-in-time / 滞后一期；行业+市值+风格中性化；rank/zscore；缩尾 | 从源头消除同期性与异常值驱动 | 不能修复未观测混杂 |
+| 构造期 | 组合排序代替个股回归 | 降低 β 的 EIV | 组合压缩 β 离散度，未必然提高 premium 效率（Ang et al. 2020） |
+| 诊断期 | Oster / AET / IFE / Lewbel；多重检验；规格日志 | 识别威胁、控制数据窥探 | 诊断不等于修复 |
+| 估计期 | Shanken EIV 修正；IV/GMM/IVX/DOLS/PFGMM；IPCA；面板 FE/IFE | 修正偏差、识别因果 | 需有效工具/强假设 |
+| 估计期 | Post-Double-Selection Lasso；DML | 高维混杂下的有效推断 | 依赖选择一致性；不能保证无 OVB |
+| 正则化 | Ridge / Lasso / ElasticNet | 降方差、变量选择、稳权重 | **有偏**；不识别因果 |
+| 正则化 | 贝叶斯收缩 / 层次先验 | 稳定 SDF 权重、改善样本外 | 先验敏感；需标定 |
+| 组合层 | 暴露/行业/换手约束 | 控制非预期暴露 | 不改变 premium 估计 |
+| 治理期 | 报告 bounds + 敏感性 + holdout + 复制 + 非补偿规则 | 让结论可审计 | 不提升点估计精度 |
+
+### 12.4 关键澄清：正则化不能「修复」内生性
+
+1. **Lasso / ElasticNet / PDS** 处理的是「高维 + 选择偏差」：Feng–Giglio–Xiu 明确指出简单 LASSO 选出的模型不稳定、仍受遗漏变量偏误影响，必须用 double-selection 才能做有效选择后推断。
+2. **Ridge / 贝叶斯收缩** 是 bias–variance 权衡：降低方差的同时引入收缩偏差，不消除 OVB/EIV。
+3. **E5 的 L2/L3 不是统计正则化**：`α ← α_base(1−γτ)`、`w ← w_raw(1−ρτ)` 没有目标函数、没有理论保证，只是启发式调参；不能作为「内生性已处理」的证据。
+4. **唯一能「识别」偏差的手段**是 IV/GMM（需有效工具）、面板 FE/IFE、DML 的正交矩、或 Oster 式**部分识别边界**；其余手段只能缓解或披露。
+5. **约束型手段**（暴露中性、换手约束）属于组合风险控制，不是因子内生性的 remedy。
+
+### 12.5 当前 pipeline 的覆盖与缺口
+
+| 手段 | 状态 | 落点 |
+|------|------|------|
+| 行业/市值中性化 | ✅ 默认开（需数据） | `adapters.NeutralizerAdapter` |
+| 因子正交化 | ✅ opt-in | `modules/factor_orthogonalizer` |
+| Oster / AET / IFE / Lewbel | ✅ opt-in | E3 |
+| 三层正则化 | ⚠️ 启发式，无标定 | E5 |
+| GMM / IVX / DOLS / PFGMM | ✅ opt-in | E6 |
+| Post-Double-Selection Lasso | ✅ 独立模块，未接线 | `backtest/factor_significance.py` |
+| 多重检验（BH/Bonferroni/BY/RW/White RC/Hansen SPA） | ✅ 独立模块 | `multiple_testing.py` |
+| 规格日志 / holdout | ✅ opt-in | `specification_logger` / `cross_validation` |
+| **Shanken EIV 修正** | ❌ | `PremiumEstimator.estimate_with_errors` 仅 HAC |
+| **IPCA** | ❌ | — |
+| **DML** | ❌ | PDS 是近亲，不等于 DML |
+| **贝叶斯收缩 / 层次先验** | ❌ | — |
+| **反向因果专门检验** | ❌ | E4 Granger 仅归因 |
+| **组合暴露约束** | ❌ | — |
+| **权重敏感性 / 非补偿聚合** | ❌ | §11 |
+
+### 12.6 建议路线
+
+1. **零代码（探针）**：P-009 前置探针增加三项对照——① Oster bounds 与点估计并列；② Shanken 修正 vs 未修正 t 值（离线脚本）；③ 正交化前后 premium / τ 稳定性。先回答「偏差有多大」，再决定是否上线修正。
+2. **低风险（可选开关）**：在 `PremiumEstimator.estimate_with_errors` 增加 Shanken (1992) EIV 修正，默认关、零新增依赖；这是两遍法的标准做法，收益明确、风险可控。
+3. **中风险（接线）**：把已实现的 Post-Double-Selection Lasso 用于 factor zoo 增量检验，替代「逐因子单独显著性」；仍不进入默认 `fit/transform`。
+4. **研究分支（不急）**：IPCA、贝叶斯收缩、DML 需要新依赖或新数据结构，先立研究批次，不并入主线。
+5. **治理口径**：报告 component τ + Oster bounds + 权重敏感性；采用非补偿决策规则；明确 E5 是启发式而非「内生性修复」。
+6. **反向因果**：先做构造期审计（point-in-time、滞后、同期数据检查），再考虑 IV；不要用 E5 惩罚项代替识别策略。
+
+### 12.7 适用性复核与补全顺序（2026-11-24）
+
+**Shanken 修正不适用于当前 `PremiumEstimator`**：
+
+- 当前架构是「每期横截面回归 `r_{i,t}=α_t+β_t·f_{i,t−1}+ε` → β_t 即溢价 → 核平滑为 λ̂(t)」（[PremiumEstimator.estimate](../../modules/factor_health/__init__.py#L30-L60)），**不存在**「先用估计 β 做第二遍截面回归」的 two-pass 结构。
+- Shanken (1992) 修正的对象是 two-pass beta-pricing 中「估计 β 作为回归元」的 generated-regressor 偏差；当前路径没有该环节，直接套用属于错配。
+- 当前真正的 EIV 风险是**因子/暴露的测量误差**（attenuation bias）；可行 remedy 是 IV（外部或 Lewbel 内部）、测量误差建模、误差方差已知时的衰减校正、组合排序/rank 降噪。选哪一种需先做适用性审计。
+- 若未来新增「估计 β → 第二遍截面回归」的路径，再引入 Shanken 修正。
+
+**补全顺序（三波，全部松耦合）**：
+
+| 波次 | 项目 | 形态 | 风险 | 前置 |
+|------|------|------|------|------|
+| **Wave 0 适用性审计** | EIV remedy 选择、反向因果可检验边界、IPCA/DML/贝叶斯收缩的数据与依赖评估 | T3 研究备忘录，零代码 | 低 | 无 |
+| **Wave 1 低风险可选模块** | ① P-027 Stage 0b 报告字段；② EIV remedy（若审计判定可行）；③ 反向因果诊断（lead-lag / pre-trend / PIT 审计，仅诊断）；④ P-027 Stage 1 权重敏感性 | 独立入口 + 默认关开关 | 低-中 | Wave 0 裁决 |
+| **Wave 2 研究分支** | IPCA、DML、贝叶斯收缩 | 独立 research 批次，不接生产 | 中-高（新依赖/数据） | Wave 0 评估 + 独立立项 |
+
+**松耦合约束（每个模块必须满足）**：
+
+1. 独立入口（函数/类），不修改 `fit/transform` 默认路径；
+2. 配置开关默认关，命名空间独立；
+3. 不新增 τ 消费者，不进入 P-009 / Layer 3；
+4. 零新增运行时依赖（Wave 2 若必须新增，单独立项并披露）；
+5. 独立单测 + 默认 SHA 逐位不变；
+6. 诊断类模块明确写「不构成因果识别」，除非 IV 有效性已检验。
+
+**结论**：可以先补，但顺序是「先审计适用性 → 再补低风险模块 → 最后研究分支」，而不是把 IPCA/DML/贝叶斯收缩一次性接进来；任何模块都不得反向成为 τ 的决策依据。
+
+**P-028 审计结论（2026-11-24）**：Shanken 修正不适用；外部 IV / Lewbel 截面化 / 衰减校正均不具备当前条件；推荐 Wave 1 采用「披露 + 构造变体敏感性」，不做硬修正。详见 [SESSION.md](../../spec/p028-eiv-applicability-audit/SESSION.md)。**Wave 1 实测**：4 因子 × 6 构造变体，4/4 判定构造敏感；rank→normal 效应 +124%~+244%，amihud 在缩尾/市值/行业中性化下均敏感。详见 [EIV_SENSITIVITY_P028.md](EIV_SENSITIVITY_P028.md)。
+
+**参考文献（补充）**
+
+- Altonji, Elder & Taber (2005). *JPE* 113(1), 151-184.
+- Ang, Liu & Schwarz (2020). Using Stocks or Portfolios in Tests of Factor Models. *JFQA* 55(3), 709-750.
+- Bai (2009). *Econometrica* 77(4), 1229-1279.
+- Belloni, Chernozhukov & Hansen (2014). *REStud* 81(2), 608-650.
+- Blitz, Huij & Martens (2011). Residual Momentum. *JEF* 18(3), 506-521.
+- Chordia, Goyal & Saretto (2020). *RFS* 33(5), 2134-2179.
+- Chernozhukov et al. (2018). *Econometrics Journal* 21(1), C1-C68.
+- Feng, Giglio & Xiu (2020). *JF* 75(3), 1327-1370.
+- Giglio, Liao & Xiu (2021). *RFS* 34(7), 3456-3496.
+- Gu, Kelly & Xiu (2020). *RFS* 33(5), 2223-2273.
+- Harvey & Liu (2021). Lucky Factors. *JFE* 141(2), 413-435.
+- Harvey, Liu & Zhu (2016). *RFS* 29(1), 5-68.
+- Hou, Xue & Zhang (2020). *RFS* 33(5), 2019-2133.
+- Kan & Robotti (2009). *JF* 64(6), 2617-2649.
+- Kelly, Pruitt & Su (2019). *JFE* 134(3), 501-524.
+- Kozak, Nagel & Santosh (2020). *JFE* 135(2), 271-292.
+- Lewbel (2012). *JBES* 30(1), 67-80.
+- Oster (2019). *JBES* 37(2), 187-204.
+- Shanken (1992). *RFS* 5(1), 1-33.
+- Shanken & Zhou (2007). *JFE* 84(1), 40-86.
+
+---
+
+## §13 路线裁决：τ 融合的冻结、探针与降级（2026-11-24，用户批准）
+
+> **执行状态（2026-11-24）**：Stage 0 文档冻结已完成（[SESSION.md](../../spec/p027-tau-fusion-freeze/SESSION.md) v1.1）；**Stage 1 探针**已执行：G1 16.7% / G2 翻转 18.8% / G3 p=0.317，三项全失败 → **Stage 2 判定：τ 仅展示、E5 experimental、P-009 关闭为「不实现」**（[TAU_FUSION_STAGE1_P027.md](TAU_FUSION_STAGE1_P027.md)）。Stage 0 代码字段（`weights_version` / `effective_weights` / `s4_input_stage` / `stage_fallback` / `experimental`）**T1 已实施并验证**（[IMPLEMENTATION](../../spec/p027-stage0b-disclosure-fields/IMPLEMENTATION.md) / [CHECKLIST](../../spec/p027-stage0b-disclosure-fields/CHECKLIST.md) v1.1 accepted：定向 5 passed、两模块 55 passed、全量回归 2274 passed / 0 failed；包版本 **3.11.2**）；P-027 转为 `done`。
+
+### 13.1 裁决依据
+
+- §11：加权平均权重硬编码、有效权重随方法开关漂移、补偿型聚合、无不确定度传播；0.3 / 0.7 未与权重联合标定。
+- §12：四个分量回答不同问题，不是同一潜变量的重复测量；无共同似然、无重复估计、τ 非概率 → 加权融合**不具备统计估计意义上的学术基座**。
+- 风险面：E3 / E5 / E6 全部 opt-in（`enable_*=False`），τ 当前仅被 E5、优化器（λ=0）和显著性检验消费，尚未进入默认生产路径 → **有冻结空间，不需要紧急改默认**。
+
+**裁决**：τ 定位为「启发式摘要」，不作为新增决策层的基座；P-009 不启动，E5 标注 experimental；先用只读探针设门槛，证据达标后再谈标定或接线。
+
+### 13.2 三阶段门
+
+| 阶段 | 动作 | 产出 | 通过条件 |
+|------|------|------|---------|
+| **Stage 0 冻结（现在）** | ① τ 文档定位为 `heuristic summary v1`；② 冻结权重 `0.4/0.3/0.2/0.1`，报告输出 `weights_version` + `effective_weights`；③ E5 标注 experimental，不得表述为「内生性已修正」；④ S4 回退显式标记（未传 `decoupled_factor` 时用 `imputed_factor`，[L1912](../../pipelines_v2.py#L1912)）；⑤ 禁止新增 τ 消费者；⑥ 默认行为零变更 | 文档 + 报告字段 | 不改变任何默认输出 |
+| **Stage 1 探针（零生产接线）** | 在 4+ 真实因子上：分量 τ 分布；Oster bounds；Shanken 修正 vs 未修正 t；Dirichlet 权重扰动（1000 次）+ 4 角点；档位翻转率 / Spearman 秩相关；τ 与「溢价不稳定性」的外部关联 | 探针报告（先定版门槛再跑） | G1-G3 全满足（见 13.3） |
+| **Stage 2 裁决** | 通过 → 官方标量改为**非补偿** `max` 或 any-rule，加权平均降为展示，并重标定 0.3 / 0.7；不通过 → τ 仅展示，E5 L2/L3 决策语义降级/弃用，P-009 关闭为「不实现」 | 决策记录 + 必要代码 | 仅证据达标才接线 |
+
+### 13.3 预注册门槛（Stage 1 前定版）
+
+- **G1 聚合一致性**：加权平均与 `max` 规则的档位（none / mild / strong）一致率 ≥ 90%。
+- **G2 权重稳健性**：Dirichlet 扰动下档位翻转率 ≤ 10%，且 τ 的 Spearman 秩相关 ≥ 0.90。
+- **G3 外部效度**：按 τ 高低分组，高 τ 组的溢价不稳定性（如滚动 premium 符号翻转率 / ES-TD 概率 / 断点概率）显著更高（预注册单侧检验 + bootstrap CI）。
+- 三条全满足 → Stage 2 判定「标量可用于监控」；任一不满足 → τ 不得进入决策路径。
+
+### 13.4 三条硬规则
+
+1. **不把加权平均当决策依据**。需要标量时用 `max` 或 any-rule（任一分量 ≥0.7 → strong；任一 ≥0.3 → mild），避免任意权重与补偿性。
+2. **不校准不决策**。权重与 0.3 / 0.7 阈值必须用外部准则（溢价不稳定性 / 决策损失）标定；未标定前只作展示。
+3. **不新增消费者**。P-009 / Layer 3 交互在 Stage 2 通过前不启动；E5 保持 opt-in。
+
+### 13.5 被拒路线
+
+| 路线 | 拒绝理由 |
+|------|---------|
+| 保留加权平均并调权重 | 无标签可校准，易过拟合；推迟到有外部准则 |
+| 直接删除 τ / E5 | 过度；分量诊断仍有信息价值，且默认已关 |
+| 贝叶斯潜变量模型 | 需联合似然 / 先验设定，当前数据与理论不支持 |
+| 先做 P-009 交互 | 在无基座的标量上再加规则，放大不可审计性 |
+
+### 13.6 Stage 0 代码清单（P-027 实施时执行，本次不写代码）
+
+| # | 改动 | 目的 |
+|---|------|------|
+| 1 | `final_assessment` / S2-S4 报告补 `weights_version='v1'`、`effective_weights` | 权重可追溯、跨配置不可比显式化 |
+| 2 | S4 报告补 `s4_input_stage` / `stage_fallback` 标记 | 区分「解耦后」与「回退到插补后」 |
+| 3 | E5 文档与输出标注 `experimental=True` / heuristic 文案 | 防止被当作内生性修复证据 |
+| 4 | 默认值零变更 | 保护既有证据逐位不变 |
+
+### 13.7 P-009 准入条件
+
+P-009 仅当以下条件**同时**满足才启动：
+
+1. P-027 Stage 2 判定「标量可用」；
+2. G1-G3 全满足，且聚合规则已定为非补偿；
+3. 0.3 / 0.7 阈值已用外部准则标定；
+4. `tau_stage` 与 `diagnose` 输入阶段完成绑定与校验。
+
+否则 P-009 关闭为「不实现」，与多断点同处置；本裁决登记为 **P-027**（[PROGRESS.md](../PROGRESS.md)）。
+
+**2026-11-24 判定**：Stage 1 的 G1/G2/G3 全失败 → P-009 关闭为「不实现」，不启动交互；τ 仅展示，E5 保持 experimental。

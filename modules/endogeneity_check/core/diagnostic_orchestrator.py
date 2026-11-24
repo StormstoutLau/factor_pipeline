@@ -70,6 +70,14 @@ class EndogeneityDiagnosticOrchestrator:
         self._s4_report: Optional[Dict] = None
         self._final_assessment: Optional[Dict] = None
 
+    def get_weights_version(self) -> str:
+        """τ 融合权重版本 (P-027 Stage 0b 披露字段)."""
+        return self._assessor.get_weights_version()
+
+    def get_effective_weights(self) -> Dict[str, float]:
+        """当前启用方法的归一化有效权重 (P-027 Stage 0b 披露字段)."""
+        return self._assessor.get_effective_weights(self.methods)
+
     def diagnose_s1_pre_imputation(
         self,
         raw_factor_with_missing: pd.DataFrame,

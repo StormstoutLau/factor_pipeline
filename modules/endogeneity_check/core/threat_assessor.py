@@ -11,7 +11,10 @@ S1 的缺失机制诊断结果 (MCAR/MAR/MNAR) 逻辑指导 S2 的正则化策�
 而非对 base_tau 做数值乘法. final_tau 保持为 base_tau 本身.
 """
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
+
+TAU_WEIGHTS_VERSION = 'v1'
 
 
 class EndogeneityThreatAssessor:
@@ -35,6 +38,28 @@ class EndogeneityThreatAssessor:
             'lewbel': 0.1,
         }
         self.final_threshold = final_threshold
+
+    def get_effective_weights(self, methods: Optional[List[str]] = None) -> Dict[str, float]:
+        """返回启用方法的归一化有效权重 (仅披露, 不参与融合计算).
+
+        只保留权重 > 0 的方法, 并按启用方法重新归一化; 因此同一因子在
+        不同 `endogeneity_methods` 配置下的 ``effective_weights`` 不同,
+        τ 不可跨配置直接比较.
+        """
+        active = {}
+        for method in methods or []:
+            weight = float(self.weights.get(method, 0.0))
+            if weight > 0:
+                active[method] = weight
+        total = sum(active.values())
+        if total <= 0:
+            return {}
+        return {method: weight / total for method, weight in active.items()}
+
+    @staticmethod
+    def get_weights_version() -> str:
+        """返回当前融合权重版本 (P-027 Stage 0b 披露字段)."""
+        return TAU_WEIGHTS_VERSION
 
     def assess(
         self,

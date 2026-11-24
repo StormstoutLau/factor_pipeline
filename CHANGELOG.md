@@ -1,5 +1,31 @@
 # 开发日志 (Changelog)
 
+## v3.11.2 — 内生性 τ 披露字段（P-027 Stage 0b）(已实施, 2026-11-24)
+
+### 概览
+
+承接 P-027 Stage 2 裁决（τ 仅展示、E5 标 experimental、P-009 关闭），给 E3 四阶段报告与 E5 正则化输出补**只读披露字段**，使 τ 的口径来源可审计：权重版本、按启用方法归一化的有效权重、各阶段输入阶段、S4 回退标记、E5 的 experimental/heuristic 标注。默认数值行为零变更（E3/E5 默认仍关闭；启用时只追加键）。
+
+### 变更
+
+- `modules/endogeneity_check/core/threat_assessor.py`：新增模块常量 `TAU_WEIGHTS_VERSION='v1'`、`get_weights_version()`、`get_effective_weights(methods)`（仅保留权重 >0 的启用方法并按和归一化；未知方法忽略；空集返回 `{}`）。
+- `modules/endogeneity_check/core/diagnostic_orchestrator.py`：委托 `get_weights_version()` / `get_effective_weights()`。
+- `pipelines_v2.py`：`check_endogeneity` 顶层追加 `weights_version` / `effective_weights` / `tau_is_heuristic=True`；S2 `input_stage='imputed'`、S3 `input_stage='neutralized'`；S4 `s4_input_stage ∈ {'decoupled','imputed_fallback'}` + `stage_fallback: bool`；`final_assessment` 与 S4 同步。`apply_endogeneity_regularization` 追加 `experimental=True` / `heuristic=True` / `weights_version` / `effective_weights`。
+- 新增测试 5 例：`tests/test_endogeneity_check/test_endogeneity.py` C2/C3/C4、`tests/test_endogeneity_regularizer/test_regularizer.py` E5-T18/T19。
+- 包版本 **3.11.1 → 3.11.2** 落 6 个锚点 + 本条目。
+
+### 行为影响
+
+- 默认路径（E3/E5 关闭）零变更；启用路径仅追加键，`final_threat_tau`、`component_taus`、L1/L2/L3 参数与数值不变。
+- 零新增运行时依赖。
+
+### 验证
+
+- 定向：C2/C3/C4 **3 passed**；E5-T18/T19 **2 passed**；两个内生性模块 **55 passed**。
+- 全量回归（版本 bump 前，2026-11-24）：**2274 passed / 36 skipped / 0 failed**（1051.62 s；较 v3.11.1 基线 +5 例，均为本批新增）。
+- 版本 bump 后复跑：`tests/test_fix3_version_unification.py` **9 passed**、手工校验 **5/5（6/6 锚点）**、内生性两模块 **55 passed**（仅版本字符串变更，数值代码未动）。
+
+
 ## v3.11.1 — `stock_return` 百分数契约口径修正（P-025）(已实施, 2026-11-24)
 
 ### 概览

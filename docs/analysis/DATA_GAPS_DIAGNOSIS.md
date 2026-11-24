@@ -97,11 +97,13 @@ S2 (2023-01 → 2025-12) 的风格/行业暴露未被控制, 相关结论只能�
 
 ## §5 处置
 
+> **2026-11-24 台账**：P0 与 P2 已合并登记 **P-026**（外部数据项梳理与刷新请求，blocked；**2026-11-24 用户裁决暂时 suspend**，恢复触发=外部数据源确定并交付）；本节动作以 P-026 为准。[SESSION.md](../../spec/p026-external-data-refresh/SESSION.md)
+
 | 级别 | 动作 | 状态 |
 |------|------|------|
-| P0 | 重新导出 `market_value.csv` 至 2026-01-30 (需数据管道侧修复) | 待办 |
-| P1 | **数据新鲜度守卫**: 研究开跑前断言「各字段最后满覆盖日 ≥ 样本末 − N 交易日」, 默认 **N=1** (price/amount 要求当日, 按字段可配), 不满足则显式告警/中止 — 阈值口径以 [治理路线图 §5 P0-2](MULTIFACTOR_GOVERNANCE_ROADMAP.md) 为准 (原 −5 交易日口径恰好放过本次 mv 5 日缺口, 已修订) | 待办 (P2 列表) |
-| P2 | barra/行业 2024+: 换源 (tushare 行业 + 自建风格因子) 或明确锁定样本 ≤ 2023-06 | 待办 |
+| P0 | 重新导出 `market_value.csv` 至行情末日（当前 2026-01-30，需数据管道侧修复） | → **P-026**（blocked：外部数据交付） |
+| P1 | **数据新鲜度守卫**: 研究开跑前断言「各字段最后满覆盖日 ≥ 样本末 − N 交易日」, 默认 **N=1** (price/amount 要求当日, 按字段可配), 不满足则显式告警/中止 — 阈值口径以 [治理路线图 §5 P0-2](MULTIFACTOR_GOVERNANCE_ROADMAP.md) 为准 (原 −5 交易日口径恰好放过本次 mv 5 日缺口, 已修订) | ✅ v3.6.0 GR-2（`data_contract` + `scripts/contract_gate.py`） |
+| P2 | barra/行业 2023-06 后: 换源 (tushare 行业 + 自建风格因子) 或明确锁定样本 ≤ 2023-06 | → **P-026**（blocked：外部数据交付） |
 | P3 | 文档披露: 本文 + `PROJECT_STATUS` 已知数据限制 + `LONG_SIDE_PORTFOLIO_RESEARCH` §11 补 barra 行 | ✅ 本次完成 |
 
 > 新鲜度守卫建议实现位置: `scripts/` 下复用性工具或 `backtest/cached_data_loader.py`,

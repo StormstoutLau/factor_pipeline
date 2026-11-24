@@ -272,3 +272,42 @@ class TestEndogeneityRegularizerDependency:
         # 不开启时, 实例化正常
         pipeline = FactorProcessingPipelineV2(config)
         assert pipeline is not None
+
+    def test_E5_T18_experimental_metadata(self):
+        """E5-T18: 输出携带 experimental/heuristic/weights_version (P-027 Stage 0b)."""
+        config = PipelineV2Config(
+            enable_endogeneity_check=True,
+            enable_endogeneity_regularization=True,
+        )
+        pipeline = FactorProcessingPipelineV2(config)
+        result = pipeline.apply_endogeneity_regularization(
+            threat_assessment=_make_threat_assessment(0.5),
+        )
+        assert result is not None
+        assert result['experimental'] is True
+        assert result['heuristic'] is True
+        assert result['weights_version'] == 'v1'
+        # 手工构造的 assessment 无披露字段 → None
+        assert result['effective_weights'] is None
+
+    def test_E5_T19_metadata_from_e3(self):
+        """E5-T19: 从 E3 缓存报告继承 weights_version/effective_weights."""
+        f_df = _make_factor_panel(n_t=60, n_n=50, seed=41)
+        r_df = _make_factor_panel(n_t=60, n_n=50, seed=42)
+        config = PipelineV2Config(
+            enable_endogeneity_check=True,
+            enable_endogeneity_regularization=True,
+            endogeneity_methods=['oster_delta', 'aet'],
+        )
+        pipeline = FactorProcessingPipelineV2(config)
+        pipeline.check_endogeneity(
+            raw_factor_with_missing=f_df,
+            imputed_factor=f_df,
+            returns=r_df,
+        )
+        result = pipeline.apply_endogeneity_regularization()
+        assert result is not None
+        assert result['weights_version'] == 'v1'
+        assert result['effective_weights'] == pytest.approx({
+            'oster_delta': 4.0 / 7.0, 'aet': 3.0 / 7.0,
+        })

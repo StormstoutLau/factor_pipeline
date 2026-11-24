@@ -3,7 +3,7 @@
 ---
 id: spec-compliance
 type: process-spec
-version: 1.2
+version: 1.4
 status: verified
 date: 2026-11-24
 depends: [v392-calibration-unit-fix-RESEARCH, v392-calibration-unit-fix-DESIGN, v392-calibration-unit-fix-IMPLEMENTATION, v392-calibration-unit-fix-CHECKLIST]
@@ -20,7 +20,7 @@ upstream: SPEC_PROCESS.md
 | 流程本体（自包含） | [spec/SPEC_PROCESS.md](../spec/SPEC_PROCESS.md) | ✅ 已随仓 |
 | 四件套模板 | [spec/templates/](../spec/templates/)（RESEARCH / DESIGN / IMPLEMENTATION / CHECKLIST，另含 ADR 与决策矩阵模板） | ✅ 已随仓 |
 | 批次目录 | [spec/v392-calibration-unit-fix/](../spec/v392-calibration-unit-fix/)（RESEARCH / DESIGN / IMPLEMENTATION / CHECKLIST / CONSISTENCY_REVIEW / AUDIT） | ✅ 已迁移 |
-| 待办真值源 | [docs/PROGRESS.md](PROGRESS.md)（P-001 ~ P-025，状态词 `pending/in-progress/blocked/done`） | ✅ 已建立 |
+| 待办真值源 | [docs/PROGRESS.md](PROGRESS.md)（P-001 ~ P-028，状态词 `pending/in-progress/blocked/done`） | ✅ 已建立 |
 | 开发日志 | [docs/dev-log/](dev-log/) | ✅ 已建立（首条 DEV-LOG-2026-11-20） |
 | 合规登记 | 本文件 | ✅ |
 
@@ -54,7 +54,7 @@ v3.9.2 六份文档均已补 front-matter（H1 后 10 行内）：
 | 命名空间 | 载体 | 当前范围 | 说明 |
 |---------|------|---------|------|
 | `ADR-0xx` | `DECISIONS.md` | ADR-001 ~ ADR-058 | 单体承载（D-003） |
-| `P-0xx` | `docs/PROGRESS.md` | P-001 ~ P-025 | 待办真值源，编号单调不复用 |
+| `P-0xx` | `docs/PROGRESS.md` | P-001 ~ P-028 | 待办真值源，编号单调不复用 |
 | `D-0xx` | 本文件 §3 | D-001 ~ D-005 | 合规偏差 |
 | `v392-calibration-unit-fix-*` | `spec/v392-calibration-unit-fix/` | 6 文档 | 批次文档命名空间 |
 | `RULE-1~6` | `spec/SPEC_PROCESS.md` | 全局 | 由权威规范定义，本仓不重定义 |
