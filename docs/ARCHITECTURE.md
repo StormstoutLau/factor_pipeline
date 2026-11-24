@@ -419,7 +419,7 @@ python -m pytest factor_pipeline/tests/unit/test_imputer_lookahead_fix.py `
 |------|------|------|
 | `types.py` 在项目根遮蔽标准库 | 必须从父目录运行 pytest | 长期: 重命名 types.py |
 | KNN walk_forward 不能向量化 | 每个 (asset, t) 用不同训练集, 性能较慢 | 因果算法本质, 保留 for 循环 |
-| MissingTypeDiagnoser 使用全样本 EM | strategy='auto' 时有间接前视 | P3 待办 (expanding EM) |
+| MissingTypeDiagnoser 使用全样本 EM | strategy='auto' 时有间接前视 | 已知局限；P-011 裁决**不修复**（触发条件：`strategy='auto'` 或任何调用 `HierarchicalImputer` 的路径进入生产，或诊断输出用于交易/风控决策时重开；见 [P-011 RESEARCH §3.3](../spec/v398-p011-dev-backlog-triage/RESEARCH.md#L128-L138)） |
 | PanelHierarchicalImputer 间接前视 | 通过子组件继承 | 已通过子组件修复传导 (§4.5) |
 
 ### §9.2 未来方向 (v3.4.0+)

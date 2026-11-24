@@ -3,7 +3,7 @@
 ---
 id: p023-tradability-memory-phase2-CHECKLIST
 type: design
-version: 1.2
+version: 1.3
 status: done
 date: 2026-11-24
 depends: [p023-tradability-memory-phase2-IMPLEMENTATION, p023-tradability-memory-phase2-DESIGN]
@@ -12,7 +12,7 @@ upstream: null
 
 > **Feature**: P-023（离线 name 紧凑缓存 + worker 日期分片 + M-2/M-3 复测）
 > **创建日期**: 2026-11-24
-> **状态**: **done**（Step 7 产出 v1.0；Step 8 §1；Step 9 §2-§9/§12.1；Step 10 §8/§10/§12.2 回填 v1.2；64/64 通过）
+> **状态**: **done**（Step 7 产出 v1.0；Step 8 §1；Step 9 §2-§9/§12.1；Step 10 §8/§10/§12.2 回填 v1.2；v1.3 = P-024 收口，仅修正 §11 提交状态与 M-3/耗时读数；64/64 通过）
 > **Spec 步骤**: Step 7-8, 10
 > **档位**: **T1** ｜ **包版本**: 3.10.1 → **3.11.0** ｜ **新依赖**: 无
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)（v1.2 verified）
@@ -99,7 +99,7 @@ upstream: null
 | N-10 | INV-10 跨块状态 | pending/locked/target/`w_prev_long`/`turnover_prev` 逐位且不混用 | `test_p023_apply_state_boundary`、`test_p023_turnover_boundary` | ✅ 绿 |
 | N-11 | INV-11 name carry | 跨块 ST/退市逐位；`name_missing` 原始 NaN | `test_p023_name_carry`、`test_p023_no_limit_cross_chunk` | ✅ 绿 |
 | N-12 | INV-12 聚合 | mismatch/turnover（含空头腿）分块求和逐位 | `test_p023_stream_engine_equal` | ✅ 绿 |
-| N-13 | INV-13 预算 | M-1 ≤30 s；M-2/M-3 ≤1024 MB | §6 证据脚本 | ✅ 绿（16.86 s / 171.5 / 619.4 MB） |
+| N-13 | INV-13 预算 | M-1 ≤30 s；M-2/M-3 ≤1024 MB | §6 证据脚本 | ✅ 绿（16.80 s / 171.5 / 618.6 MB） |
 | N-14 | INV-14 缓存只读 | 二次 plan 前后 `_PANEL_CACHE` 与调用方数组哈希不变 | `test_p023_cache_immutable` | ✅ 绿（无 float 面板入缓存） |
 | N-15 | INV-15 原子性 | 半成品不可被 loader 读取；无 `*.tmp-*` 残留 | `test_p023_npz_atomic` | ✅ 绿 |
 
@@ -155,7 +155,7 @@ upstream: null
 | A-1 | Iron Law 4 项 | 设计→代码→测试→证据一致 | ✅ PASS（D1-D9 均有代码落点 + 测试名 + E1 读数；Step 10 审计 1×P1/2×P2/5×P3 全部处置，见 §12.2） |
 | A-2 | 证据矩阵 | 每条验收项有 E1 读数/测试名 | ✅ PASS（§2-§7 每行均有测试名或脚本读数；M-4/M-6 已写入证据 JSON） |
 | A-3 | 反向核对 | 代码改动均有 CHECKLIST 项承接 | ✅ PASS（loader→F-1~F-6/N-5~N-15、inputs→F-5/F-6、tradability→F-7/N-10、engine→F-7/F-8/N-4/N-12、runner→F-9/I-6、scripts→F-4/S-1~S-3、tests→§12） |
-| A-4 | 未决项 | U-1~U-5 状态如实 | ✅ PASS（U-1 token 待；U-2 未触发（619.4 MB）；U-3 已定 60；U-4 off 已实现并对拍；U-5 已披露） |
+| A-4 | 未决项 | U-1~U-5 状态如实 | ✅ PASS（U-1 token 待；U-2 未触发（618.6 MB）；U-3 已定 60；U-4 off 已实现并对拍；U-5 已披露） |
 
 ---
 
@@ -211,9 +211,9 @@ upstream: null
 | Step 9 TDD A1-A5（§2-§7、§12） | ✅ 完成（37 passed / 1 skipped；证据脚本实跑） |
 | Step 10 ADD 审计（§8） | ✅ 完成（PASS_WITH_FIXES；1×P1/2×P2/5×P3 全处置） |
 | 台账/CHANGELOG 收口（3.11.0） | ✅ CHANGELOG v3.11.0 + PROGRESS/PROJECT_STATUS |
-| P-022 改动提交 | 用户明确「先不提交」，保持工作区 |
+| P-022 / P-023 改动提交 | ✅ 已提交并推送（commit `17b981e`，2026-11-24；`master...origin/master` 同步） |
 | U-1 `stk_limit` 外部一致率 | token 到位后 |
-| U-2 M-3 未达时的追加节省 | 未触发（619.4 MB 达标） |
+| U-2 M-3 未达时的追加节省 | 未触发（618.6 MB 达标） |
 | U-5 `stk_limit` 表内存披露 | 已披露（DESIGN §4.3） |
 
 ---
