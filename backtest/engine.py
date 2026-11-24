@@ -35,7 +35,8 @@ from .factor_metrics import (
     compute_long_short_returns,
     compute_spread,
 )
-from .tradability import apply_tradability_with_diagnostics
+from .tradability import (apply_tradability_with_diagnostics,
+                          TradabilityApplyState)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class FactorBacktestEngine:
         config: Optional[Dict[str, Any]] = None,
         fwd_returns: Optional[np.ndarray] = None,
         tradability_inputs=None,
+        tradability_plan=None,
     ):
         """初始化因子回测引擎。
 
@@ -76,6 +78,8 @@ class FactorBacktestEngine:
                          若为 None，引擎内部自动计算。
                          用于多引擎共享前向收益，避免重复计算。
             tradability_inputs: 可选 TradabilityInputs；None 时旧路径逐位不变。
+            tradability_plan: 可选 TradabilityPlan（P-023 流式路径）；与
+                tradability_inputs 互斥。
 
         Raises:
             ValueError: 因子数据为空时，或 fwd_returns 形状不匹配时
@@ -104,6 +108,14 @@ class FactorBacktestEngine:
         self._tradability_inputs = tradability_inputs
         if tradability_inputs is not None:
             self._validate_tradability_inputs(tradability_inputs)
+
+        # P-023 流式 plan（互斥；None → 旧路径逐位不变）
+        if tradability_plan is not None and tradability_inputs is not None:
+            raise ValueError(
+                "tradability_inputs 与 tradability_plan 不能同时提供")
+        self._tradability_plan = tradability_plan
+        if tradability_plan is not None:
+            self._validate_tradability_plan(tradability_plan)
 
         # 缓存
         self._fwd_returns: Optional[np.ndarray] = None
@@ -181,6 +193,19 @@ class FactorBacktestEngine:
                 raise ValueError(
                     f"tradability_inputs.{field} 形状应为 {expected} "
                     f"(实际 {np.shape(value)})")
+
+    def _validate_tradability_plan(self, plan) -> None:
+        """P-023 流式 plan 形状/mode 校验。"""
+        n_dates = len(getattr(plan, "index", ()))
+        n_codes = len(getattr(plan, "codes", ()))
+        if n_dates != self.n_dates or n_codes != self.n_stocks:
+            raise ValueError(
+                f"tradability_plan 形状应为 ({self.n_dates}, {self.n_stocks})"
+                f" (实际 ({n_dates}, {n_codes}))")
+        if getattr(plan, "mode", None) not in (
+                "full", "execution_only_open", "off"):
+            raise ValueError(
+                f"tradability_plan.mode 非法: {getattr(plan, 'mode', None)!r}")
 
     def compute_fwd_returns(self) -> np.ndarray:
         """公开方法: 计算前向收益率 (供外部预计算和共享)。
@@ -277,6 +302,8 @@ class FactorBacktestEngine:
         Returns:
             指标字典
         """
+        if self._tradability_plan is not None:
+            return self._evaluate_factor_streaming(factor_name)
         factor = self.dl.factor_data[factor_name]  # (n_dates, n_stocks)
         fwd_ret = self._compute_fwd_returns()       # (n_dates - 1, n_stocks)
 
@@ -327,7 +354,10 @@ class FactorBacktestEngine:
                     no_limit=inputs.no_limit, ref=getattr(inputs, "ref", None),
                     limit_up=getattr(inputs, "limit_up", None),
                     limit_down=getattr(inputs, "limit_down", None))
-            effective = effective_long + np.minimum(positions, 0.0)
+            # 空头腿透传；原地累加，避免再分配一份 (T,N)
+            effective = effective_long
+            for _t in range(self.n_dates):
+                effective[_t] += np.minimum(positions[_t], 0.0)
             turnover = compute_turnover(effective)
             diag = dict(getattr(inputs, "diagnostics", None) or {})
             diag.update(apply_diag)
@@ -354,6 +384,146 @@ class FactorBacktestEngine:
         # Spread
         spread = compute_spread(ls_returns)
 
+        result = {
+            'rank_ic_series': rank_ic_series,
+            'rank_icir': rank_icir,
+            'pearson_ic_series': pearson_ic_series,
+            'pearson_icir': pearson_icir,
+            'ic_decay': ic_decay,
+            'hit_rate': hit_rate,
+            'turnover': turnover,
+            'long_short_returns': ls_returns,
+            'spread': spread,
+        }
+        if tradability_block is not None:
+            result['tradability'] = tradability_block
+        return result
+
+    def _evaluate_factor_streaming(self, factor_name: str) -> Dict[str, Any]:
+        """P-023：分块 positions/apply/turnover；IC/LS 保持整幅。"""
+        factor = self.dl.factor_data[factor_name]
+        fwd_ret = self._compute_fwd_returns()
+
+        factor_t = factor.T
+        fwd_ret_t = fwd_ret.T
+        padding = np.full((fwd_ret_t.shape[0], 1), np.nan)
+        fwd_ret_t = np.hstack([padding, fwd_ret_t])
+
+        rank_ic_series = compute_ic_series(factor_t, fwd_ret_t, method='rank')
+        rank_icir = compute_icir(rank_ic_series)
+        pearson_ic_series = compute_ic_series(factor_t, fwd_ret_t,
+                                              method='pearson')
+        pearson_icir = compute_icir(pearson_ic_series)
+        max_lag = self.config.get('max_lag', 12)
+        ic_decay = compute_ic_decay(factor_t, fwd_ret_t, max_lag=max_lag)
+        hit_rate = compute_hit_rate(rank_ic_series)
+        top_n = self.config.get('top_n', 0.2)
+        ls_returns = compute_long_short_returns(factor_t, fwd_ret_t,
+                                                top_n=top_n)
+        spread = compute_spread(ls_returns)
+
+        plan = self._tradability_plan
+        turnover_parts = []
+        tradability_block = None
+        if plan.mode == "off":
+            prev_row = None
+            for chunk in plan.iter_chunks():
+                pos_chunk = self._build_positions(
+                    factor[chunk.start:chunk.stop])
+                if prev_row is not None and pos_chunk.shape[0]:
+                    turnover_parts.append(np.array(
+                        [0.5 * np.sum(np.abs(pos_chunk[0] - prev_row))]))
+                row = compute_turnover(pos_chunk)
+                if row.size:
+                    turnover_parts.append(row)
+                if pos_chunk.shape[0]:
+                    prev_row = pos_chunk[-1].copy()
+                del pos_chunk
+            plan.finalize()
+        else:
+            state = TradabilityApplyState(
+                np.zeros(self.n_stocks),
+                np.full(self.n_stocks, -1, dtype=int),
+                np.zeros(self.n_stocks))
+            report_total = None
+            diag_total = {}
+            mismatch = 0
+            pos_prev_row = None
+            for chunk in plan.iter_chunks():
+                s, e = chunk.start, chunk.stop
+                pos_chunk = self._build_positions(factor[s:e])
+                target_prev = (None if pos_prev_row is None
+                               else np.clip(pos_prev_row, 0.0, None))
+                res = plan.build_chunk(chunk)
+                inputs_chunk = res.inputs
+                T_c = e - s
+                prev_close = np.full((T_c, self.n_stocks), np.nan)
+                if T_c > 1:
+                    prev_close[1:] = inputs_chunk.close[:-1]
+                if res.prev_close0 is not None and T_c:
+                    prev_close[0] = res.prev_close0
+                eff_long, report, apply_diag, state = \
+                    apply_tradability_with_diagnostics(
+                        np.clip(pos_chunk, 0.0, None),
+                        prev_close, inputs_chunk.high, inputs_chunk.low,
+                        inputs_chunk.close, inputs_chunk.open_,
+                        inputs_chunk.volume, inputs_chunk.suspended,
+                        inputs_chunk.board, inputs_chunk.is_st,
+                        inputs_chunk.dates, policy=inputs_chunk.policy,
+                        adj=inputs_chunk.adj,
+                        is_delisting=inputs_chunk.is_delisting,
+                        no_limit=inputs_chunk.no_limit,
+                        ref=getattr(inputs_chunk, "ref", None),
+                        limit_up=getattr(inputs_chunk, "limit_up", None),
+                        limit_down=getattr(inputs_chunk, "limit_down", None),
+                        state=state, target_prev=target_prev,
+                        t_offset=s, is_last_chunk=(e == self.n_dates),
+                        return_state=True)
+                effective = eff_long
+                effective += np.minimum(pos_chunk, 0.0)
+                if s > 0 and state.turnover_prev is not None:
+                    turnover_parts.append(np.array(
+                        [0.5 * np.sum(np.abs(effective[0]
+                                             - state.turnover_prev))]))
+                row = compute_turnover(effective)
+                if row.size:
+                    turnover_parts.append(row)
+                state.turnover_prev = effective[-1].copy()
+                mismatch += int(np.count_nonzero(~np.isclose(
+                    inputs_chunk.close, self._close[s:e], equal_nan=True)))
+                if report_total is None:
+                    report_total = dict(report)
+                else:
+                    for key in report_total:
+                        report_total[key] += report[key]
+                for key, value in apply_diag.items():
+                    if (key.endswith("_cells")
+                            and isinstance(value, (int, np.integer))
+                            and not isinstance(value, bool)):
+                        diag_total[key] = diag_total.get(key, 0) + int(value)
+                    else:
+                        diag_total[key] = value
+                pos_prev_row = pos_chunk[-1].copy()
+                del res, inputs_chunk, pos_chunk, effective, eff_long
+            plan.finalize()
+            diag = dict(plan.diagnostics or {})
+            diag.update(diag_total)
+            if (diag.get("limit_table_missing_cells") or 0) > 0:
+                diag["limit_table_source"] = "stk_limit_partial"
+            diag["close_mismatch_cells"] = mismatch
+            meta = plan.meta or {}
+            tradability_block = {
+                'report': report_total,
+                'meta': meta,
+                'diagnostics': diag,
+                'price_basis': meta.get('price_basis', 'raw_adj_ref'),
+                'leg_scope': 'long_only',
+                'short_leg_unmodeled': True,
+                'turnover_basis': 'effective_long_only',
+            }
+
+        turnover = (np.concatenate(turnover_parts) if turnover_parts
+                    else np.array([]))
         result = {
             'rank_ic_series': rank_ic_series,
             'rank_icir': rank_icir,

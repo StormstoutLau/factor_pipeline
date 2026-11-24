@@ -1,0 +1,284 @@
+{
+ "F1_basic": {
+  "diagnostics": {
+   "adj_source": "adj",
+   "bias_direction": "optimistic",
+   "close_mismatch_cells": 0,
+   "data_tier": "D3",
+   "exec_down_touch_cells": 0,
+   "exec_price_missing_cells": 0,
+   "exec_up_touch_cells": 0,
+   "execution_timing": "t_plus_1_open",
+   "high_low_coverage": 1.0,
+   "high_up_touch_cells": 0,
+   "limit_table_missing_cells": 0,
+   "limit_table_source": "self_computed",
+   "low_down_touch_cells": 0,
+   "missing_fields": [
+    "suspend",
+    "list_date"
+   ],
+   "mode": "full",
+   "name_missing_cells": 0,
+   "name_missing_days": 0,
+   "one_word_disabled": false,
+   "open_coverage": 1.0,
+   "prev_close_coverage": 1.0,
+   "price_basis_detail": "raw_adj_ref_full",
+   "ref_fallback_cells": 0,
+   "ref_fallback_days": 0,
+   "rule_gap_cells": 0,
+   "rule_gap_days": 0,
+   "rule_gap_reason": null,
+   "schema_version": 2,
+   "suspend_missing_cells": 32,
+   "suspend_missing_days": 8,
+   "unknown_policy": "fallback_raw"
+  },
+  "leg_scope": "long_only",
+  "meta": {
+   "adj_missing_days": 0,
+   "board_counts": {
+    "gem": 1,
+    "main": 3
+   },
+   "delisting_stock_days": 0,
+   "no_limit_cells": 0,
+   "no_limit_source": "delisting_only",
+   "one_word_down_cells": 0,
+   "one_word_up_cells": 0,
+   "price_basis": "raw_adj_ref",
+   "rounding_basis": "exchange_half_up",
+   "st_calibration_source": "none",
+   "st_date_unverified": 0,
+   "st_stock_days": 0,
+   "unknown_codes": []
+  },
+  "price_basis": "raw_adj_ref",
+  "report": {
+   "blocked_buy": 0,
+   "blocked_sell": 0,
+   "blocked_suspend": 0,
+   "carried": 0,
+   "deferred": 0,
+   "limit_unknown": 0,
+   "one_word_down": 0,
+   "one_word_up": 0,
+   "t1_locked": 0
+  },
+  "short_leg_unmodeled": true,
+  "turnover": [
+   0.5,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "turnover_basis": "effective_long_only"
+ },
+ "F2_st": {
+  "diagnostics": {
+   "adj_source": "adj",
+   "bias_direction": "optimistic",
+   "close_mismatch_cells": 0,
+   "data_tier": "D2",
+   "exec_down_touch_cells": 0,
+   "exec_price_missing_cells": 0,
+   "exec_up_touch_cells": 0,
+   "execution_timing": "t_plus_1_open",
+   "high_low_coverage": 1.0,
+   "high_up_touch_cells": 0,
+   "limit_table_missing_cells": 0,
+   "limit_table_source": "self_computed",
+   "low_down_touch_cells": 0,
+   "missing_fields": [
+    "name",
+    "suspend",
+    "list_date"
+   ],
+   "mode": "full",
+   "name_missing_cells": 4,
+   "name_missing_days": 1,
+   "one_word_disabled": false,
+   "open_coverage": 1.0,
+   "prev_close_coverage": 1.0,
+   "price_basis_detail": "raw_adj_ref_full",
+   "ref_fallback_cells": 0,
+   "ref_fallback_days": 0,
+   "rule_gap_cells": 0,
+   "rule_gap_days": 0,
+   "rule_gap_reason": null,
+   "schema_version": 2,
+   "suspend_missing_cells": 32,
+   "suspend_missing_days": 8,
+   "unknown_policy": "fallback_raw"
+  },
+  "leg_scope": "long_only",
+  "meta": {
+   "adj_missing_days": 0,
+   "board_counts": {
+    "gem": 1,
+    "main": 3
+   },
+   "delisting_stock_days": 0,
+   "no_limit_cells": 0,
+   "no_limit_source": "delisting_only",
+   "one_word_down_cells": 0,
+   "one_word_up_cells": 0,
+   "price_basis": "raw_adj_ref",
+   "rounding_basis": "exchange_half_up",
+   "st_calibration_source": "none",
+   "st_date_unverified": 0,
+   "st_stock_days": 2,
+   "unknown_codes": []
+  },
+  "price_basis": "raw_adj_ref",
+  "report": {
+   "blocked_buy": 0,
+   "blocked_sell": 0,
+   "blocked_suspend": 0,
+   "carried": 0,
+   "deferred": 0,
+   "limit_unknown": 0,
+   "one_word_down": 0,
+   "one_word_up": 0,
+   "t1_locked": 0
+  },
+  "short_leg_unmodeled": true,
+  "turnover": [
+   0.5,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "turnover_basis": "effective_long_only"
+ },
+ "F3_suspend": {
+  "diagnostics": {
+   "adj_source": "adj",
+   "bias_direction": "optimistic",
+   "close_mismatch_cells": 0,
+   "data_tier": "D3",
+   "exec_down_touch_cells": 0,
+   "exec_price_missing_cells": 0,
+   "exec_up_touch_cells": 0,
+   "execution_timing": "t_plus_1_open",
+   "high_low_coverage": 1.0,
+   "high_up_touch_cells": 0,
+   "limit_table_missing_cells": 0,
+   "limit_table_source": "self_computed",
+   "low_down_touch_cells": 0,
+   "missing_fields": [
+    "suspend",
+    "list_date"
+   ],
+   "mode": "full",
+   "name_missing_cells": 0,
+   "name_missing_days": 0,
+   "one_word_disabled": false,
+   "open_coverage": 1.0,
+   "prev_close_coverage": 1.0,
+   "price_basis_detail": "raw_adj_ref_full",
+   "ref_fallback_cells": 0,
+   "ref_fallback_days": 0,
+   "rule_gap_cells": 0,
+   "rule_gap_days": 0,
+   "rule_gap_reason": null,
+   "schema_version": 2,
+   "suspend_missing_cells": 29,
+   "suspend_missing_days": 8,
+   "unknown_policy": "fallback_raw"
+  },
+  "leg_scope": "long_only",
+  "meta": {
+   "adj_missing_days": 0,
+   "board_counts": {
+    "gem": 1,
+    "main": 3
+   },
+   "delisting_stock_days": 0,
+   "no_limit_cells": 0,
+   "no_limit_source": "delisting_only",
+   "one_word_down_cells": 0,
+   "one_word_up_cells": 0,
+   "price_basis": "raw_adj_ref",
+   "rounding_basis": "exchange_half_up",
+   "st_calibration_source": "none",
+   "st_date_unverified": 0,
+   "st_stock_days": 0,
+   "unknown_codes": []
+  },
+  "price_basis": "raw_adj_ref",
+  "report": {
+   "blocked_buy": 0,
+   "blocked_sell": 0,
+   "blocked_suspend": 1,
+   "carried": 0,
+   "deferred": 1,
+   "limit_unknown": 0,
+   "one_word_down": 0,
+   "one_word_up": 0,
+   "t1_locked": 0
+  },
+  "short_leg_unmodeled": true,
+  "turnover": [
+   0.25,
+   0.25,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "turnover_basis": "effective_long_only"
+ },
+ "F4_limit_bse": {
+  "diagnostics": {
+   "close_mismatch_cells": 0,
+   "exec_down_touch_cells": 0,
+   "exec_price_missing_cells": 0,
+   "exec_up_touch_cells": 9,
+   "execution_timing": "t_plus_1_open",
+   "high_up_touch_cells": 0,
+   "limit_table_missing_cells": 1,
+   "limit_table_source": "stk_limit_partial",
+   "low_down_touch_cells": 0,
+   "mode": "full",
+   "one_word_disabled": false,
+   "schema_version": 2
+  },
+  "leg_scope": "long_only",
+  "meta": {
+   "board_counts": {
+    "bse": 1
+   },
+   "price_basis": "raw_adj_ref"
+  },
+  "price_basis": "raw_adj_ref",
+  "report": {
+   "blocked_buy": 5,
+   "blocked_sell": 0,
+   "blocked_suspend": 0,
+   "carried": 1,
+   "deferred": 0,
+   "limit_unknown": 0,
+   "one_word_down": 0,
+   "one_word_up": 0,
+   "t1_locked": 0
+  },
+  "short_leg_unmodeled": true,
+  "turnover": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "turnover_basis": "effective_long_only"
+ }
+}

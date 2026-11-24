@@ -67,11 +67,16 @@ def _run_worker(args: tuple) -> Dict[str, Dict[str, float]]:
             shared_fwd = fwd_returns
 
         tradability_inputs = None
+        tradability_plan = None
         if spec is not None:
-            tradability_inputs, _ = spec.build(cd, cs)
+            if getattr(spec, "max_dates_per_chunk", None) is None:
+                tradability_inputs, _ = spec.build(cd, cs)
+            else:
+                tradability_plan = spec.build_plan(cd, cs)
 
         engine = FactorBacktestEngine(dl, config=config, fwd_returns=shared_fwd,
-                                      tradability_inputs=tradability_inputs)
+                                      tradability_inputs=tradability_inputs,
+                                      tradability_plan=tradability_plan)
         engine.run()
         results[fn] = engine.summary()[fn]
 
@@ -226,7 +231,8 @@ class ParallelFactorRunner:
         chunks = self._split_factors(factors, n_workers)
 
         worker_args = [
-            (chunk, factor_data, price_data, fwd, config, self.tradability_spec)
+            ({fn: factor_data[fn] for fn in chunk}, price_data, fwd, config,
+             self.tradability_spec)
             for chunk in chunks
         ]
 

@@ -1,5 +1,96 @@
 # 开发日志 (Changelog)
 
+## v3.11.0 — tradability 内存第二阶：离线 name npz + worker 日期分片（P-023）(已实施, 2026-11-24)
+
+### 概览
+
+承接 P-023（[spec/p023-tradability-memory-phase2](spec/p023-tradability-memory-phase2/)），包版本 **3.10.1 → 3.11.0**（minor：新增可选流式路径与离线缓存脚本；默认路径零变更）。把 P-022 遗留的 M-2/M-3 内存缺口收口：`stock_name.pkl`（567 MB 解码常驻）→ **34.5 MiB（36,193,178 B）** 未压缩 `.npz`；worker 启用 tradability 时改为**逐块读面板（不保留 float 整幅缓存）+ 60 交易日分块 build/apply/turnover**。默认路径与启用整幅路径的 `report` 9 键 / `meta` 13 键 / diagnostics / turnover / IC / LS **逐位不变**。
+
+### 变更
+
+- **D1 离线 name 紧凑缓存**：`backtest/tradability_loader.py` 新增 `build_name_compact_payload/load_name_compact/write_name_compact`；npz 9 键（`format_version/codes/index/columns/uniques/st_lut/del_lut/source_mtime/source_size`），`allow_pickle=False`；loader 优先读、校验失败/缺失/mtime 过期回退 pkl。
+- **D2 迁移脚本**：`scripts/build_name_compact_cache.py`（`--data-root/--panel-dir/--out/--force/--dry-run`）；幂等 `up-to-date`、临时文件 + round-trip + `os.replace`、从不修改 pkl、删 npz 即回退。
+- **D3 分块 plan**：`TradabilitySpec.build_plan()` → `TradabilityPlan`（`iter_chunks/build_chunk/finalize`）；`ChunkResult(inputs, counts, prev_close0, close_last, name_last)`；全局 coverage/mode/`no_limit_override` 解析；预扫只计数，不做 float 面板缓存。
+- **D4 builder 关键帧**：`build_tradability_inputs(..., *, prev_close0, adj_prev0, name_carry, no_limit_override, return_counts)`；既有位置参数/关键字与 `build()` 主体零改动。
+- **D5 分块 apply**：`TradabilityApplyState(pending, locked_until, w_prev_long, turnover_prev)` + apply `state/target_prev/t_offset/is_last_chunk/return_state`；`locked_until` 使用绝对 t；`carried` 仅末块。
+- **D6 引擎流式**：`FactorBacktestEngine(..., tradability_plan=None)` 与 `_evaluate_factor_streaming`；positions/apply/mismatch/turnover 按块，**IC/LS 保持整幅与现有 hstack**；`mode=off` 走旧 turnover。
+- **D7 worker 接线**：`_run_worker` 在 `spec` 且 `max_dates_per_chunk` 非 None 时走 plan 流式；`None` 回整幅 `build()`；6 元组签名不变。
+- **D8 默认块长 60**：`TradabilitySpec.max_dates_per_chunk=60`（`name_compact_path=None` 同名新增字段）。
+- **新增测试** `tests/test_tradability_p023.py`（38 例：npz 格式/回退/迁移原子、plan meta 对拍、lookback/name carry/no_limit 跨块、apply 状态、turnover 边界、4 fixture × 块长逐位、worker、键冻结、缓存只读、ref fallback 分级、脚本 schema）。
+- 包版本 **3.11.0** 落 6 个锚点 + 本条目。
+
+### 行为影响（显式披露）
+
+- 默认路径（`tradability_inputs=None` / `tradability_plan=None` / `spec=None`）逐位不变；`TradabilitySpec.build()` 整幅路径逐位不变。
+- 流式路径的 `report` 9 键 / `meta` 13 键 / diagnostics 键集合、turnover、IC/ICIR/decay/hit_rate/LS/spread 与整幅逐位一致（块长 1/2/7/60/T）。
+- 流式路径**不读 volume 面板**（`volume=None` → 全 NaN 块）；apply 不消费 volume，语义零影响。
+- 流式引入约 **2× 面板 IO**（预扫 close/high/low/open + build close/high/low/open/adj）；OS 缓存下 M-1 冷/热分别 30.15 s / **16.80 s**。
+- npz 缺失/损坏/版本不符/mtime 过期 → 回退 pkl + `name_compact_fallback` warning，结果不变；数据根只读时仍可读已有 npz。
+
+### 阈值证据（E1，全样本 `E:\Ashare_data`）
+
+- **npz**：`stock_name_compact.npz` **36,193,178 B（34.5 MiB）**，1474×6053，8,770 唯一名；源 pkl 102,051,886 B；`source_mtime/size` 校验通过；pkl vs npz 的 `index/columns/codes/uniques/st_lut/del_lut` 六项全样本逐位相等。
+- **M-1**：plan 5.98 s + 25 块 build 10.82 s = **16.80 s**（冷读 30.15 s，按 DESIGN 以第二次读数为准；JSON `run_index=2`）。
+- **M-2**：tracemalloc 峰值 **171.5 MB**（预算 1024）。
+- **M-3**：spawn 子进程 `build_plan + 单因子流式 run` 峰值 RSS **618.6 MB**（预算 1024；基线 P-022 2463.5 MB）。
+- **M-4**：常驻 name npz 34.1 MB + suspend 紧凑 16.0 MB = **50.0 MB**（预算 500）。
+- **M-5**：4 组 fixture × 块长 {1,2,7,60} 逐位一致（`test_p023_stream_engine_equal`）。
+- **M-6**：plan 完成后 RSS **287.2 MB**（预算 1400，仅披露）。
+- 证据脚本：`scripts/verify_tradability_memory.py` → `out/tradability_memory_p023.json`。
+
+### 版本
+
+- 3.11.0 落 6 个锚点 + 本条目。
+
+### 验证
+
+- 定向：`python -m pytest -q tests/test_tradability_p023.py` → **37 passed / 1 skipped**（worker 用例在缺少可选依赖 `Factor_Trading_v3_0` 时跳过）。
+- 兼容：`tests/test_tradability_p022.py` + `tests/test_tradability_pipeline.py` → **29 passed / 1 skipped**。
+- 版本：`tests/test_fix3_version_unification.py` → **9 passed**。
+- 全量回归（最终代码状态，2026-11-24 独立 basetemp）：`python -m pytest -q --no-header` → **2264 passed / 36 skipped / 0 failed**（1619.36 s）。
+- **Step 10 独立 ADD 审计 PASS_WITH_FIXES**（1×P1 / 2×P2 / 5×P3 全部处置，见 [CHECKLIST §12.2](spec/p023-tradability-memory-phase2/CHECKLIST.md)）。
+
+
+## v3.10.1 — tradability 收口包：内存布局优化 + U-7/U-8/R-3 阈值裁决（P-022）(已实施, 2026-11-23)
+
+### 概览
+
+承接 P-022（[spec/p022-tradability-closeout](spec/p022-tradability-closeout/)），包版本 **3.10.0 → 3.10.1**（patch：内存布局与执行路径优化，无接口语义变更）。把 P-021 遗留的 P-2 内存、U-7 覆盖率、U-8 mismatch、R-3 敏感性四项收口：`_PANEL_CACHE` 的 name/suspend 改紧凑表示、切片/构建零拷贝快路径、并行 worker 载荷裁剪、apply/引擎原地化；默认与启用路径数值逐位不变。
+
+### 变更
+
+- **D1 紧凑面板缓存**：`backtest/tradability_loader.py` 新增 `_PanelRecord(kind ∈ float|name|suspend|raw)`；name 面板缓存 float32 码（8,771 唯一名）+ `(uniques, st_lut, del_lut)`；suspend 缓存 `(mask, missing)` bool；含 bool 列的 suspend 面板回退 raw 以保留 reindex 升型 quirk；唯一值 >2^24 回退 raw。
+- **D2 零拷贝快路径**：`_slice` 统一返回 `(data, aux)`，全量命中复用同对象/同数组；`build_tradability_inputs` 的 `_frame`/`_panel` 在对齐且 float64 + fill=NaN 时返回原 df。
+- **D3 worker 载荷裁剪**：`ParallelFactorRunner._run_group` 仅传本 chunk 的因子子集；`_run_worker` 6 元组签名不变。
+- **D4 执行路径原地化**：`apply_tradability_with_diagnostics` 改逐日 `_pct_row`（`_pct_matrix` 单源委托），且仅在无 `limit_up` 时计算 pct；引擎 `effective` 原地累加；`compute_turnover` 单行缓冲（浮点保持原 dtype，非浮点输出 float64）。
+- **D5-D7 阈值裁决**：`min_coverage=0.99` 保留；`close_mismatch_cells` 维持 0 容忍、仅披露；健康度/漂移阈值不重标定。
+- **新增证据脚本** `scripts/verify_tradability_closeout.py`（U-7/U-8/R-3；`--data-root/--panel-dir/--out/--only/--price-panel`）。
+- **新增测试** `tests/test_tradability_p022.py`（24 例：紧凑缓存 / 零拷贝 / 逐位基线 / worker 载荷 / 错误场景 / 脚本 schema）。
+- 包版本 **3.10.1** 落 6 个代码/配置锚点（`pyproject.toml`、`__init__.py`、`config_v2.py`、`reporting.py`、两处测试 `EXPECTED_VERSION`）+ 本条目。
+
+### 行为影响（显式披露）
+
+- 默认路径（`tradability_inputs=None` / `tradability_spec=None`）与启用路径的 `report` 9 键 / `meta` 13 键、`turnover`、IC、`long_short_returns` 全部逐位不变（4 组 fixture 对拍 + 默认工件 SHA `82728CE1…` 复跑一致）。
+- name/suspend 紧凑缓存只改变内存表示；`missing_fields` 判定按“compact 或 raw 任一提供”修正，不再因紧凑路径误报。
+- 内存：缓存常驻 deep 1140.1 → **430.7 MB**；build 22.43 → **15.64 s**；build tracemalloc 峰值 2585.1 → **1249.4 MB**；build 后 RSS 2201.3 → **1345.4 MB**；worker 3348 → **2463.5 MB**。M-2/M-3 未达 1 GB 预算 → 登记 **P-023**（离线 name `.npz` + worker 日期分片）；本批以“有条件通过”收口。
+
+### 阈值证据（E1，全样本）
+
+- **U-7**：73/73 月 `full`；`high_low/open` 覆盖率 min=1.0、`prev` min=0.994429；`below_099` 三键全空 → 保留 `min_coverage=0.99`。
+- **U-8**：同源对拍 **0 / 8,389,800**（ratio 0）；阈值 = 0 容忍 + 仅披露。
+- **R-3**：turnover Δ `mom20 −0.365%` / `rev5 −2.056%` / `vol20 −0.097%`；健康分 Δ ≤0.347；组合漂移 Δ 绝对值 ≤0.020；拥挤告警 0/3 翻转；ICIR/LS 逐位一致 → 不重标定阈值。
+
+### 版本
+
+- 3.10.1 落 6 个锚点 + 本条目。
+
+### 验证
+
+- 定向：`python -m pytest -q tests/test_tradability_p022.py` → **23 passed / 1 skipped**（进程池串并行用例在缺少可选依赖 `Factor_Trading_v3_0` 时跳过，与 `test_p0_parallel` 同惯例）。
+- 全量回归（最终代码状态）：`python -m pytest -q --no-header` → **2227 passed / 35 skipped / 0 failed**（933.81 s）。
+- **Step 10 独立 ADD 审计 PASS_WITH_FIXES**（质量门 2/5 档位 C；2×P1 / 5×P2 / 3×P3 全部处置，见 CHECKLIST §12.2）。
+
+
 ## v3.10.0 — tradability 生产启用（C 内部对拍 + A 证据层）(已实施, 2026-11-23)
 
 ### 概览

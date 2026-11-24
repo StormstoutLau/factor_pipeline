@@ -23,6 +23,10 @@ def _norm_code(code):
 def _frame(df, index, columns, fill, dtype):
     if df is None:
         return pd.DataFrame(fill, index=index, columns=columns, dtype=dtype)
+    if (df.index.equals(index) and df.columns.equals(columns)
+            and isinstance(fill, (float, np.floating)) and np.isnan(fill)
+            and (df.dtypes == np.float64).all()):
+        return df
     out = df.reindex(index=index, columns=columns)
     return out.fillna(fill).astype(dtype)
 
@@ -30,6 +34,8 @@ def _frame(df, index, columns, fill, dtype):
 def _panel(df, index, columns):
     """DataFrame/Series/ndarray → (T,N) DataFrame；ndarray 需同形。"""
     if isinstance(df, pd.DataFrame):
+        if df.index.equals(index) and df.columns.equals(columns):
+            return df
         return df.reindex(index=index, columns=columns)
     if isinstance(df, pd.Series):
         return df.to_frame().reindex(index=index, columns=columns)
@@ -81,7 +87,13 @@ def _coverage(mask, eligible):
 def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
                              adj=None, list_date=None, policy=None,
                              st_overrides=None, limit_up=None,
-                             limit_down=None, ref=None):
+                             limit_down=None, ref=None,
+                             name_codes=None, name_st_lut=None,
+                             name_del_lut=None, suspend_mask=None,
+                             suspend_missing=None, *,
+                             prev_close0=None, adj_prev0=None,
+                             name_carry=None, no_limit_override=None,
+                             return_counts=False):
     """面板（dates×stocks）→ (TradabilityInputs, meta)，纯函数、无 IO。
 
     adj 与 ref 至少一个；都 None → ValueError。
@@ -89,6 +101,11 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     st_overrides: DataFrame/list（code, effective_date）公告覆盖表，
         仅用于统计 st_date_unverified，不改变派生状态。
     limit_up/limit_down: 外部限价（stk_limit），须成对；缺格回退自算。
+
+    P-023（keyword-only，默认 None/False → 旧行为逐位不变）：
+      prev_close0/adj_prev0/name_carry: 分块首行的上一日关键帧；
+      no_limit_override: 全局预计算的 (T,N) bool（builder 仅 &= ~suspend）；
+      return_counts: True → 返回 (inputs, counts)；否则 (inputs, meta)。
     """
     if adj is None and ref is None:
         raise ValueError("build_tradability_inputs 需要 adj 或 ref")
@@ -110,35 +127,113 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     limit_up_a = _normalize_panel(limit_up, index, columns)
     limit_down_a = _normalize_panel(limit_down, index, columns)
 
-    suspend_a, suspend_missing = _suspend_mask(suspend, index, columns)
-
-    name_raw = (pd.DataFrame(np.nan, index=index, columns=columns, dtype=object)
-                if name is None else name.reindex(index=index, columns=columns))
-    name_missing = name_raw.isna().to_numpy()
-    name_a = name_raw.ffill().fillna("")
+    if suspend_mask is not None:
+        if suspend_missing is None:
+            raise ValueError("suspend_mask 与 suspend_missing 必须成对提供")
+        suspend_a = np.asarray(suspend_mask, dtype=bool)
+        suspend_missing = np.asarray(suspend_missing, dtype=bool)
+        if suspend_a.shape != (len(index), len(columns)):
+            raise ValueError("suspend_mask 形状应为 %r"
+                             % ((len(index), len(columns)),))
+        if suspend_missing.shape != suspend_a.shape:
+            raise ValueError("suspend_missing 形状应与 suspend_mask 一致")
+    elif suspend_missing is not None:
+        raise ValueError("suspend_missing 必须与 suspend_mask 成对提供")
+    else:
+        suspend_a, suspend_missing = _suspend_mask(suspend, index, columns)
 
     T, N = close_a.shape
     dates_arr = np.array([pd.Timestamp(d).strftime("%Y-%m-%d")
                           for d in index_dt])
+    last_filled_name = np.full(N, np.nan, dtype=object)
 
     boards = np.array([board_of(code) for code in columns])
     board_counts = dict(Counter(boards.tolist()))
     unknown_codes = [str(code) for code, b in zip(columns, boards)
                      if b == "unknown"][:20]
 
-    name_np = name_a.to_numpy(dtype=object)
-    is_st = np.zeros((T, N), dtype=bool)
-    is_delisting = np.zeros((T, N), dtype=bool)
-    for j in range(N):
-        column = name_np[:, j]
-        is_st[:, j] = np.fromiter(("ST" in str(v) for v in column),
-                                  dtype=bool, count=T)
-        is_delisting[:, j] = np.fromiter(("退" in str(v) for v in column),
-                                         dtype=bool, count=T)
+    if name_codes is not None:
+        if name_st_lut is None or name_del_lut is None:
+            raise ValueError("name_codes 需要 name_st_lut/name_del_lut")
+        st_lut_arr = np.asarray(name_st_lut)
+        del_lut_arr = np.asarray(name_del_lut)
+        if st_lut_arr.ndim != 1 or del_lut_arr.ndim != 1:
+            raise ValueError("name_st_lut/name_del_lut 必须为一维")
+        if name_codes.shape != (len(index), len(columns)):
+            raise ValueError("name_codes 形状应为 %r"
+                             % ((len(index), len(columns)),))
+        raw = name_codes
+        if not (raw.index.equals(index) and raw.columns.equals(columns)):
+            raw = raw.reindex(index=index, columns=columns)
+        name_missing = raw.isna().to_numpy()
+        if name_carry is not None and T > 0:
+            carry = np.asarray(name_carry, dtype=np.float32)
+            if carry.shape != (N,):
+                raise ValueError("name_carry 形状应为 (%d,) (实际 %r)"
+                                 % (N, carry.shape))
+            codes_np = raw.to_numpy(dtype=np.float32, copy=True)
+            invalid = ~np.isfinite(codes_np[0])
+            codes_np[0, invalid] = carry[invalid]
+            filled = pd.DataFrame(codes_np, index=index, columns=columns) \
+                .ffill().to_numpy(dtype=np.float32)
+            del codes_np
+        else:
+            filled = raw.ffill().to_numpy(dtype=np.float32)
+        if T > 0:
+            last_filled_name = filled[-1].copy()
+        valid = np.isfinite(filled)
+        idx = np.where(valid, filled, 0).astype(np.int32)
+        is_st = np.zeros(valid.shape, dtype=bool)
+        is_delisting = np.zeros(valid.shape, dtype=bool)
+        if valid.any():
+            if int(idx[valid].max()) >= len(st_lut_arr):
+                raise ValueError("name_st_lut 长度不足")
+            if int(idx[valid].max()) >= len(del_lut_arr):
+                raise ValueError("name_del_lut 长度不足")
+            is_st[valid] = st_lut_arr[idx[valid]]
+            is_delisting[valid] = del_lut_arr[idx[valid]]
+    else:
+        name_raw = (pd.DataFrame(np.nan, index=index, columns=columns,
+                                 dtype=object)
+                    if name is None
+                    else name.reindex(index=index, columns=columns))
+        name_missing = name_raw.isna().to_numpy()
+        if name_carry is not None and T > 0:
+            carry = np.asarray(name_carry, dtype=object)
+            if carry.shape != (N,):
+                raise ValueError("name_carry 形状应为 (%d,) (实际 %r)"
+                                 % (N, carry.shape))
+            raw_np = name_raw.to_numpy(dtype=object, copy=True)
+            invalid = pd.isna(raw_np[0])
+            raw_np[0, invalid] = carry[invalid]
+            name_a = pd.DataFrame(raw_np, index=index, columns=columns) \
+                .ffill().fillna("")
+            del raw_np
+        else:
+            name_a = name_raw.ffill().fillna("")
+        if T > 0:
+            last_filled_name = name_a.iloc[-1].to_numpy(dtype=object)
+
+        name_np = name_a.to_numpy(dtype=object)
+        is_st = np.zeros((T, N), dtype=bool)
+        is_delisting = np.zeros((T, N), dtype=bool)
+        for j in range(N):
+            column = name_np[:, j]
+            is_st[:, j] = np.fromiter(("ST" in str(v) for v in column),
+                                      dtype=bool, count=T)
+            is_delisting[:, j] = np.fromiter(("退" in str(v) for v in column),
+                                             dtype=bool, count=T)
 
     no_limit = np.zeros((T, N), dtype=bool)
     no_limit_source = "delisting_only"
-    if list_date is not None:
+    if no_limit_override is not None:
+        no_limit = np.array(no_limit_override, dtype=bool, copy=True)
+        if no_limit.shape != (T, N):
+            raise ValueError("no_limit_override 形状应为 %r (实际 %r)"
+                             % ((T, N), no_limit.shape))
+        if list_date is not None:
+            no_limit_source = "list_date"
+    elif list_date is not None:
         ld = pd.Series(list_date)
         norm = {}
         for k, v in ld.items():
@@ -160,10 +255,11 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         if used:
             no_limit_source = "list_date"
 
-    for j in range(N):
-        first = np.flatnonzero(is_delisting[:, j])
-        if first.size:
-            no_limit[first[0], j] = True
+    if no_limit_override is None:
+        for j in range(N):
+            first = np.flatnonzero(is_delisting[:, j])
+            if first.size:
+                no_limit[first[0], j] = True
     no_limit &= ~suspend_a
 
     st_calibration_source = "none"
@@ -187,12 +283,19 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     prev = np.full((T, N), np.nan)
     if T > 1:
         prev[1:] = close_a[:-1]
+    if prev_close0 is not None:
+        prev0 = np.asarray(prev_close0, dtype=float)
+        if prev0.shape != (N,):
+            raise ValueError("prev_close0 形状应为 (%d,) (实际 %r)"
+                             % (N, prev0.shape))
+        if T > 0:
+            prev[0] = prev0
 
     # ── 除权参考价 + D2 回退 ──────────────────────────────
     if ref is not None:
         ref_mat = _normalize_panel(ref, index, columns)
     else:
-        ref_mat = _ref_from_adj(prev, adj_a)
+        ref_mat = _ref_from_adj(prev, adj_a, prev_adj=adj_prev0)
     fallback = ~np.isfinite(ref_mat) & np.isfinite(prev) & (prev > 0.0)
     if policy.unknown_policy == "fallback_raw":
         ref_mat = np.where(fallback, prev, ref_mat)
@@ -209,6 +312,7 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
                                     return_gaps=True)
     rule_gap_cells = int(gap_mask.sum())
     rule_gap_days = int(gap_mask.any(axis=1).sum())
+    rule_gap_bse_cells = int(np.count_nonzero(gap_mask & (boards == "bse")))
     if np.any(gap_mask & (boards == "bse")):
         rule_gap_reason = "neeq_pre_select"
     elif gap_mask.any():
@@ -271,7 +375,11 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         prev_close_coverage = 0.0
 
     suspend_missing_cells = int(np.count_nonzero(suspend_missing))
+    suspend_missing_days = int(suspend_missing.any(axis=1).sum())
     name_missing_cells = int(np.count_nonzero(name_missing))
+    name_missing_days = int(name_missing.any(axis=1).sum())
+    adj_missing_days = (T if adj is None else int(np.any(
+        ~np.isfinite(adj_a) | (adj_a <= 0.0), axis=1).sum()))
     tiers = []
     if ref_fallback_cells > 0 or adj_source == "ref_fallback":
         tiers.append(1)
@@ -293,9 +401,9 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
     missing_fields = []
     if adj is None:
         missing_fields.append("adj")
-    if name_missing_cells > 0 or name is None:
+    if name_missing_cells > 0 or (name is None and name_codes is None):
         missing_fields.append("name")
-    if suspend_missing_cells > 0 or suspend is None:
+    if suspend_missing_cells > 0 or (suspend is None and suspend_mask is None):
         missing_fields.append("suspend")
     if list_date is None:
         missing_fields.append("list_date")
@@ -316,8 +424,7 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         "delisting_stock_days": int(is_delisting.sum()),
         "no_limit_cells": int(no_limit.sum()),
         "no_limit_source": no_limit_source,
-        "adj_missing_days": (T if adj is None else int(np.any(
-            ~np.isfinite(adj_a) | (adj_a <= 0.0), axis=1).sum())),
+        "adj_missing_days": adj_missing_days,
         "one_word_up_cells": one_word_up,
         "one_word_down_cells": one_word_down,
         "st_date_unverified": st_date_unverified,
@@ -343,9 +450,9 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         "ref_fallback_cells": ref_fallback_cells,
         "ref_fallback_days": ref_fallback_days,
         "name_missing_cells": name_missing_cells,
-        "name_missing_days": int(name_missing.any(axis=1).sum()),
+        "name_missing_days": name_missing_days,
         "suspend_missing_cells": suspend_missing_cells,
-        "suspend_missing_days": int(suspend_missing.any(axis=1).sum()),
+        "suspend_missing_days": suspend_missing_days,
         "rule_gap_cells": rule_gap_cells,
         "rule_gap_days": rule_gap_days,
         "rule_gap_reason": rule_gap_reason,
@@ -361,4 +468,31 @@ def build_tradability_inputs(close, high, low, open_, volume, suspend, name,
         limit_up=limit_up_a, limit_down=limit_down_a,
         codes=np.array([str(c) for c in columns], dtype=object),
         diagnostics=diagnostics)
+    if return_counts:
+        counts = {
+            "eligible_cells": int(np.count_nonzero(eligible)),
+            "high_low_covered": int(np.count_nonzero(
+                np.isfinite(high_a) & np.isfinite(low_a) & eligible)),
+            "open_covered": int(np.count_nonzero(
+                np.isfinite(open_a) & eligible)),
+            "name_missing_cells": name_missing_cells,
+            "name_missing_days": name_missing_days,
+            "suspend_missing_cells": suspend_missing_cells,
+            "suspend_missing_days": suspend_missing_days,
+            "ref_fallback_cells": ref_fallback_cells,
+            "ref_fallback_days": ref_fallback_days,
+            "rule_gap_cells": rule_gap_cells,
+            "rule_gap_days": rule_gap_days,
+            "rule_gap_bse_cells": rule_gap_bse_cells,
+            "one_word_up": one_word_up,
+            "one_word_down": one_word_down,
+            "limit_table_missing_cells": limit_table_missing_cells,
+            "st_date_unverified": st_date_unverified,
+            "no_limit_cells": int(no_limit.sum()),
+            "st_stock_days": int(is_st.sum()),
+            "delisting_stock_days": int(is_delisting.sum()),
+            "adj_missing_days": adj_missing_days,
+            "last_filled_name": last_filled_name,
+        }
+        return inputs, counts
     return inputs, meta

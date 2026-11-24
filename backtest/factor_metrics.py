@@ -285,8 +285,16 @@ def compute_turnover(positions: np.ndarray) -> np.ndarray:
     if positions.shape[0] < 2:
         return np.array([])
 
-    diffs = np.abs(np.diff(positions, axis=0))
-    turnover = 0.5 * np.sum(diffs, axis=1)
+    if np.issubdtype(positions.dtype, np.floating):
+        out_dtype = positions.dtype
+    else:
+        out_dtype = np.float64
+    turnover = np.empty(positions.shape[0] - 1, dtype=out_dtype)
+    buf = np.empty(positions.shape[1], dtype=positions.dtype)
+    for t in range(1, positions.shape[0]):
+        np.subtract(positions[t], positions[t - 1], out=buf)
+        np.abs(buf, out=buf)
+        turnover[t - 1] = 0.5 * np.sum(buf)
 
     return turnover
 
