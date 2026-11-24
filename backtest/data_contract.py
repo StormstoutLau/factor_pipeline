@@ -248,7 +248,7 @@ def default_fields() -> Tuple[FieldSpec, ...]:
         FieldSpec("name", "stock_name.pkl", max_lag=None, required=False,
                   semantic_type="status_flag"),
         FieldSpec("return", "stock_return.pkl", max_lag=1, required=False,
-                  semantic_type="return", expected_missing_tail=1),
+                  semantic_type="return", unit="%", expected_missing_tail=1),
         FieldSpec("calendar", "all_dates.pkl", max_lag=None, required=False,
                   semantic_type="reference_date"),
         FieldSpec("barra", "market_data/barra_df_tl.pkl", max_lag=None,
@@ -654,20 +654,31 @@ def _calendar_check(calendar: pd.DatetimeIndex,
     )
 
 
+_RETURN_CONSISTENCY_BOUNDS = {
+    "decimal": (-1.0, 10.0),
+    "%": (-100.0, 1000.0),
+}
+
+
 def _consistency_check(spec: FieldSpec, frame: pd.DataFrame) -> List[CheckResult]:
     if spec.semantic_type != "return":
         return []
     values = frame.to_numpy(dtype=float, na_value=np.nan)
     finite = values[np.isfinite(values)]
-    if finite.size and (finite.min() < -1.0 or finite.max() > 10.0):
+    unit = spec.unit or "decimal"
+    low, high = _RETURN_CONSISTENCY_BOUNDS.get(
+        unit, _RETURN_CONSISTENCY_BOUNDS["decimal"]
+    )
+    details = {"field": spec.name, "unit": unit, "bounds": [low, high]}
+    if finite.size and (finite.min() < low or finite.max() > high):
         return [CheckResult(
             "consistency", False, "warn",
-            "%s: return 越界 [-1, 10]" % spec.name,
-            {"field": spec.name},
+            "%s: return 越界 [%s, %s]" % (spec.name, low, high),
+            details,
         )]
     return [CheckResult(
         "consistency", True, "warn", "%s: return OK" % spec.name,
-        {"field": spec.name},
+        details,
     )]
 
 

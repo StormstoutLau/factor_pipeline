@@ -20,6 +20,7 @@ from factor_pipeline.backtest.data_contract import (
     ContractCache,
     FieldSpec,
     check_data_contract,
+    default_fields,
 )
 
 
@@ -319,3 +320,71 @@ def test_t53_gap_code_mapping_centralized(tmp_path):
     codes = {gap.code for gap in report.known_gaps}
     assert "delist_missing" in codes, codes
     assert report.passed is True
+
+
+# ============================================================
+# T16-T19 return 单位口径（P-025）
+# ============================================================
+
+def _consistency_checks(report):
+    return [c for c in report.checks if c.check == "consistency"]
+
+
+def _return_report(tmp_path, values, unit):
+    dates = pd.bdate_range("2026-01-01", periods=len(values))
+    frame = pd.DataFrame({"s": values}, index=dates)
+    _write_pickle(tmp_path, "return.pkl", frame)
+    fields = [FieldSpec(
+        "return", "return.pkl", max_lag=1, required=False,
+        semantic_type="return", unit=unit, expected_missing_tail=1,
+    )]
+    return check_data_contract(
+        str(tmp_path), sample_end=dates[-1], fields=fields,
+        trading_calendar=dates,
+    )
+
+
+def test_t16_return_percent_normal_values_pass(tmp_path):
+    values = [
+        -30.0, -20.0, -10.0, -5.0, 0.0, 5.0,
+        10.0, 20.0, 30.0, 100.0, -100.0, 1000.0,
+    ]
+    report = _return_report(tmp_path, values, unit="%")
+
+    checks = _consistency_checks(report)
+    assert checks, "consistency 检查缺失"
+    assert all(c.passed for c in checks), [c.message for c in checks]
+
+
+def test_t17_return_percent_dirty_value_warns(tmp_path):
+    report = _return_report(tmp_path, [20.0, -20.0, 200400.0], unit="%")
+
+    failed = [c for c in _consistency_checks(report) if not c.passed]
+    assert len(failed) == 1
+    assert failed[0].severity == "warn"
+    assert "越界" in failed[0].message
+    assert failed[0].details.get("unit") == "%"
+    assert failed[0].details.get("bounds") == [-100.0, 1000.0]
+
+
+@pytest.mark.parametrize("unit", [None, "decimal"])
+def test_t18_return_decimal_behavior_unchanged(tmp_path, unit):
+    report = _return_report(tmp_path, [0.2, -0.2, 20.0], unit=unit)
+
+    failed = [c for c in _consistency_checks(report) if not c.passed]
+    assert len(failed) == 1, [c.message for c in _consistency_checks(report)]
+    assert "越界" in failed[0].message
+    assert failed[0].details.get("bounds") == [-1.0, 10.0]
+
+
+def test_t19_default_return_unit_and_unknown_fallback(tmp_path):
+    returns = [s for s in default_fields() if s.name == "return"]
+    assert returns, "default_fields 缺少 return"
+    assert returns[0].unit == "%"
+
+    report = _return_report(tmp_path, [20.0, 19.0, 18.0], unit="ratio")
+    failed = [c for c in _consistency_checks(report) if not c.passed]
+    assert len(failed) == 1
+    assert "越界" in failed[0].message
+    assert failed[0].details.get("unit") == "ratio"
+    assert failed[0].details.get("bounds") == [-1.0, 10.0]

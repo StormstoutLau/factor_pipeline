@@ -1,5 +1,30 @@
 # 开发日志 (Changelog)
 
+## v3.11.1 — `stock_return` 百分数契约口径修正（P-025）(已实施, 2026-11-24)
+
+### 概览
+
+承接 P-025，`data_contract` 的 `return` 一致性检查改为按 `FieldSpec.unit` 选择等价区间：`%` → `[-100, 1000]`（等价原 decimal `[-1, 10]`），`None` / `decimal` 保持原行为，未知 unit 回退 decimal。真实数据根 `stock_return.pkl`（1475×5688，7,204,340 有限格）的误告警从 **2,387,218 格（33.1%）** 降至 **15 格**（>1000% 的脏值），正常 ±20% / ±30% 收益不再告警。
+
+### 变更
+
+- `backtest/data_contract.py`：`default_fields()` 的 `return` 声明 `unit="%"`；`_consistency_check` 增加 `_RETURN_CONSISTENCY_BOUNDS`（decimal `[-1, 10]` / percent `[-100, 1000]`），`details` 追加 `unit` / `bounds`（additive，不参与 snapshot hash）。
+- `tests/test_backtest/test_data_contract.py`：新增 T16 percent 正常区间、T17 脏值告警、T18 decimal 兼容、T19 默认字段 / 未知 unit 回退。
+- 包版本 **3.11.1** 落 6 个锚点 + 本条目。
+
+### 行为影响
+
+- `return` 字段 warn 口径变更：真实数据根不再对 33.1% 的正常百分数格误告警；15 个 >1000% 的脏值仍告警。
+- 其他字段、其他检查、严重度、`DataSnapshot` hash 不变；零新增运行时依赖。
+
+### 验证
+
+- 定向：`python -m pytest -q tests/test_backtest/test_data_contract.py` → **13 passed**（含 T16-T19）。
+- 版本：`tests/test_fix3_version_unification.py` → **9 passed**。
+- 全量回归（最终代码状态，2026-11-24，独立 basetemp）：**2269 passed / 36 skipped / 0 failed**（1479.41 s）。
+- 首跑 1 failed 为 `test_T396_9_force_coverage_e2e` 子进程 `read_pickle` `MemoryError`（环境噪声，与 P-025 无关）；隔离重跑 **1 passed**（84.80 s），最终全量重跑 0 failed。
+
+
 ## v3.11.0 — tradability 内存第二阶：离线 name npz + worker 日期分片（P-023）(已实施, 2026-11-24)
 
 ### 概览
